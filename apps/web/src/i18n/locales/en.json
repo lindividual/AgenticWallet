@@ -27,6 +27,8 @@
     "saved": "Saved",
     "holdings": "Holdings",
     "loadingAssets": "Loading assets...",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing...",
     "failedToLoadAssets": "Failed to load assets: {{message}}",
     "noAssetsFound": "No assets found",
     "unknownAsset": "Unknown",

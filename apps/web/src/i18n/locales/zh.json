@@ -27,6 +27,8 @@
     "saved": "已保存",
     "holdings": "资产",
     "loadingAssets": "正在加载资产...",
+    "refresh": "刷新",
+    "refreshing": "刷新中...",
     "failedToLoadAssets": "资产加载失败：{{message}}",
     "noAssetsFound": "未找到资产",
     "unknownAsset": "未知资产",

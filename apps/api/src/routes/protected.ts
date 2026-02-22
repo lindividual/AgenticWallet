@@ -29,6 +29,17 @@ type SimBalancesResponse = {
   balances: SimBalanceRow[];
 };
 
+function hasPositiveAmount(rawAmount: string | undefined): boolean {
+  if (!rawAmount) return false;
+  const normalized = rawAmount.trim();
+  if (!normalized || normalized === '0') return false;
+  if (/^\d+$/.test(normalized)) {
+    return BigInt(normalized) > 0n;
+  }
+  const asNumber = Number(normalized);
+  return Number.isFinite(asNumber) && asNumber > 0;
+}
+
 function resolvePortfolioChainIds(raw: string | undefined): string {
   const normalized = raw?.trim();
   if (!normalized) {
@@ -80,6 +91,9 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
       return c.json({ error: 'sim_api_key_not_configured' }, 500);
     }
     const chainIds = resolvePortfolioChainIds(c.env.PORTFOLIO_CHAIN_IDS);
+    console.log(
+      `[wallet/portfolio] start userId=${userId} walletAddress=${walletAddress} chainIds=${chainIds}`,
+    );
 
     const simResponse = await fetch(
       `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=${encodeURIComponent(chainIds)}`,
@@ -93,6 +107,9 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
 
     const simData = (await simResponse.json()) as SimBalancesResponse & { error?: string; message?: string };
     if (!simResponse.ok) {
+      console.log(
+        `[wallet/portfolio] sim_error status=${simResponse.status} error=${simData.error ?? 'unknown'} message=${simData.message ?? 'n/a'}`,
+      );
       return c.json(
         {
           error: simData.error ?? 'sim_request_failed',
@@ -103,9 +120,16 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
     }
 
     const holdings = (simData.balances ?? [])
-      .filter((row) => Number(row.value_usd ?? 0) > 0)
+      .filter((row) => Number(row.value_usd ?? 0) > 0 || hasPositiveAmount(row.amount))
       .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
     const totalUsd = holdings.reduce((acc, row) => acc + Number(row.value_usd ?? 0), 0);
+    const sample = holdings
+      .slice(0, 3)
+      .map((row) => `${row.chain_id}:${row.symbol ?? row.name ?? 'unknown'}:${row.amount}:$${row.value_usd ?? 'null'}`)
+      .join('|');
+    console.log(
+      `[wallet/portfolio] sim_ok raw=${simData.balances?.length ?? 0} filtered=${holdings.length} totalUsd=${totalUsd} sample=${sample || 'none'}`,
+    );
 
     return c.json({
       walletAddress,

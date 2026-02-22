@@ -27,6 +27,8 @@
     "saved": "المحفوظات",
     "holdings": "المقتنيات",
     "loadingAssets": "جار تحميل الأصول...",
+    "refresh": "تحديث",
+    "refreshing": "جار التحديث...",
     "failedToLoadAssets": "فشل تحميل الأصول: {{message}}",
     "noAssetsFound": "لم يتم العثور على أصول",
     "unknownAsset": "غير معروف",

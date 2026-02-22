@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getWalletPortfolio, type SimEvmBalance } from '../../api';
@@ -18,6 +18,15 @@ function formatUsd(value: number, locale: string): string {
   }).format(value);
 }
 
+function formatTokenAmount(rawAmount: string | undefined, decimals: number | undefined): string {
+  const amount = Number(rawAmount ?? 0);
+  if (!Number.isFinite(amount)) return '0';
+
+  const divisor = 10 ** (decimals ?? 0);
+  const normalized = divisor > 0 ? amount / divisor : amount;
+  return normalized.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
 export function WalletScreen({ auth }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess } = useToast();
@@ -25,11 +34,13 @@ export function WalletScreen({ auth }: WalletScreenProps) {
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
   const dailyReport = t('wallet.dailyReportMock');
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['wallet-portfolio'],
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+    queryKey: ['wallet-portfolio', walletAddress],
     queryFn: () => getWalletPortfolio(),
     enabled: Boolean(walletAddress),
-    staleTime: 60_000,
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
   });
 
   const holdings = useMemo<SimEvmBalance[]>(() => {
@@ -43,6 +54,35 @@ export function WalletScreen({ auth }: WalletScreenProps) {
   }, [data]);
 
   const totalBalance = data?.totalUsd ?? 0;
+
+  useEffect(() => {
+    if (!walletAddress) {
+      console.log('[wallet-ui] no walletAddress in auth payload');
+      return;
+    }
+    console.log('[wallet-ui] query_state', {
+      walletAddress,
+      isLoading,
+      isFetching,
+      isError,
+      error: isError ? (error as Error)?.message : null,
+    });
+  }, [walletAddress, isLoading, isFetching, isError, error]);
+
+  useEffect(() => {
+    if (!data) return;
+    console.log('[wallet-ui] portfolio_response', {
+      walletAddress: data.walletAddress,
+      totalUsd: data.totalUsd,
+      holdingsCount: data.holdings.length,
+      sample: data.holdings.slice(0, 3).map((row) => ({
+        chain_id: row.chain_id,
+        symbol: row.symbol,
+        amount: row.amount,
+        value_usd: row.value_usd ?? null,
+      })),
+    });
+  }, [data]);
 
   async function handleCopyAddress() {
     if (!walletAddress) {
@@ -100,7 +140,17 @@ export function WalletScreen({ auth }: WalletScreenProps) {
       </section>
 
       <section className="flex flex-col gap-4">
-        <h2 className="m-0 text-xl font-bold">{t('wallet.holdings')}</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="m-0 text-xl font-bold">{t('wallet.holdings')}</h2>
+          <button
+            type="button"
+            className="btn btn-outline btn-sm h-8 min-h-0 px-3"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+          >
+            {isFetching ? t('wallet.refreshing') : t('wallet.refresh')}
+          </button>
+        </div>
 
         {isLoading && (
           <div className="border border-base-400 bg-base-100 p-4 text-xl">{t('wallet.loadingAssets')}</div>
@@ -124,7 +174,9 @@ export function WalletScreen({ auth }: WalletScreenProps) {
                 <p className="m-0 text-2xl font-semibold">
                   {formatUsd(Number(asset.value_usd ?? 0), i18n.language)}
                 </p>
-                <p className="m-0 mt-1 text-lg text-base-content/60">{Number(asset.amount ?? 0).toFixed(4)}</p>
+                <p className="m-0 mt-1 text-lg text-base-content/60">
+                  {formatTokenAmount(asset.amount, asset.decimals)}
+                </p>
               </div>
             </div>
           </article>
