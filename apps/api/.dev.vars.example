@@ -1,0 +1,10 @@
+APP_SECRET=replace-with-32+-chars-secret
+WEBAUTHN_ORIGIN=http://localhost:5173
+WEBAUTHN_RP_ID=localhost
+WEBAUTHN_RP_NAME=Agentic Wallet MVP
+WEBAUTHN_REQUIRE_UV=false
+ETHEREUM_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/replace
+BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/replace
+BNB_RPC_URL=https://bnb-mainnet.g.alchemy.com/v2/replace
+# Optional, defaults to SDK default MEE version
+BICONOMY_MEE_VERSION=2.3.0

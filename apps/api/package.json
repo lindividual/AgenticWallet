@@ -1,0 +1,22 @@
+{
+  "name": "@agentic-wallet/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev src/index.ts --persist-to .wrangler/state",
+    "deploy": "wrangler deploy",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^13.2.2",
+    "hono": "^4.6.12",
+    "viem": "^2.22.11",
+    "@biconomy/abstractjs": "^1.1.21"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260207.0",
+    "typescript": "^5.7.2",
+    "wrangler": "^4.6.0"
+  }
+}

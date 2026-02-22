@@ -1,0 +1,10 @@
+node_modules
+.dist
+dist
+.wrangler
+.DS_Store
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.tsbuildinfo

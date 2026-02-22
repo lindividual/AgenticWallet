@@ -1,0 +1,13 @@
+{
+  "name": "agentic-wallet",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm --workspace @agentic-wallet/api run dev",
+    "dev:web": "npm --workspace @agentic-wallet/web run dev",
+    "build": "npm --workspaces run build"
+  }
+}
