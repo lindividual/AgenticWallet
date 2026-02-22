@@ -27,6 +27,12 @@ function formatTokenAmount(rawAmount: string | undefined, decimals: number | und
   return normalized.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
+function getAssetInitial(asset: SimEvmBalance): string {
+  const label = (asset.symbol ?? asset.name ?? '').trim();
+  if (!label) return '?';
+  return label[0].toUpperCase();
+}
+
 export function WalletScreen({ auth }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess } = useToast();
@@ -166,15 +172,29 @@ export function WalletScreen({ auth }: WalletScreenProps) {
         {holdings.map((asset) => (
           <article key={`${asset.chain_id}-${asset.address}`} className="border border-base-400 bg-base-100 p-4">
             <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="m-0 text-2xl font-semibold">{asset.symbol ?? asset.name ?? t('wallet.unknownAsset')}</p>
-                <p className="m-0 mt-1 text-lg text-base-content/60">{asset.name ?? t('wallet.token')}</p>
+              <div className="flex items-center gap-3">
+                {asset.logo ? (
+                  <img
+                    src={asset.logo}
+                    alt={asset.symbol ?? asset.name ?? t('wallet.token')}
+                    className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                    {getAssetInitial(asset)}
+                  </div>
+                )}
+                <div>
+                  <p className="m-0 text-base font-semibold">{asset.symbol ?? asset.name ?? t('wallet.unknownAsset')}</p>
+                  <p className="m-0 mt-1 text-sm text-base-content/60">{asset.name ?? t('wallet.token')}</p>
+                </div>
               </div>
               <div className="text-right">
-                <p className="m-0 text-2xl font-semibold">
+                <p className="m-0 text-base font-semibold">
                   {formatUsd(Number(asset.value_usd ?? 0), i18n.language)}
                 </p>
-                <p className="m-0 mt-1 text-lg text-base-content/60">
+                <p className="m-0 mt-1 text-sm text-base-content/60">
                   {formatTokenAmount(asset.amount, asset.decimals)}
                 </p>
               </div>
