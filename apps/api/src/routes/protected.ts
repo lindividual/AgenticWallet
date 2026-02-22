@@ -29,6 +29,32 @@ type SimBalancesResponse = {
   balances: SimBalanceRow[];
 };
 
+function resolvePortfolioChainIds(raw: string | undefined): string {
+  const normalized = raw?.trim();
+  if (!normalized) {
+    return '1,8453,137';
+  }
+
+  if (normalized === 'mainnet' || normalized === 'testnet') {
+    return normalized;
+  }
+
+  const isValidList = /^[0-9,\s]+$/.test(normalized);
+  if (!isValidList) {
+    return '1,8453,137';
+  }
+
+  const list = normalized
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (!list.length) {
+    return '1,8453,137';
+  }
+
+  return list.join(',');
+}
+
 export function registerProtectedRoutes(app: Hono<AppEnv>): void {
   app.use('/v1/*', requireAuth);
 
@@ -53,9 +79,10 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
     if (!simApiKey) {
       return c.json({ error: 'sim_api_key_not_configured' }, 500);
     }
+    const chainIds = resolvePortfolioChainIds(c.env.PORTFOLIO_CHAIN_IDS);
 
     const simResponse = await fetch(
-      `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=1,8453,137`,
+      `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=${encodeURIComponent(chainIds)}`,
       {
         method: 'GET',
         headers: {
