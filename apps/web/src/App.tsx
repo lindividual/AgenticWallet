@@ -16,11 +16,7 @@ import {
 } from './api';
 import { AuthButton } from './components/AuthButton';
 
-const STATUS_CELLULAR_ICON = 'https://www.figma.com/api/mcp/asset/4be1f989-7e50-4714-94b8-a15e4f59ae29';
-const STATUS_WIFI_ICON = 'https://www.figma.com/api/mcp/asset/7bca31c8-ebe0-459e-94b3-3dc796367d50';
-const STATUS_BATTERY_ICON = 'https://www.figma.com/api/mcp/asset/461cdbde-aff3-4276-9e0e-0acb0ad9bc36';
 const BRAND_SYMBOL_ICON = 'https://www.figma.com/api/mcp/asset/e60f3d2d-348f-4198-8cec-7a60006f7440';
-const HERO_IMAGE = 'https://www.figma.com/api/mcp/asset/ae5600e9-8d97-49de-b71f-b2794d5d7903';
 
 type AuthState = {
   user: MeResponse['user'];
@@ -175,15 +171,6 @@ export function App() {
     <main className="app-shell">
       {!auth ? (
         <section className="auth-screen" aria-busy={loading}>
-          <header className="status-bar" aria-hidden="true">
-            <span className="status-time">9:41</span>
-            <div className="status-icons">
-              <img src={STATUS_CELLULAR_ICON} alt="" />
-              <img src={STATUS_WIFI_ICON} alt="" />
-              <img src={STATUS_BATTERY_ICON} alt="" />
-            </div>
-          </header>
-
           <header className="brand-row" aria-label="umi wallet brand">
             <img src={BRAND_SYMBOL_ICON} alt="umi wallet" className="brand-logo" />
             <span className="brand-text">umi wallet</span>
@@ -195,9 +182,10 @@ export function App() {
             to feel simple
           </h1>
 
-          <figure className="hero-visual" aria-hidden="true">
-            <img src={HERO_IMAGE} alt="" />
-          </figure>
+          <div className="hero-visual" aria-hidden="true">
+            <div className="hero-glow hero-glow--1" />
+            <div className="hero-glow hero-glow--2" />
+          </div>
 
           <div className="auth-actions">
             <AuthButton

@@ -25,6 +25,7 @@
   --space-8: 32px;
   --touch-target: 48px;
   --safe-width: min(100vw, 402px);
+  --safe-width-desktop: min(480px, 90vw);
 }
 
 * {
@@ -65,54 +66,16 @@ img {
 }
 
 .auth-screen {
-  min-height: 874px;
+  width: 100%;
+  max-width: 900px;
+  height: 100%;
+  min-height: 720px;
   display: flex;
   flex-direction: column;
-  padding: 0 var(--space-6) var(--space-6);
-}
-
-.status-bar {
-  height: 62px;
-  padding: 21px 4px 19px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.status-time {
-  font-family: var(--font-system);
-  font-size: 17px;
-  line-height: 1;
-  letter-spacing: -0.02em;
-  font-weight: 600;
-}
-
-.status-icons {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.status-icons img {
-  display: block;
-  width: auto;
-  height: auto;
-}
-
-.status-icons img:nth-child(1) {
-  width: 19px;
-}
-
-.status-icons img:nth-child(2) {
-  width: 17px;
-}
-
-.status-icons img:nth-child(3) {
-  width: 27px;
+  padding: var(--space-6) var(--space-6) var(--space-6);
 }
 
 .brand-row {
-  margin-top: 37px;
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
@@ -164,13 +127,35 @@ input {
 
 .hero-visual {
   margin: 0 -24px;
-  height: 381px;
+  height: 280px;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
 }
 
-.hero-visual img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.hero-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.5;
+}
+
+.hero-glow--1 {
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, #e0e0e0 0%, transparent 70%);
+  top: 40%;
+  left: 20%;
+  transform: translate(-50%, -50%);
+}
+
+.hero-glow--2 {
+  width: 180px;
+  height: 180px;
+  background: radial-gradient(circle, #d8d8d8 0%, transparent 70%);
+  top: 60%;
+  right: 15%;
+  transform: translate(50%, -50%);
 }
 
 .auth-actions,
@@ -330,15 +315,6 @@ input:focus-visible,
     padding-bottom: var(--space-5);
   }
 
-  .status-bar {
-    padding-left: 0;
-    padding-right: 0;
-  }
-
-  .brand-row {
-    margin-top: 28px;
-  }
-
   .brand-text {
     font-size: 18px;
   }
@@ -351,7 +327,7 @@ input:focus-visible,
 
   .hero-visual {
     margin: 0 -16px;
-    height: min(99vw, 355px);
+    height: min(99vw, 240px);
   }
 
   .auth-actions {
@@ -367,12 +343,65 @@ input:focus-visible,
 @media (min-width: 640px) {
   .auth-screen,
   .wallet-screen {
+    width: var(--safe-width-desktop);
     border-radius: var(--radius-lg);
-    border: 1px solid #d7d7d7;
-    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.1);
+    border: 1px solid #e0e0e0;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.04);
+  }
+
+  .auth-screen {
+    width: 100%;
+    max-width: 900px;
   }
 
   .app-shell {
-    padding: var(--space-4);
+    padding: var(--space-8);
+  }
+
+  .auth-screen {
+    min-height: auto;
+    padding: var(--space-8) var(--space-8) 40px;
+  }
+
+  .hero-visual {
+    height: 320px;
+    margin: 0;
+  }
+
+  .auth-title {
+    font-size: 38px;
+    width: 100%;
+    max-width: 360px;
+    margin: 40px 0 36px;
+  }
+
+  .wallet-screen {
+    padding: var(--space-6);
+  }
+}
+
+@media (min-width: 1024px) {
+  .auth-screen {
+    padding: 48px 56px 48px;
+  }
+
+  .hero-visual {
+    height: 360px;
+  }
+
+  .hero-glow--1 {
+    width: 260px;
+    height: 260px;
+  }
+
+  .hero-glow--2 {
+    width: 200px;
+    height: 200px;
+  }
+
+  .auth-title {
+    font-size: 44px;
+    max-width: 420px;
+    line-height: 1.08;
   }
 }
