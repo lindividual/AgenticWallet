@@ -1,7 +1,13 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en" dir="ltr">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var t = localStorage.getItem('theme-preference');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agentic Wallet MVP</title>
   </head>

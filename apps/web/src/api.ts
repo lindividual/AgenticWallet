@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8787';
+const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
 const TOKEN_KEY = 'agentic_wallet_access_token';
 
 export type RegisterOptionsResponse = {
@@ -66,6 +66,26 @@ export type ChainsResponse = {
   }>;
 };
 
+export type SimEvmBalance = {
+  chain: string;
+  chain_id: number;
+  address: string;
+  amount: string;
+  symbol?: string;
+  name?: string;
+  decimals?: number;
+  price_usd?: number;
+  value_usd?: number;
+  logo?: string;
+  url?: string;
+};
+
+export type WalletPortfolioResponse = {
+  walletAddress: string;
+  totalUsd: number;
+  holdings: SimEvmBalance[];
+};
+
 export async function postJson<T>(path: string, body: unknown, withAuth = false): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -109,6 +129,10 @@ export async function getJson<T>(path: string, withAuth = false): Promise<T> {
   }
 
   return data as T;
+}
+
+export async function getWalletPortfolio(): Promise<WalletPortfolioResponse> {
+  return getJson<WalletPortfolioResponse>('/v1/wallet/portfolio', true);
 }
 
 export function setToken(token: string): void {

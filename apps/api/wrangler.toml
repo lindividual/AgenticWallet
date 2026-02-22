@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2026-02-22"
 compatibility_flags = ["nodejs_compat"]
 
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/v1/*"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "agentic_wallet_db"

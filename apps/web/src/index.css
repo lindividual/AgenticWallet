@@ -4,7 +4,7 @@
 }
 
 @theme {
-  --font-sans: 'Inter', 'General Sans', 'Noto Sans SC', 'PingFang SC', sans-serif;
+  --font-sans: 'Inter', 'General Sans', 'Noto Sans SC', 'PingFang SC', 'Noto Sans Arabic', sans-serif;
 }
 
 /* btn-primary: 黑底白字 (light), 白底黑字 (dark) */
@@ -21,6 +21,12 @@
 [data-theme="dark"] {
   --color-primary: oklch(100% 0 0);
   --color-primary-content: oklch(0% 0 0);
+}
+
+/* 统一去除 btn 的默认阴影和圆角 */
+.btn {
+  border-radius: 0;
+  box-shadow: none;
 }
 
 @layer base {

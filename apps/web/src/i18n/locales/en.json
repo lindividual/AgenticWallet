@@ -1,0 +1,37 @@
+{
+  "common": {
+    "brand": "umi wallet",
+    "error": "Error",
+    "close": "Close",
+    "logout": "Log out"
+  },
+  "auth": {
+    "title": "Smart enough\nto feel simple",
+    "getStarted": "Create account",
+    "loginWithPasskey": "Login with Passkey",
+    "alreadyHaveAccount": "I already have an account",
+    "createNewAccount": "Create a new account",
+    "registerSuccess": "Registration successful, wallet initialized.",
+    "loginSuccess": "Login successful.",
+    "logoutSuccess": "Logged out."
+  },
+  "wallet": {
+    "overview": "Wallet overview",
+    "user": "User",
+    "wallet": "Wallet",
+    "provider": "Provider",
+    "notCreated": "Not created",
+    "verifyPaymentPasskey": "Verify payment passkey",
+    "verifyPaymentSuccess": "Payment passkey verified (UV required).",
+    "mockRecommendation": "Generate Agent recommendation (Mock)",
+    "mockRecommendationSuccess": "Mock recommendation generated.",
+    "supportedChains": "Supported chains"
+  },
+  "settings": {
+    "language": "Language",
+    "theme": "Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System"
+  }
+}

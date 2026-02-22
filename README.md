@@ -18,7 +18,7 @@ Passkey-only login/register MVP for an agentic crypto wallet.
 - Agent recommendation API stub
 
 ## Project Structure
-- `apps/api`: Worker API
+- `apps/api`: Worker API (also serves built frontend assets in production)
 - `apps/web`: React app
 
 ## Quick Start
@@ -36,6 +36,7 @@ cp apps/api/.dev.vars.example apps/api/.dev.vars
 cp apps/web/.env.example apps/web/.env
 ```
 - Update `apps/api/.dev.vars` RPC values:
+  - `SIM_API_KEY`
   - `ETHEREUM_RPC_URL`
   - `BASE_RPC_URL`
   - `BNB_RPC_URL`
@@ -43,8 +44,6 @@ cp apps/web/.env.example apps/web/.env
 ```bash
 cd apps/api
 npx wrangler secret put APP_SECRET
-npx wrangler secret put WEBAUTHN_ORIGIN
-npx wrangler secret put WEBAUTHN_RP_ID
 npx wrangler secret put WEBAUTHN_RP_NAME
 ```
 
@@ -64,7 +63,24 @@ npm run dev:api
 npm run dev:web
 ```
 
+## Single-Worker Deployment (API + Static Assets)
+1. Build frontend assets
+```bash
+npm run build:web
+```
+
+2. Deploy Worker (Hono API + `apps/web/dist` assets)
+```bash
+npm run deploy:worker
+```
+
+Notes:
+- Worker static assets are configured in `apps/api/wrangler.toml` under `[assets]`.
+- API routes stay on `/v1/*`, static routes are served from the same domain.
+- In production, keep `VITE_API_BASE` empty so frontend calls same-origin APIs.
+
 ## Important Notes
 - This is MVP code and not production-hardening.
-- Passkey requires HTTPS in production and correct RP ID / origin pairing.
+- Passkey requires HTTPS in production.
+- WebAuthn `origin` and `rpId` are derived from each incoming request (`origin` + `hostname`), so frontend and API should be served on the same host for passkey flows.
 - Wallet creation currently uses backend-generated EOA and keeps a placeholder for Biconomy Abstract integration.

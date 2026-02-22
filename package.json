@@ -8,6 +8,10 @@
   "scripts": {
     "dev:api": "npm --workspace @agentic-wallet/api run dev",
     "dev:web": "npm --workspace @agentic-wallet/web run dev",
-    "build": "npm --workspaces run build"
+    "build:web": "npm --workspace @agentic-wallet/web run build",
+    "build:api": "npm --workspace @agentic-wallet/api run build",
+    "build": "npm --workspaces run build",
+    "deploy:api": "npm --workspace @agentic-wallet/api run deploy",
+    "deploy:worker": "npm run build:web && npm run deploy:api"
   }
 }

@@ -1,0 +1,245 @@
+import { generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
+import { isoBase64URL } from '@simplewebauthn/server/helpers';
+import type { Hono } from 'hono';
+import { getWebAuthnConfig } from '../config/webauthn';
+import { requireAuth } from '../middleware/auth';
+import { getChallenge, saveChallenge } from '../services/challenge';
+import { getUserSummary } from '../services/user';
+import { getWallet } from '../services/wallet';
+import type { AppEnv, PayVerifyConfirmRequest } from '../types';
+import { safeJsonParse } from '../utils/json';
+import { nowIso } from '../utils/time';
+
+type SimBalanceRow = {
+  chain: string;
+  chain_id: number;
+  address: string;
+  amount: string;
+  symbol?: string;
+  name?: string;
+  decimals?: number;
+  price_usd?: number;
+  value_usd?: number;
+  logo?: string;
+  url?: string;
+};
+
+type SimBalancesResponse = {
+  wallet_address: string;
+  balances: SimBalanceRow[];
+};
+
+export function registerProtectedRoutes(app: Hono<AppEnv>): void {
+  app.use('/v1/*', requireAuth);
+
+  app.get('/v1/me', async (c) => {
+    const userId = c.get('userId');
+    const user = await getUserSummary(c.env.DB, userId);
+    const wallet = await getWallet(c.env.DB, userId);
+
+    return c.json({ user, wallet });
+  });
+
+  app.get('/v1/wallet/portfolio', async (c) => {
+    const userId = c.get('userId');
+    const wallet = await getWallet(c.env.DB, userId);
+    const walletAddress = wallet?.address;
+
+    if (!walletAddress) {
+      return c.json({ error: 'wallet_not_found' }, 404);
+    }
+
+    const simApiKey = c.env.SIM_API_KEY?.trim();
+    if (!simApiKey) {
+      return c.json({ error: 'sim_api_key_not_configured' }, 500);
+    }
+
+    const simResponse = await fetch(
+      `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=1,8453,137`,
+      {
+        method: 'GET',
+        headers: {
+          'X-Sim-Api-Key': simApiKey,
+        },
+      },
+    );
+
+    const simData = (await simResponse.json()) as SimBalancesResponse & { error?: string; message?: string };
+    if (!simResponse.ok) {
+      return c.json(
+        {
+          error: simData.error ?? 'sim_request_failed',
+          message: simData.message ?? 'failed_to_fetch_portfolio',
+        },
+        502,
+      );
+    }
+
+    const holdings = (simData.balances ?? [])
+      .filter((row) => Number(row.value_usd ?? 0) > 0)
+      .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+    const totalUsd = holdings.reduce((acc, row) => acc + Number(row.value_usd ?? 0), 0);
+
+    return c.json({
+      walletAddress,
+      totalUsd,
+      holdings,
+    });
+  });
+
+  app.post('/v1/pay/verify/options', async (c) => {
+    const webauthn = getWebAuthnConfig(c.env, c.req.url);
+    const userId = c.get('userId');
+    const passkeys = await c.env.DB.prepare(
+      `SELECT credential_id, transports_json
+       FROM passkeys
+       WHERE user_id = ?`,
+    )
+      .bind(userId)
+      .all<{
+        credential_id: string;
+        transports_json: string | null;
+      }>();
+
+    if (!passkeys.results.length) {
+      return c.json({ error: 'no_passkeys_for_user' }, 404);
+    }
+
+    const options = await generateAuthenticationOptions({
+      rpID: webauthn.rpId,
+      userVerification: 'required',
+      allowCredentials: passkeys.results.map((p) => ({
+        id: p.credential_id,
+        transports: (safeJsonParse<string[]>(p.transports_json) ?? []) as any,
+      })),
+    });
+
+    const challengeId = crypto.randomUUID();
+    await saveChallenge(c.env.DB, {
+      id: challengeId,
+      userId,
+      challenge: options.challenge,
+      ceremony: 'payment_uv',
+    });
+
+    return c.json({ challengeId, options });
+  });
+
+  app.post('/v1/pay/verify/confirm', async (c) => {
+    const webauthn = getWebAuthnConfig(c.env, c.req.url);
+    const userId = c.get('userId');
+    const body = await c.req.json<PayVerifyConfirmRequest>();
+    if (!body.challengeId || !body.response) {
+      return c.json({ error: 'invalid_request' }, 400);
+    }
+
+    const challengeRow = await getChallenge(c.env.DB, body.challengeId, 'payment_uv', userId);
+    if (!challengeRow) {
+      return c.json({ error: 'challenge_not_found' }, 400);
+    }
+
+    const passkey = await c.env.DB.prepare(
+      `SELECT user_id, credential_id, public_key_b64, counter, transports_json
+       FROM passkeys
+       WHERE credential_id = ?
+       LIMIT 1`,
+    )
+      .bind(body.response.id)
+      .first<{
+        user_id: string;
+        credential_id: string;
+        public_key_b64: string;
+        counter: number;
+        transports_json: string | null;
+      }>();
+
+    if (!passkey || passkey.user_id !== userId) {
+      return c.json({ error: 'passkey_not_found_for_user' }, 404);
+    }
+
+    let verification;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: body.response,
+        expectedChallenge: challengeRow.challenge,
+        expectedOrigin: webauthn.origin,
+        expectedRPID: webauthn.rpId,
+        requireUserVerification: true,
+        credential: {
+          id: passkey.credential_id,
+          publicKey: isoBase64URL.toBuffer(passkey.public_key_b64),
+          counter: passkey.counter,
+          transports: (safeJsonParse<string[]>(passkey.transports_json) ?? []) as any,
+        },
+      });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'payment_verification_error',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        400,
+      );
+    }
+
+    if (!verification.verified) {
+      return c.json({ error: 'payment_verification_failed' }, 400);
+    }
+
+    await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE passkeys SET counter = ?, last_used_at = ? WHERE credential_id = ?').bind(
+        verification.authenticationInfo.newCounter,
+        nowIso(),
+        passkey.credential_id,
+      ),
+      c.env.DB.prepare('DELETE FROM auth_challenges WHERE id = ?').bind(body.challengeId),
+    ]);
+
+    return c.json({
+      verified: true,
+      verifiedAt: nowIso(),
+      scope: 'payment',
+    });
+  });
+
+  app.get('/v1/agent/recommendations', async (c) => {
+    const userId = c.get('userId');
+    const rows = await c.env.DB.prepare(
+      `SELECT id, kind, title, content, created_at
+       FROM recommendations
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 10`,
+    )
+      .bind(userId)
+      .all<{
+        id: string;
+        kind: string;
+        title: string;
+        content: string;
+        created_at: string;
+      }>();
+
+    return c.json({
+      recommendations: rows.results,
+    });
+  });
+
+  app.post('/v1/agent/recommendations/mock', async (c) => {
+    const userId = c.get('userId');
+    await c.env.DB.prepare(
+      'INSERT INTO recommendations (id, user_id, kind, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+      .bind(
+        crypto.randomUUID(),
+        userId,
+        'code',
+        'Transfer Script Suggestion',
+        'Use viem walletClient.writeContract to execute an ERC20 transfer and add simulation before submit.',
+        nowIso(),
+      )
+      .run();
+
+    return c.json({ ok: true });
+  });
+}

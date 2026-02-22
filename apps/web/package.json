@@ -8,9 +8,14 @@
     "build": "tsc -b && vite build"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.90.2",
+    "@tanstack/react-router": "^1.133.14",
     "@simplewebauthn/browser": "^13.2.2",
+    "i18next": "^25.8.13",
+    "i18next-browser-languagedetector": "^8.2.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-i18next": "^16.5.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.0",

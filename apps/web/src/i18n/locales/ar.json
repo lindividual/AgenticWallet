@@ -1,0 +1,37 @@
+{
+  "common": {
+    "brand": "umi wallet",
+    "error": "خطأ",
+    "close": "إغلاق",
+    "logout": "تسجيل الخروج"
+  },
+  "auth": {
+    "title": "ذكي بما فيه الكفاية\nليشعر بالبساطة",
+    "getStarted": "إنشاء حساب",
+    "loginWithPasskey": "تسجيل الدخول باستخدام Passkey",
+    "alreadyHaveAccount": "لدي حساب بالفعل",
+    "createNewAccount": "إنشاء حساب جديد",
+    "registerSuccess": "تم التسجيل بنجاح، تم تهيئة المحفظة.",
+    "loginSuccess": "تم تسجيل الدخول بنجاح.",
+    "logoutSuccess": "تم تسجيل الخروج."
+  },
+  "wallet": {
+    "overview": "نظرة عامة على المحفظة",
+    "user": "المستخدم",
+    "wallet": "المحفظة",
+    "provider": "المزود",
+    "notCreated": "لم يتم الإنشاء",
+    "verifyPaymentPasskey": "التحقق من كلمة مرور الدفع (Passkey)",
+    "verifyPaymentSuccess": "تم التحقق من كلمة مرور الدفع (UV مطلوب).",
+    "mockRecommendation": "إنشاء توصية Agent (وهمية)",
+    "mockRecommendationSuccess": "تم إنشاء توصية وهمية.",
+    "supportedChains": "السلاسل المدعومة"
+  },
+  "settings": {
+    "language": "اللغة",
+    "theme": "المظهر",
+    "themeLight": "فاتح",
+    "themeDark": "داكن",
+    "themeSystem": "حسب النظام"
+  }
+}

@@ -19,7 +19,6 @@ export function AuthButton({
     'btn',
     btnClass,
     fullWidth && 'w-full',
-    'min-h-12 font-semibold',
     className,
   ]
     .filter(Boolean)
