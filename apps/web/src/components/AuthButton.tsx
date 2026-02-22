@@ -14,18 +14,19 @@ export function AuthButton({
   type = 'button',
   ...rest
 }: AuthButtonProps) {
-  const classes = ['auth-btn', `auth-btn--${variant}`];
-
-  if (fullWidth) {
-    classes.push('auth-btn--block');
-  }
-
-  if (className) {
-    classes.push(className);
-  }
+  const btnClass = variant === 'primary' ? 'btn-primary' : 'btn-outline';
+  const classes = [
+    'btn',
+    btnClass,
+    fullWidth && 'w-full',
+    'min-h-12 font-semibold',
+    className,
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
-    <button type={type} className={classes.join(' ')} {...rest}>
+    <button type={type} className={classes} {...rest}>
       {children}
     </button>
   );

@@ -168,29 +168,50 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
+    <>
       {!auth ? (
-        <section className="auth-screen" aria-busy={loading}>
-          <header className="brand-row" aria-label="umi wallet brand">
-            <img src={BRAND_SYMBOL_ICON} alt="umi wallet" className="brand-logo" />
-            <span className="brand-text">umi wallet</span>
+        <section
+          className="mx-auto flex min-h-screen max-h-screen w-full max-w-[400px] flex-col overflow-y-auto p-6 sm:p-8 sm:pb-10 max-[375px]:px-4 max-[375px]:pb-5 lg:px-14 lg:py-12"
+          aria-busy={loading}
+        >
+          <header className="flex items-center gap-3" aria-label="umi wallet brand">
+            <img
+              src={BRAND_SYMBOL_ICON}
+              alt="umi wallet"
+              className="h-[25px] w-9 object-contain"
+            />
+            <span className="text-xl font-medium tracking-tight max-[375px]:text-lg">
+              umi wallet
+            </span>
           </header>
 
-          <h1 className="auth-title" id="auth-title">
+          <h1
+            id="auth-title"
+            className="my-12 w-[233px] text-3xl font-bold leading-tight tracking-tight max-[375px]:my-10 max-[375px]:w-[200px] max-[375px]:text-[29px] sm:my-10 sm:w-full sm:max-w-[360px] sm:text-4xl lg:max-w-[420px] lg:text-[44px] lg:leading-[1.08]"
+          >
             Smart enough
             <br />
             to feel simple
           </h1>
 
-          <div className="hero-visual" aria-hidden="true">
-            <div className="hero-glow hero-glow--1" />
-            <div className="hero-glow hero-glow--2" />
+          <div
+            className="-mx-6 h-[280px] overflow-hidden rounded-2xl relative max-[375px]:-mx-4 max-[375px]:h-[min(99vw,240px)] sm:mx-0 sm:h-80 lg:h-[360px]"
+            aria-hidden="true"
+          >
+            <div
+              className="absolute left-1/5 top-1/2 h-[220px] w-[220px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,_#e0e0e0_0%,_transparent_70%)] opacity-50 blur-[70px] lg:h-[260px] lg:w-[260px]"
+              aria-hidden
+            />
+            <div
+              className="absolute right-[15%] top-[60%] h-[180px] w-[180px] translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,_#d8d8d8_0%,_transparent_70%)] opacity-50 blur-[70px] lg:h-[200px] lg:w-[200px]"
+              aria-hidden
+            />
           </div>
 
-          <div className="auth-actions">
+          <div className="mt-9 grid gap-3 pb-[76px] max-[375px]:mt-6 max-[375px]:pb-[22px]">
             <AuthButton
               variant="primary"
-              className="auth-cta"
+              className="min-h-14 rounded-none text-xl"
               onClick={authMode === 'register' ? handleRegister : handleLogin}
               disabled={loading}
             >
@@ -199,7 +220,7 @@ export function App() {
             {authMode === 'register' ? (
               <button
                 type="button"
-                className="auth-mode-link"
+                className="btn btn-ghost btn-sm font-medium underline disabled:opacity-50"
                 onClick={() => setAuthMode('login')}
                 disabled={loading}
               >
@@ -208,7 +229,7 @@ export function App() {
             ) : (
               <button
                 type="button"
-                className="auth-mode-link"
+                className="btn btn-ghost btn-sm font-medium underline disabled:opacity-50"
                 onClick={() => setAuthMode('register')}
                 disabled={loading}
               >
@@ -218,33 +239,41 @@ export function App() {
           </div>
 
           {(error || info) && (
-            <section className="feedback" aria-live="polite">
-              {error && <p className="error">Error: {error}</p>}
-              {info && <p className="info">{info}</p>}
+            <section className="flex flex-col gap-3" aria-live="polite">
+              {error && (
+                <div role="alert" className="alert alert-error text-sm">
+                  Error: {error}
+                </div>
+              )}
+              {info && (
+                <div role="alert" className="alert alert-info text-sm">
+                  {info}
+                </div>
+              )}
             </section>
           )}
         </section>
       ) : (
-        <section className="wallet-screen">
-          <header className="wallet-head">
-            <h2>Wallet overview</h2>
+        <section className="mx-auto flex min-h-screen max-h-screen w-full max-w-[400px] flex-col gap-4 overflow-y-auto p-6 sm:p-6">
+          <header className="flex items-center justify-between gap-3">
+            <h2 className="m-0 text-2xl font-semibold tracking-tight">Wallet overview</h2>
             <AuthButton variant="secondary" onClick={handleLogout} disabled={loading}>
               退出登录
             </AuthButton>
           </header>
 
-          <section className="wallet-panel">
-            <p>
+          <section className="flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-200 p-4">
+            <p className="m-0">
               <strong>User:</strong> {auth.user.displayName} ({auth.user.handle})
             </p>
-            <p>
+            <p className="m-0">
               <strong>Wallet:</strong> {auth.wallet?.address ?? '未创建'}
             </p>
-            <p>
+            <p className="m-0">
               <strong>Provider:</strong> {auth.wallet?.provider ?? 'N/A'}
             </p>
             {auth.wallet?.chainAccounts && auth.wallet.chainAccounts.length > 0 && (
-              <ul className="chain-list">
+              <ul className="list-inside list-disc pl-6">
                 {auth.wallet.chainAccounts.map((row) => (
                   <li key={row.chainId}>
                     {row.chainId}: {row.address}
@@ -254,8 +283,12 @@ export function App() {
             )}
           </section>
 
-          <div className="wallet-actions">
-            <AuthButton variant="primary" onClick={verifyPaymentPasskey} disabled={loading}>
+          <div className="flex flex-col gap-3">
+            <AuthButton
+              variant="primary"
+              onClick={verifyPaymentPasskey}
+              disabled={loading}
+            >
               支付密码验证（Passkey）
             </AuthButton>
             <AuthButton variant="secondary" onClick={mockRecommendation} disabled={loading}>
@@ -264,9 +297,9 @@ export function App() {
           </div>
 
           {chains.length > 0 && (
-            <section className="wallet-panel">
-              <h3>Supported chains</h3>
-              <ul className="chain-list">
+            <section className="flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-200 p-4">
+              <h3 className="m-0">Supported chains</h3>
+              <ul className="list-inside list-disc pl-6">
                 {chains.map((chain) => (
                   <li key={chain.chainId}>
                     {chain.name} ({chain.chainId}) - {chain.symbol}
@@ -277,13 +310,21 @@ export function App() {
           )}
 
           {(error || info) && (
-            <section className="feedback" aria-live="polite">
-              {error && <p className="error">Error: {error}</p>}
-              {info && <p className="info">{info}</p>}
+            <section className="flex flex-col gap-3" aria-live="polite">
+              {error && (
+                <div role="alert" className="alert alert-error text-sm">
+                  Error: {error}
+                </div>
+              )}
+              {info && (
+                <div role="alert" className="alert alert-info text-sm">
+                  {info}
+                </div>
+              )}
             </section>
           )}
         </section>
       )}
-    </main>
+    </>
   );
 }
