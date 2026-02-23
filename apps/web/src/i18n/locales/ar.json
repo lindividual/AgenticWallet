@@ -53,7 +53,10 @@
     "back": "رجوع",
     "addressCopied": "تم نسخ العنوان.",
     "addressUnavailable": "العنوان غير متاح",
-    "buyComingSoon": "ميزة الشراء قادمة قريبًا."
+    "buyComingSoon": "ميزة الشراء قادمة قريبًا.",
+    "receiveSelectTokenTitle": "اختر عملة الاستلام",
+    "receiveSelectNetworkTitle": "اختر شبكة استلام {{token}}",
+    "receiveTransferToAddressTitle": "يرجى التحويل إلى العنوان"
   },
   "settings": {
     "language": "اللغة",
@@ -86,7 +89,21 @@
     "readArticle": "قراءة التفاصيل",
     "backToFeed": "العودة إلى الرئيسية",
     "loadingArticle": "جار تحميل المقال...",
-    "loadArticleFailed": "فشل تحميل المقال: {{message}}"
+    "loadArticleFailed": "فشل تحميل المقال: {{message}}",
+    "actionLike": "إعجاب",
+    "actionLiked": "تم الإعجاب",
+    "actionFavorite": "حفظ",
+    "actionFavorited": "تم الحفظ",
+    "actionShare": "مشاركة",
+    "actionListen": "استماع",
+    "actionStopListen": "إيقاف",
+    "shareSuccess": "تم فتح المشاركة",
+    "shareCopied": "تم النسخ إلى الحافظة",
+    "shareNotSupported": "المشاركة غير مدعومة هنا",
+    "shareCanceled": "تم إلغاء المشاركة",
+    "listenStarted": "بدأت القراءة الصوتية",
+    "listenStopped": "تم إيقاف القراءة",
+    "listenFailed": "تعذر الاستماع، حاول مرة أخرى"
   },
   "trade": {
     "title": "Trade"

@@ -5,13 +5,31 @@ const rootRoute = createRootRoute({
   component: Outlet,
 });
 
-const indexRoute = createRoute({
+const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   component: App,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute]);
+const tradeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/trade',
+  component: App,
+});
+
+const walletRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/wallet',
+  component: App,
+});
+
+const articleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/article/$articleId',
+  component: App,
+});
+
+const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, articleRoute]);
 
 export const router = createRouter({ routeTree });
 

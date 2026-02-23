@@ -8,6 +8,7 @@ import { TopUpContent } from '../modals/TopUpContent';
 import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { useToast } from '../../contexts/ToastContext';
 import type { AuthState } from '../../hooks/useWalletApp';
+import { AssetListItem } from '../AssetListItem';
 import { BalanceHeader } from '../BalanceHeader';
 
 type WalletScreenProps = {
@@ -80,7 +81,6 @@ export function WalletScreen({ auth }: WalletScreenProps) {
 
   const totalBalance = data?.totalUsd ?? 0;
   const supportedChains = appConfig?.supportedChains ?? [];
-  const defaultReceiveTokens = appConfig?.defaultReceiveTokens ?? [];
 
   useEffect(() => {
     if (!walletAddress) {
@@ -182,7 +182,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
   }
 
   return (
-    <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-6 pb-28">
+    <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-28">
       <BalanceHeader
         title={t('wallet.title')}
         balanceLabel={t('wallet.balance')}
@@ -246,36 +246,27 @@ export function WalletScreen({ auth }: WalletScreenProps) {
           <div className="bg-base-200 p-4 text-base">{t('wallet.noAssetsFound')}</div>
         )}
         {holdings.map((asset) => (
-          <article key={`${asset.chain_id}-${asset.address}`} className="bg-base-100 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                {asset.logo ? (
-                  <img
-                    src={asset.logo}
-                    alt={asset.symbol ?? asset.name ?? t('wallet.token')}
-                    className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                    loading="lazy"
-                  />
-                ) : (
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                    {getAssetInitial(asset)}
-                  </div>
-                )}
-                <div>
-                  <p className="m-0 text-base font-semibold">{asset.symbol ?? asset.name ?? t('wallet.unknownAsset')}</p>
-                  <p className="m-0 text-sm text-base-content/60">{asset.name ?? t('wallet.token')}</p>
+          <AssetListItem
+            key={`${asset.chain_id}-${asset.address}`}
+            leftIcon={
+              asset.logo ? (
+                <img
+                  src={asset.logo}
+                  alt={asset.symbol ?? asset.name ?? t('wallet.token')}
+                  className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                  {getAssetInitial(asset)}
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="m-0 text-base font-semibold">
-                  {formatUsd(Number(asset.value_usd ?? 0), i18n.language)}
-                </p>
-                <p className="m-0 text-sm text-base-content/60">
-                  {formatTokenAmount(asset.amount, asset.decimals)}
-                </p>
-              </div>
-            </div>
-          </article>
+              )
+            }
+            leftPrimary={asset.symbol ?? asset.name ?? t('wallet.unknownAsset')}
+            leftSecondary={asset.name ?? t('wallet.token')}
+            rightPrimary={formatUsd(Number(asset.value_usd ?? 0), i18n.language)}
+            rightSecondary={formatTokenAmount(asset.amount, asset.decimals)}
+          />
         ))}
       </section>
 
@@ -309,7 +300,6 @@ export function WalletScreen({ auth }: WalletScreenProps) {
               <ReceiveCryptoContent
                 walletAddress={walletAddress}
                 supportedChains={supportedChains}
-                defaultReceiveTokens={defaultReceiveTokens}
                 onBack={backToTopUp}
                 onCopyAddress={() => {
                   void handleCopyAddress();

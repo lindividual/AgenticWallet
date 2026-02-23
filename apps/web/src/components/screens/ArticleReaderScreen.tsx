@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bookmark, Heart, Pause, Play, Share2 } from 'lucide-react';
+import { ArrowLeft, Bookmark, Heart, Pause, Play, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { getAgentArticleDetail, ingestAgentEvent } from '../../api';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 import { useToast } from '../../contexts/ToastContext';
 
 type ArticleReaderScreenProps = {
@@ -59,8 +60,10 @@ export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenPr
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['article-reader-detail', articleId],
     queryFn: () => getAgentArticleDetail(articleId),
-    staleTime: 45_000,
-    refetchOnWindowFocus: true,
+    staleTime: 30 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const engagement = engagementMap[articleId] ?? { liked: false, favorited: false };
@@ -168,9 +171,9 @@ export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenPr
   }
 
   return (
-    <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-4 p-6 pb-8">
-      <button type="button" className="btn btn-outline btn-sm h-8 min-h-0 w-fit px-3" onClick={onBack}>
-        {t('home.backToFeed')}
+    <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-4 p-5 py-8">
+      <button type="button" className="btn btn-ghost btn-sm h-12 min-h-0 w-8 p-0" onClick={onBack} aria-label={t('home.backToFeed')}>
+        <ArrowLeft size={24} />
       </button>
 
       {isLoading && <p className="m-0 mt-2 text-base text-base-content/70">{t('home.loadingArticle')}</p>}
@@ -182,10 +185,10 @@ export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenPr
       )}
 
       {!isLoading && !isError && data && (
-        <article className="border border-base-400 bg-base-100 p-4">
-          <p className="m-0 text-xs uppercase tracking-wide text-base-content/50">
+        <article className="bg-base-100">
+          {/* <p className="m-0 text-xs uppercase tracking-wide text-base-content/50">
             {data.article.type === 'daily' ? t('home.dailyNewsTitle') : t('home.topicRecommendationsTitle')}
-          </p>
+          </p> */}
           <h1 className="m-0 mt-2 text-2xl font-bold">{data.article.title}</h1>
           <p className="m-0 mt-2 text-sm text-base-content/60">
             {new Date(data.article.created_at).toLocaleString(i18n.language)}
@@ -218,8 +221,8 @@ export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenPr
             </button>
           </div>
 
-          <div className="mt-4 border-t border-base-300 pt-4">
-            <pre className="m-0 whitespace-pre-wrap break-words text-sm leading-7 font-sans">{data.markdown}</pre>
+          <div className="mt-4">
+            <MarkdownRenderer markdown={data.markdown} />
           </div>
         </article>
       )}

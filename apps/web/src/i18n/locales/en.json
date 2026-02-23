@@ -53,7 +53,10 @@
     "back": "Back",
     "addressCopied": "Address copied.",
     "addressUnavailable": "Address unavailable",
-    "buyComingSoon": "Buy flow is coming soon."
+    "buyComingSoon": "Buy flow is coming soon.",
+    "receiveSelectTokenTitle": "Select token to receive",
+    "receiveSelectNetworkTitle": "Select network for {{token}}",
+    "receiveTransferToAddressTitle": "Please transfer to address"
   },
   "settings": {
     "language": "Language",
@@ -86,7 +89,21 @@
     "readArticle": "Read article",
     "backToFeed": "Back to feed",
     "loadingArticle": "Loading article...",
-    "loadArticleFailed": "Failed to load article: {{message}}"
+    "loadArticleFailed": "Failed to load article: {{message}}",
+    "actionLike": "Like",
+    "actionLiked": "Liked",
+    "actionFavorite": "Save",
+    "actionFavorited": "Saved",
+    "actionShare": "Share",
+    "actionListen": "Listen",
+    "actionStopListen": "Stop",
+    "shareSuccess": "Share opened",
+    "shareCopied": "Copied to clipboard",
+    "shareNotSupported": "Sharing is not supported here",
+    "shareCanceled": "Share canceled",
+    "listenStarted": "Started reading aloud",
+    "listenStopped": "Reading stopped",
+    "listenFailed": "Listen failed, please try again"
   },
   "trade": {
     "title": "Trade"
