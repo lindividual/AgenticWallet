@@ -32,7 +32,7 @@ export function App() {
   const authenticatedState = auth;
 
   function renderAuthenticatedScreen() {
-    if (activeTab === 'home') return <HomeScreen />;
+    if (activeTab === 'home') return <HomeScreen auth={authenticatedState} />;
     if (activeTab === 'trade') return <TradeScreen />;
     return <WalletScreen auth={authenticatedState} />;
   }

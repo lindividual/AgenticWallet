@@ -69,7 +69,20 @@
     "wallet": "Wallet"
   },
   "home": {
-    "title": "Home"
+    "title": "الرئيسية",
+    "agentEntryLabel": "مدخل الوكيل",
+    "greetingMorning": "صباح الخير، ما الفرص التي نراجعها أولًا؟",
+    "greetingAfternoon": "مساء الخير، يمكنني تصفية الفرص بسرعة لك.",
+    "greetingEvening": "مساء الخير، لنقم بمراجعة سريعة لليوم.",
+    "agentEntryHint": "اكتب هدفك مثل \"تجميع دفاعي\" أو \"فرص تقلب عالية اليوم\".",
+    "agentEntryAction": "تحدث مع الوكيل",
+    "dailyNewsTitle": "الأخبار اليومية",
+    "emptyDailyTitle": "يتم إعداد التحديث اليومي",
+    "emptyDailySummary": "يتم توليد Personal crypto daily. تحقق بعد قليل.",
+    "assetRecommendationsTitle": "توصيات الأصول",
+    "emptyRecommendations": "لا توجد توصيات الآن. سيتم تحديثها من نشاطك.",
+    "topicRecommendationsTitle": "توصيات المواضيع",
+    "emptyTopics": "لا توجد مواضيع الآن. ستظهر عند رصد اتجاهات جديدة."
   },
   "trade": {
     "title": "Trade"

@@ -12,6 +12,10 @@ export type Bindings = {
   BASE_RPC_URL?: string;
   BNB_RPC_URL?: string;
   BICONOMY_MEE_VERSION?: string;
+  LLM_PROVIDER?: string;
+  LLM_BASE_URL?: string;
+  LLM_API_KEY?: string;
+  LLM_MODEL?: string;
 };
 
 export type Variables = {

@@ -69,7 +69,20 @@
     "wallet": "Wallet"
   },
   "home": {
-    "title": "Home"
+    "title": "首页",
+    "agentEntryLabel": "Agent 入口",
+    "greetingMorning": "早上好，今天想先看哪类机会？",
+    "greetingAfternoon": "下午好，我可以帮你快速筛选机会。",
+    "greetingEvening": "晚上好，来做一轮今日复盘吧。",
+    "agentEntryHint": "输入你的目标，例如“稳健增持”或“今日高波动机会”。",
+    "agentEntryAction": "和 Agent 聊聊",
+    "dailyNewsTitle": "每日新闻",
+    "emptyDailyTitle": "今日快讯准备中",
+    "emptyDailySummary": "Personal crypto daily 正在生成，你可以稍后回来查看。",
+    "assetRecommendationsTitle": "资产推荐",
+    "emptyRecommendations": "暂无推荐，稍后将根据你的账户行为自动更新。",
+    "topicRecommendationsTitle": "专题推荐",
+    "emptyTopics": "暂无专题内容，系统会在检测到热点后生成。"
   },
   "trade": {
     "title": "Trade"

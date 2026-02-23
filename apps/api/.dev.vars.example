@@ -9,3 +9,9 @@ BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/replace
 BNB_RPC_URL=https://bnb-mainnet.g.alchemy.com/v2/replace
 # Optional, defaults to SDK default MEE version
 BICONOMY_MEE_VERSION=2.3.0
+
+# Optional LLM integration (Phase 1 content/recommendation generation)
+LLM_PROVIDER=openai
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4.1-mini
+LLM_API_KEY=replace-with-llm-api-key

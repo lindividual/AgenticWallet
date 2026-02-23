@@ -5,8 +5,16 @@ import { buildAgentEventRecord, isAgentEventType, type AgentEventIngestRequest }
 import { SUPPORTED_CHAINS } from '../constants';
 import { getWebAuthnConfig } from '../config/webauthn';
 import { requireAuth } from '../middleware/auth';
-import { ingestUserAgentEvent } from '../services/agent';
+import {
+  enqueueUserAgentJob,
+  getUserAgentArticleDetail,
+  ingestUserAgentEvent,
+  listUserAgentArticles,
+  listUserAgentRecommendations,
+  runUserAgentJobsNow,
+} from '../services/agent';
 import { getChallenge, saveChallenge } from '../services/challenge';
+import { getLlmStatus } from '../services/llm';
 import { getUserSummary } from '../services/user';
 import { getWallet } from '../services/wallet';
 import type { AppEnv, PayVerifyConfirmRequest } from '../types';
@@ -296,6 +304,22 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/agent/recommendations', async (c) => {
     const userId = c.get('userId');
+    const doRecommendations = await listUserAgentRecommendations(c.env, userId, 10);
+    if (doRecommendations.length > 0) {
+      return c.json({
+        recommendations: doRecommendations.map((row) => ({
+          id: row.id,
+          kind: row.category,
+          title: row.asset_name,
+          content: row.reason,
+          score: row.score,
+          created_at: row.generated_at,
+          valid_until: row.valid_until,
+          source: 'do',
+        })),
+      });
+    }
+
     const rows = await c.env.DB.prepare(
       `SELECT id, kind, title, content, created_at
        FROM recommendations
@@ -313,8 +337,103 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
       }>();
 
     return c.json({
-      recommendations: rows.results,
+      recommendations: rows.results.map((row) => ({ ...row, source: 'd1' })),
     });
+  });
+
+  app.get('/v1/agent/articles', async (c) => {
+    const userId = c.get('userId');
+    const articleType = c.req.query('type') ?? undefined;
+    const limitRaw = c.req.query('limit');
+    const limit = limitRaw ? Number(limitRaw) : 20;
+    const articles = await listUserAgentArticles(c.env, userId, {
+      articleType,
+      limit: Number.isFinite(limit) ? limit : 20,
+    });
+
+    return c.json({
+      articles: articles.map((row) => ({
+        id: row.id,
+        type: row.article_type,
+        title: row.title,
+        summary: row.summary,
+        mdKey: row.r2_key,
+        tags: safeJsonParse<string[]>(row.tags_json) ?? [],
+        created_at: row.created_at,
+        status: row.status,
+      })),
+    });
+  });
+
+  app.get('/v1/agent/articles/:articleId', async (c) => {
+    const userId = c.get('userId');
+    const articleId = c.req.param('articleId');
+    const detail = await getUserAgentArticleDetail(c.env, userId, articleId);
+    if (!detail) {
+      return c.json({ error: 'article_not_found' }, 404);
+    }
+    return c.json({
+      article: {
+        id: detail.article.id,
+        type: detail.article.article_type,
+        title: detail.article.title,
+        summary: detail.article.summary,
+        mdKey: detail.article.r2_key,
+        tags: safeJsonParse<string[]>(detail.article.tags_json) ?? [],
+        created_at: detail.article.created_at,
+        status: detail.article.status,
+      },
+      markdown: detail.markdown,
+    });
+  });
+
+  app.get('/v1/agent/llm/status', async (c) => {
+    return c.json(getLlmStatus(c.env));
+  });
+
+  app.post('/v1/agent/jobs/daily-digest/run', async (c) => {
+    const userId = c.get('userId');
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await enqueueUserAgentJob(c.env, userId, {
+      jobType: 'daily_digest',
+      runAt: new Date().toISOString(),
+      jobKey: `manual_daily_digest:${today}`,
+      payload: { trigger: 'manual' },
+    });
+    await runUserAgentJobsNow(c.env, userId);
+    return c.json(result);
+  });
+
+  app.post('/v1/agent/jobs/recommendations/run', async (c) => {
+    const userId = c.get('userId');
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await enqueueUserAgentJob(c.env, userId, {
+      jobType: 'recommendation_refresh',
+      runAt: new Date().toISOString(),
+      jobKey: `manual_recommendation_refresh:${today}`,
+      payload: { trigger: 'manual' },
+    });
+    await runUserAgentJobsNow(c.env, userId);
+    return c.json(result);
+  });
+
+  app.post('/v1/agent/jobs/topic/run', async (c) => {
+    const userId = c.get('userId');
+    const body = await c.req.json<{ topic?: string }>().catch(
+      () =>
+        ({
+          topic: undefined,
+        }) satisfies { topic?: string },
+    );
+    const normalizedTopic = typeof body.topic === 'string' ? body.topic.trim() : '';
+    const result = await enqueueUserAgentJob(c.env, userId, {
+      jobType: 'topic_generation',
+      runAt: new Date().toISOString(),
+      jobKey: `manual_topic_generation:${new Date().toISOString().slice(0, 16)}:${normalizedTopic || 'default'}`,
+      payload: normalizedTopic ? { topic: normalizedTopic } : { trigger: 'manual' },
+    });
+    await runUserAgentJobsNow(c.env, userId);
+    return c.json(result);
   });
 
   app.post('/v1/agent/recommendations/mock', async (c) => {

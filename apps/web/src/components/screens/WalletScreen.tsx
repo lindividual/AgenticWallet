@@ -8,6 +8,7 @@ import { TopUpContent } from '../modals/TopUpContent';
 import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { useToast } from '../../contexts/ToastContext';
 import type { AuthState } from '../../hooks/useWalletApp';
+import { BalanceHeader } from '../BalanceHeader';
 
 type WalletScreenProps = {
   auth: AuthState;
@@ -182,14 +183,12 @@ export function WalletScreen({ auth }: WalletScreenProps) {
 
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-6 pb-28">
-      <header>
-        <h1 className="m-0 text-2xl my-4 font-bold tracking-tight">{t('wallet.title')}</h1>
-      </header>
-
-      <section>
-        <p className="m-0 text-base text-base-content/60">{t('wallet.balance')}</p>
-        <p className="m-0 mt-1 text-4xl font-bold leading-none">{formatUsd(totalBalance, i18n.language)}</p>
-      </section>
+      <BalanceHeader
+        title={t('wallet.title')}
+        balanceLabel={t('wallet.balance')}
+        totalBalance={totalBalance}
+        locale={i18n.language}
+      />
 
       <section className="grid grid-cols-3 gap-3 mt-6">
         <button

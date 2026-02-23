@@ -69,7 +69,20 @@
     "wallet": "Wallet"
   },
   "home": {
-    "title": "Home"
+    "title": "Home",
+    "agentEntryLabel": "Agent Entry",
+    "greetingMorning": "Good morning, what should we scan first today?",
+    "greetingAfternoon": "Good afternoon, I can shortlist opportunities for you.",
+    "greetingEvening": "Good evening, let's do a quick daily review.",
+    "agentEntryHint": "Type your goal, like \"defensive accumulation\" or \"today's high-volatility setups\".",
+    "agentEntryAction": "Talk to Agent",
+    "dailyNewsTitle": "Daily News",
+    "emptyDailyTitle": "Daily update is being prepared",
+    "emptyDailySummary": "Personal crypto daily is generating. Check back shortly.",
+    "assetRecommendationsTitle": "Asset Recommendations",
+    "emptyRecommendations": "No recommendations yet. They will refresh from your activity.",
+    "topicRecommendationsTitle": "Topic Recommendations",
+    "emptyTopics": "No topic updates yet. New topics appear when trends are detected."
   },
   "trade": {
     "title": "Trade"

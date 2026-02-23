@@ -95,6 +95,28 @@ export type WalletPortfolioResponse = {
   holdings: SimEvmBalance[];
 };
 
+export type AgentRecommendation = {
+  id: string;
+  kind: string;
+  title: string;
+  content: string;
+  score?: number;
+  created_at: string;
+  valid_until?: string;
+  source: 'do' | 'd1';
+};
+
+export type AgentArticle = {
+  id: string;
+  type: 'daily' | 'topic';
+  title: string;
+  summary: string;
+  mdKey: string;
+  tags: string[];
+  created_at: string;
+  status: string;
+};
+
 export async function postJson<T>(path: string, body: unknown, withAuth = false): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -146,6 +168,21 @@ export async function getWalletPortfolio(): Promise<WalletPortfolioResponse> {
 
 export async function getAppConfig(): Promise<AppConfigResponse> {
   return getJson<AppConfigResponse>('/v1/app-config');
+}
+
+export async function getAgentRecommendations(): Promise<{ recommendations: AgentRecommendation[] }> {
+  return getJson<{ recommendations: AgentRecommendation[] }>('/v1/agent/recommendations', true);
+}
+
+export async function getAgentArticles(params?: {
+  type?: 'daily' | 'topic';
+  limit?: number;
+}): Promise<{ articles: AgentArticle[] }> {
+  const query = new URLSearchParams();
+  if (params?.type) query.set('type', params.type);
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return getJson<{ articles: AgentArticle[] }>(`/v1/agent/articles${suffix ? `?${suffix}` : ''}`, true);
 }
 
 export function setToken(token: string): void {
