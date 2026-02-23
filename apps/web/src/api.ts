@@ -117,6 +117,21 @@ export type AgentArticle = {
   status: string;
 };
 
+export type AgentArticleDetailResponse = {
+  article: AgentArticle;
+  markdown: string;
+};
+
+export type AgentEventType =
+  | 'asset_holding_snapshot'
+  | 'asset_viewed'
+  | 'asset_favorited'
+  | 'trade_buy'
+  | 'trade_sell'
+  | 'article_read'
+  | 'article_favorited'
+  | 'page_dwell';
+
 export async function postJson<T>(path: string, body: unknown, withAuth = false): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -183,6 +198,26 @@ export async function getAgentArticles(params?: {
   if (params?.limit) query.set('limit', String(params.limit));
   const suffix = query.toString();
   return getJson<{ articles: AgentArticle[] }>(`/v1/agent/articles${suffix ? `?${suffix}` : ''}`, true);
+}
+
+export async function getAgentArticleDetail(articleId: string): Promise<AgentArticleDetailResponse> {
+  return getJson<AgentArticleDetailResponse>(`/v1/agent/articles/${articleId}`, true);
+}
+
+export async function ingestAgentEvent(
+  type: AgentEventType,
+  payload?: Record<string, unknown>,
+  dedupeKey?: string,
+): Promise<{ accepted: boolean; eventId?: string }> {
+  return postJson<{ accepted: boolean; eventId?: string }>(
+    '/v1/agent/events',
+    {
+      type,
+      payload,
+      dedupeKey,
+    },
+    true,
+  );
 }
 
 export function setToken(token: string): void {

@@ -44,29 +44,41 @@ type AgentArticleDetailResponse = {
   markdown: string;
 };
 
+type UserAgentRpcStub = DurableObjectStub & {
+  ingestEventRpc(event: AgentEventRecord): Promise<AgentEventIngestResult>;
+  listRecommendationsRpc(userId: string, limit?: number): Promise<AgentRecommendationsResponse>;
+  listArticlesRpc(
+    userId: string,
+    options?: {
+      limit?: number;
+      articleType?: string;
+    },
+  ): Promise<AgentArticlesResponse>;
+  getArticleDetailRpc(userId: string, articleId: string): Promise<AgentArticleDetailResponse | null>;
+  enqueueJobRpc(
+    userId: string,
+    options: {
+      jobType: AgentJobType;
+      runAt?: string;
+      payload?: Record<string, unknown>;
+      jobKey?: string;
+    },
+  ): Promise<{ ok: true; jobId: string; deduped: boolean }>;
+  runJobsNowRpc(userId: string): Promise<{ ok: true }>;
+};
+
+function getUserAgentStub(env: Bindings, userId: string): UserAgentRpcStub {
+  const id = env.USER_AGENT.idFromName(userId);
+  return env.USER_AGENT.get(id) as UserAgentRpcStub;
+}
+
 export async function ingestUserAgentEvent(
   env: Bindings,
   userId: string,
   event: AgentEventRecord,
 ): Promise<AgentEventIngestResult> {
-  const id = env.USER_AGENT.idFromName(userId);
-  const stub = env.USER_AGENT.get(id);
-  const response = await stub.fetch(
-    new Request('https://user-agent.internal/events', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(event),
-    }),
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`user_agent_do_ingest_failed: ${response.status} ${body}`);
-  }
-
-  return response.json<AgentEventIngestResult>();
+  const stub = getUserAgentStub(env, userId);
+  return stub.ingestEventRpc(event);
 }
 
 export async function listUserAgentRecommendations(
@@ -74,18 +86,13 @@ export async function listUserAgentRecommendations(
   userId: string,
   limit = 10,
 ): Promise<AgentRecommendation[]> {
-  const id = env.USER_AGENT.idFromName(userId);
-  const stub = env.USER_AGENT.get(id);
-  const response = await stub.fetch(
-    new Request(`https://user-agent.internal/recommendations?limit=${encodeURIComponent(String(limit))}`, {
-      method: 'GET',
-    }),
-  );
-  if (!response.ok) {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    const data = await stub.listRecommendationsRpc(userId, limit);
+    return data.recommendations ?? [];
+  } catch {
     return [];
   }
-  const data = await response.json<AgentRecommendationsResponse>();
-  return data.recommendations ?? [];
 }
 
 export async function listUserAgentArticles(
@@ -96,23 +103,13 @@ export async function listUserAgentArticles(
     articleType?: string;
   },
 ): Promise<AgentArticle[]> {
-  const id = env.USER_AGENT.idFromName(userId);
-  const stub = env.USER_AGENT.get(id);
-  const params = new URLSearchParams();
-  params.set('limit', String(options?.limit ?? 20));
-  if (options?.articleType) {
-    params.set('type', options.articleType);
-  }
-  const response = await stub.fetch(
-    new Request(`https://user-agent.internal/articles?${params.toString()}`, {
-      method: 'GET',
-    }),
-  );
-  if (!response.ok) {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    const data = await stub.listArticlesRpc(userId, options);
+    return data.articles ?? [];
+  } catch {
     return [];
   }
-  const data = await response.json<AgentArticlesResponse>();
-  return data.articles ?? [];
 }
 
 export async function getUserAgentArticleDetail(
@@ -120,16 +117,12 @@ export async function getUserAgentArticleDetail(
   userId: string,
   articleId: string,
 ): Promise<AgentArticleDetailResponse | null> {
-  const id = env.USER_AGENT.idFromName(userId);
-  const stub = env.USER_AGENT.get(id);
-  const response = await stub.fetch(
-    new Request(`https://user-agent.internal/articles/${encodeURIComponent(articleId)}`, {
-      method: 'GET',
-    }),
-  );
-  if (response.status === 404) return null;
-  if (!response.ok) return null;
-  return response.json<AgentArticleDetailResponse>();
+  const stub = getUserAgentStub(env, userId);
+  try {
+    return await stub.getArticleDetailRpc(userId, articleId);
+  } catch {
+    return null;
+  }
 }
 
 export async function enqueueUserAgentJob(
@@ -142,39 +135,11 @@ export async function enqueueUserAgentJob(
     jobKey?: string;
   },
 ): Promise<{ ok: true; jobId: string; deduped: boolean }> {
-  const id = env.USER_AGENT.idFromName(userId);
-  const stub = env.USER_AGENT.get(id);
-  const response = await stub.fetch(
-    new Request('https://user-agent.internal/jobs/enqueue', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        userId,
-        ...options,
-      }),
-    }),
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`user_agent_do_enqueue_job_failed: ${response.status} ${body}`);
-  }
-
-  return response.json<{ ok: true; jobId: string; deduped: boolean }>();
+  const stub = getUserAgentStub(env, userId);
+  return stub.enqueueJobRpc(userId, options);
 }
 
 export async function runUserAgentJobsNow(env: Bindings, userId: string): Promise<void> {
-  const id = env.USER_AGENT.idFromName(userId);
-  const stub = env.USER_AGENT.get(id);
-  const response = await stub.fetch(
-    new Request('https://user-agent.internal/jobs/run-now', {
-      method: 'POST',
-    }),
-  );
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`user_agent_do_run_jobs_failed: ${response.status} ${body}`);
-  }
+  const stub = getUserAgentStub(env, userId);
+  await stub.runJobsNowRpc(userId);
 }

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev src/index.ts --persist-to .wrangler/state",
     "deploy": "wrangler deploy",
-    "build": "tsc --noEmit"
+    "build": "tsc --noEmit",
+    "test:agent-local": "bash scripts/e2e-agent-local.sh"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.2.2",

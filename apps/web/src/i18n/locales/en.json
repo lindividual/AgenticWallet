@@ -82,7 +82,11 @@
     "assetRecommendationsTitle": "Asset Recommendations",
     "emptyRecommendations": "No recommendations yet. They will refresh from your activity.",
     "topicRecommendationsTitle": "Topic Recommendations",
-    "emptyTopics": "No topic updates yet. New topics appear when trends are detected."
+    "emptyTopics": "No topic updates yet. New topics appear when trends are detected.",
+    "readArticle": "Read article",
+    "backToFeed": "Back to feed",
+    "loadingArticle": "Loading article...",
+    "loadArticleFailed": "Failed to load article: {{message}}"
   },
   "trade": {
     "title": "Trade"

@@ -163,6 +163,10 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const requestUserId = request.headers.get('x-user-id')?.trim();
+    if (requestUserId) {
+      this.ensureOwner(requestUserId);
+    }
 
     if (request.method !== 'GET' || url.pathname !== '/health') {
       await this.ensureDailyDigestJobs();
@@ -217,7 +221,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       if (!articleId) {
         return Response.json({ error: 'invalid_article_id' }, { status: 400 });
       }
-      const detail = this.getArticleDetail(articleId);
+      const detail = await this.getArticleDetail(articleId);
       if (!detail) {
         return Response.json({ error: 'article_not_found' }, { status: 404 });
       }
@@ -229,6 +233,71 @@ export class UserAgentDO extends DurableObject<Bindings> {
     }
 
     return Response.json({ error: 'not_found' }, { status: 404 });
+  }
+
+  async ingestEventRpc(event: AgentEventRecord): Promise<{
+    ok: true;
+    eventId: string;
+    deduped: boolean;
+    sequence: number;
+  }> {
+    await this.ensureDailyDigestJobs();
+    return this.ingestEvent(event);
+  }
+
+  async listRecommendationsRpc(
+    userId: string,
+    limit = 10,
+  ): Promise<{ recommendations: RecommendationRow[] }> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    return { recommendations: this.getRecommendations(limit) };
+  }
+
+  async listArticlesRpc(
+    userId: string,
+    options?: {
+      limit?: number;
+      articleType?: string;
+    },
+  ): Promise<{ articles: ArticleRow[] }> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    const limit = options?.limit ?? 20;
+    const articleType = options?.articleType ?? null;
+    return { articles: this.getArticles(limit, articleType) };
+  }
+
+  async getArticleDetailRpc(
+    userId: string,
+    articleId: string,
+  ): Promise<{ article: ArticleRow; markdown: string } | null> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    return this.getArticleDetail(articleId);
+  }
+
+  async enqueueJobRpc(
+    userId: string,
+    options: {
+      jobType: JobType;
+      runAt?: string;
+      payload?: Record<string, unknown>;
+      jobKey?: string;
+    },
+  ): Promise<{ ok: true; jobId: string; deduped: boolean }> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    const runAt = normalizeOccurredAt(options.runAt);
+    const result = await this.enqueueJob(options.jobType, runAt, options.payload ?? {}, options.jobKey ?? null);
+    return { ok: true, ...result };
+  }
+
+  async runJobsNowRpc(userId: string): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    await this.alarm();
+    return { ok: true };
   }
 
   async alarm(): Promise<void> {
@@ -275,7 +344,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (event.dedupeKey) {
       const existing = this.ctx.storage.sql
         .exec('SELECT id FROM user_events WHERE dedupe_key = ? LIMIT 1', event.dedupeKey)
-        .one() as Record<string, unknown> | null;
+        .toArray()[0] as Record<string, unknown> | undefined;
       const existingId = normalizeSqlString(existing?.id);
       if (existingId) {
         return {
@@ -325,7 +394,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   private ensureOwner(userId: string): void {
     const row = this.ctx.storage.sql
       .exec('SELECT value_json FROM agent_state WHERE key = ? LIMIT 1', OWNER_KEY)
-      .one() as Record<string, unknown> | null;
+      .toArray()[0] as Record<string, unknown> | undefined;
     const valueJson = normalizeSqlString(row?.value_json);
     if (!valueJson) {
       this.ctx.storage.sql.exec(
@@ -346,7 +415,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   private getOwnerUserId(): string | null {
     const row = this.ctx.storage.sql
       .exec('SELECT value_json FROM agent_state WHERE key = ? LIMIT 1', OWNER_KEY)
-      .one() as Record<string, unknown> | null;
+      .toArray()[0] as Record<string, unknown> | undefined;
     const valueJson = normalizeSqlString(row?.value_json);
     if (!valueJson) return null;
     const parsed = safeJsonParse<{ userId?: string }>(valueJson);
@@ -440,7 +509,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .toArray() as ArticleRow[];
   }
 
-  private getArticleDetail(articleId: string): { article: ArticleRow; markdown: string } | null {
+  private async getArticleDetail(articleId: string): Promise<{ article: ArticleRow; markdown: string } | null> {
     const article = this.ctx.storage.sql
       .exec(
         `SELECT
@@ -457,19 +526,17 @@ export class UserAgentDO extends DurableObject<Bindings> {
          LIMIT 1`,
         articleId,
       )
-      .one() as ArticleRow | null;
+      .toArray()[0] as ArticleRow | undefined;
 
     if (!article) {
       return null;
     }
 
-    const content = this.ctx.storage.sql
-      .exec('SELECT article_id, markdown FROM article_contents WHERE article_id = ? LIMIT 1', articleId)
-      .one() as ArticleContentRow | null;
+    const markdown = await this.getArticleMarkdown(article.id, article.r2_key);
 
     return {
       article,
-      markdown: content?.markdown ?? '',
+      markdown,
     };
   }
 
@@ -490,10 +557,10 @@ export class UserAgentDO extends DurableObject<Bindings> {
         `${today}T00:00:00.000Z`,
         `${tomorrowDate(today)}T00:00:00.000Z`,
       )
-      .one();
+      .toArray()[0];
 
     if (!hasTodayArticle) {
-      await this.enqueueJob('daily_digest', new Date(Date.now() + 5000).toISOString(), {}, `daily_digest:${today}`);
+      await this.enqueueJob('daily_digest', new Date().toISOString(), {}, `daily_digest:${today}`);
     }
 
     const nextRun = nextUtcHour(now, 8);
@@ -511,7 +578,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (normalizedJobKey) {
       const existing = this.ctx.storage.sql
         .exec('SELECT id FROM jobs WHERE job_key = ? LIMIT 1', normalizedJobKey)
-        .one() as Record<string, unknown> | null;
+        .toArray()[0] as Record<string, unknown> | undefined;
       const existingId = normalizeSqlString(existing?.id);
       if (existingId) {
         return { jobId: existingId, deduped: true };
@@ -548,7 +615,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private async runJob(job: JobRow): Promise<void> {
+    const startedAtMs = Date.now();
     const nowIso = new Date().toISOString();
+    console.log('user_agent_job_started', {
+      jobId: job.id,
+      jobType: job.job_type,
+      runAt: job.run_at,
+      retryCount: job.retry_count,
+    });
     this.ctx.storage.sql.exec(
       'UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?',
       JOB_STATUS_RUNNING,
@@ -565,8 +639,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
         new Date().toISOString(),
         job.id,
       );
+      console.log('user_agent_job_succeeded', {
+        jobId: job.id,
+        jobType: job.job_type,
+        durationMs: Date.now() - startedAtMs,
+      });
     } catch (error) {
       const nextRetry = job.retry_count + 1;
+      const durationMs = Date.now() - startedAtMs;
       if (nextRetry > MAX_JOB_RETRIES) {
         this.ctx.storage.sql.exec(
           'UPDATE jobs SET status = ?, retry_count = ?, updated_at = ? WHERE id = ?',
@@ -575,6 +655,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
           new Date().toISOString(),
           job.id,
         );
+        console.error('user_agent_job_failed', {
+          jobId: job.id,
+          jobType: job.job_type,
+          retryCount: nextRetry,
+          durationMs,
+          finalFailed: true,
+          error: error instanceof Error ? error.message : String(error),
+        });
         return;
       }
 
@@ -591,6 +679,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
         jobId: job.id,
         jobType: job.job_type,
         retryCount: nextRetry,
+        durationMs,
+        finalFailed: false,
+        nextRun,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -633,7 +724,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
         `${dateKey}T00:00:00.000Z`,
         `${tomorrowDate(dateKey)}T00:00:00.000Z`,
       )
-      .one();
+      .toArray()[0];
 
     if (hasTodayArticle) return;
 
@@ -679,6 +770,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const articleId = crypto.randomUUID();
     const createdAt = now.toISOString();
 
+    const r2Key = buildArticleR2Key(ownerUserId, dateKey, 'daily', articleId);
     this.ctx.storage.sql.exec(
       `INSERT INTO article_index (
         id,
@@ -694,17 +786,13 @@ export class UserAgentDO extends DurableObject<Bindings> {
       'daily',
       title,
       summary,
-      `inline://articles/${ownerUserId}/${dateKey}-daily.md`,
+      r2Key,
       JSON.stringify(['daily', 'personalized']),
       createdAt,
       'ready',
     );
 
-    this.ctx.storage.sql.exec(
-      'INSERT INTO article_contents (article_id, markdown) VALUES (?, ?)',
-      articleId,
-      markdown,
-    );
+    await this.putArticleMarkdown(articleId, r2Key, markdown);
   }
 
   private async refreshRecommendations(_payload: Record<string, unknown>): Promise<void> {
@@ -723,7 +811,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
         dayStart,
         dayEnd,
       )
-      .one();
+      .toArray()[0];
     if (existingToday) return;
 
     const events = this.getLatestEvents(120);
@@ -851,6 +939,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
     const articleId = crypto.randomUUID();
     const createdAt = now.toISOString();
+    const r2Key = buildArticleR2Key(ownerUserId, dateKey, 'topic', articleId, topic);
     this.ctx.storage.sql.exec(
       `INSERT INTO article_index (
         id,
@@ -866,16 +955,49 @@ export class UserAgentDO extends DurableObject<Bindings> {
       'topic',
       `专题: ${topic}`,
       `${topic} 专题，聚焦用户高关注资产与可执行动作。`,
-      `inline://articles/${ownerUserId}/${dateKey}-topic-${slugify(topic)}.md`,
+      r2Key,
       JSON.stringify(['topic', topic]),
       createdAt,
       'ready',
     );
+    await this.putArticleMarkdown(articleId, r2Key, markdown);
+  }
+
+  private async putArticleMarkdown(articleId: string, r2Key: string, markdown: string): Promise<void> {
+    await this.env.AGENT_ARTICLES.put(r2Key, markdown, {
+      httpMetadata: {
+        contentType: 'text/markdown; charset=utf-8',
+      },
+      customMetadata: {
+        articleId,
+      },
+    });
+
+    // Backward-compatibility for existing read path during migration window.
     this.ctx.storage.sql.exec(
-      'INSERT INTO article_contents (article_id, markdown) VALUES (?, ?)',
+      `INSERT INTO article_contents (article_id, markdown)
+       VALUES (?, ?)
+       ON CONFLICT(article_id) DO UPDATE SET markdown = excluded.markdown`,
       articleId,
       markdown,
     );
+  }
+
+  private async getArticleMarkdown(articleId: string, r2Key: string): Promise<string> {
+    const normalizedKey = normalizeR2Key(r2Key);
+    if (normalizedKey) {
+      const object = await this.env.AGENT_ARTICLES.get(normalizedKey);
+      if (object) {
+        const text = await object.text();
+        if (text) return text;
+      }
+    }
+
+    // Fallback for old records before R2 migration.
+    const content = this.ctx.storage.sql
+      .exec('SELECT article_id, markdown FROM article_contents WHERE article_id = ? LIMIT 1', articleId)
+      .toArray()[0] as ArticleContentRow | undefined;
+    return content?.markdown ?? '';
   }
 
   private async scheduleNextAlarm(): Promise<void> {
@@ -888,7 +1010,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
          LIMIT 1`,
         JOB_STATUS_QUEUED,
       )
-      .one() as Record<string, unknown> | null;
+      .toArray()[0] as Record<string, unknown> | undefined;
 
     const runAtIso = normalizeSqlString(nextRow?.run_at);
     if (!runAtIso) {
@@ -1141,4 +1263,27 @@ function slugify(input: string): string {
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
+}
+
+function buildArticleR2Key(
+  userId: string,
+  dateKey: string,
+  type: 'daily' | 'topic',
+  articleId: string,
+  topic?: string,
+): string {
+  if (type === 'daily') {
+    return `articles/${userId}/${dateKey}-daily-${articleId}.md`;
+  }
+  const topicPart = topic ? `-${slugify(topic)}` : '';
+  return `articles/${userId}/${dateKey}-topic${topicPart}-${articleId}.md`;
+}
+
+function normalizeR2Key(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (value.startsWith('inline://')) {
+    return value.slice('inline://'.length);
+  }
+  return value;
 }

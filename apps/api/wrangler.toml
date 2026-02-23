@@ -15,6 +15,10 @@ database_name = "agentic_wallet_db"
 database_id = "replace-with-your-d1-database-id"
 migrations_dir = "migrations"
 
+[[r2_buckets]]
+binding = "AGENT_ARTICLES"
+bucket_name = "agentic-wallet-articles"
+
 [[durable_objects.bindings]]
 name = "USER_AGENT"
 class_name = "UserAgentDO"

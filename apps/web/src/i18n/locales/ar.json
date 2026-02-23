@@ -82,7 +82,11 @@
     "assetRecommendationsTitle": "توصيات الأصول",
     "emptyRecommendations": "لا توجد توصيات الآن. سيتم تحديثها من نشاطك.",
     "topicRecommendationsTitle": "توصيات المواضيع",
-    "emptyTopics": "لا توجد مواضيع الآن. ستظهر عند رصد اتجاهات جديدة."
+    "emptyTopics": "لا توجد مواضيع الآن. ستظهر عند رصد اتجاهات جديدة.",
+    "readArticle": "قراءة التفاصيل",
+    "backToFeed": "العودة إلى الرئيسية",
+    "loadingArticle": "جار تحميل المقال...",
+    "loadArticleFailed": "فشل تحميل المقال: {{message}}"
   },
   "trade": {
     "title": "Trade"
