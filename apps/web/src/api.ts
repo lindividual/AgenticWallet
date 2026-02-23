@@ -66,6 +66,15 @@ export type ChainsResponse = {
   }>;
 };
 
+export type AppConfigResponse = {
+  supportedChains: Array<{
+    chainId: number;
+    name: string;
+    symbol: string;
+  }>;
+  defaultReceiveTokens: string[];
+};
+
 export type SimEvmBalance = {
   chain: string;
   chain_id: number;
@@ -133,6 +142,10 @@ export async function getJson<T>(path: string, withAuth = false): Promise<T> {
 
 export async function getWalletPortfolio(): Promise<WalletPortfolioResponse> {
   return getJson<WalletPortfolioResponse>('/v1/wallet/portfolio', true);
+}
+
+export async function getAppConfig(): Promise<AppConfigResponse> {
+  return getJson<AppConfigResponse>('/v1/app-config');
 }
 
 export function setToken(token: string): void {

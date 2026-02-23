@@ -2,6 +2,7 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simp
 
 export type Bindings = {
   DB: D1Database;
+  USER_AGENT: DurableObjectNamespace;
   APP_SECRET: string;
   WEBAUTHN_RP_NAME: string;
   SIM_API_KEY?: string;

@@ -44,6 +44,7 @@
     "mockRecommendation": "إنشاء توصية Agent (وهمية)",
     "mockRecommendationSuccess": "تم إنشاء توصية وهمية.",
     "supportedChains": "السلاسل المدعومة",
+    "defaultReceiveTokens": "العملات الافتراضية للاستلام",
     "topUpTitle": "شحن",
     "receiveCrypto": "استلام العملات الرقمية",
     "buyCrypto": "شراء العملات الرقمية",
@@ -60,5 +61,17 @@
     "themeLight": "فاتح",
     "themeDark": "داكن",
     "themeSystem": "حسب النظام"
+  },
+  "tabs": {
+    "navigation": "شريط التنقل السفلي",
+    "home": "Home",
+    "trade": "Trade",
+    "wallet": "Wallet"
+  },
+  "home": {
+    "title": "Home"
+  },
+  "trade": {
+    "title": "Trade"
   }
 }

@@ -7,11 +7,8 @@
 - 最小触控区：`48px`
 
 ## 2. 字体与层级
-- 字体族：`General Sans, Noto Sans SC, PingFang SC, sans-serif`
-- 主标题：`clamp(32px, 9vw, 56px)`，字重 `700`
-- 按钮文字：`30px`（小屏降为 `26px`），字重 `600`
-- 正文：`14px - 16px`
-- 标题字距：`-0.02em` ~ `-0.03em`
+- 全应用统一使用：`apps/web/docs/typography-spec.md`
+- 本文不再定义页面私有字号，避免与全局规范冲突
 
 ## 3. 颜色系统
 - 页面背景：`#EDEDED`

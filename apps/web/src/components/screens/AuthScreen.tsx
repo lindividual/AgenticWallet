@@ -23,12 +23,12 @@ export function AuthScreen({
 
   return (
     <section
-      className="mx-auto flex min-h-screen max-h-screen w-full max-w-[400px] flex-col overflow-y-auto p-6 sm:p-8 sm:pb-10 max-[375px]:px-4 max-[375px]:pb-5 lg:px-14 lg:py-12"
+      className="mx-auto flex min-h-screen max-h-screen w-full max-w-105 flex-col overflow-y-auto p-6 sm:p-8 sm:pb-10 max-[375px]:px-4 max-[375px]:pb-5 lg:px-14 lg:py-12"
       aria-busy={loading}
     >
       <header className="flex items-center justify-between gap-3" aria-label={t('common.brand')}>
         <div className="flex items-center gap-5 text-base-content">
-          <Logo className="h-[25px] w-9 shrink-0" ariaLabel={t('common.brand')} />
+          <Logo className="h-6.25 w-9 shrink-0" ariaLabel={t('common.brand')} />
           <span className="text-xl font-medium tracking-tight max-[375px]:text-lg">{t('common.brand')}</span>
         </div>
         <SettingsDropdown />
@@ -36,7 +36,7 @@ export function AuthScreen({
 
       <h1
         id="auth-title"
-        className="my-12 w-[233px] text-3xl font-bold leading-tight tracking-tight max-[375px]:my-10 max-[375px]:w-[200px] max-[375px]:text-[29px] sm:my-10 sm:w-full sm:max-w-[360px] sm:text-4xl lg:max-w-[420px] lg:text-[44px] lg:leading-[1.08] whitespace-pre-line"
+        className="my-12 w-58 text-2xl font-bold leading-tight max-[375px]:my-10 max-[375px]:w-50 max-[375px]:text-[29px] sm:my-10 sm:w-full sm:max-w-90 sm:text-4xl lg:max-w-105 lg:text-[44px] lg:leading-[1.08] whitespace-pre-line"
       >
         {t('auth.title')}
       </h1>

@@ -1,5 +1,4 @@
-export const SUPPORTED_CHAINS = [
-  { chainId: 1, name: 'Ethereum', symbol: 'ETH' },
-  { chainId: 8453, name: 'Base', symbol: 'ETH' },
-  { chainId: 56, name: 'BNB Chain', symbol: 'BNB' },
-];
+import { APP_CONFIG } from './config/appConfig';
+
+export const SUPPORTED_CHAINS = APP_CONFIG.supportedChains;
+export const DEFAULT_RECEIVE_TOKENS = APP_CONFIG.defaultReceiveTokens;

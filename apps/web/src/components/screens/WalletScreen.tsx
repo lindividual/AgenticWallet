@@ -1,13 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getWalletPortfolio, type SimEvmBalance } from '../../api';
+import { getAppConfig, getWalletPortfolio, type SimEvmBalance } from '../../api';
+import { Modal } from '../modals/Modal';
+import { ReceiveCryptoContent } from '../modals/ReceiveCryptoContent';
+import { TopUpContent } from '../modals/TopUpContent';
+import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { useToast } from '../../contexts/ToastContext';
 import type { AuthState } from '../../hooks/useWalletApp';
 
 type WalletScreenProps = {
   auth: AuthState;
 };
+
+type ActiveModalContent = 'topUp' | 'receive';
 
 function formatUsd(value: number, locale: string): string {
   return new Intl.NumberFormat(locale, {
@@ -36,7 +42,13 @@ function getAssetInitial(asset: SimEvmBalance): string {
 export function WalletScreen({ auth }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess } = useToast();
-  const [topUpView, setTopUpView] = useState<'menu' | 'receive' | 'buy' | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeModalContent, setActiveModalContent] = useState<ActiveModalContent>('topUp');
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openRafRef = useRef<number | null>(null);
+  const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
   const dailyReport = t('wallet.dailyReportMock');
 
@@ -47,6 +59,12 @@ export function WalletScreen({ auth }: WalletScreenProps) {
     staleTime: 15_000,
     refetchInterval: 20_000,
     refetchOnWindowFocus: true,
+  });
+  const { data: appConfig } = useQuery({
+    queryKey: ['app-config'],
+    queryFn: getAppConfig,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const holdings = useMemo<SimEvmBalance[]>(() => {
@@ -60,6 +78,8 @@ export function WalletScreen({ auth }: WalletScreenProps) {
   }, [data]);
 
   const totalBalance = data?.totalUsd ?? 0;
+  const supportedChains = appConfig?.supportedChains ?? [];
+  const defaultReceiveTokens = appConfig?.defaultReceiveTokens ?? [];
 
   useEffect(() => {
     if (!walletAddress) {
@@ -90,6 +110,18 @@ export function WalletScreen({ auth }: WalletScreenProps) {
     });
   }, [data]);
 
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+      }
+      if (openRafRef.current !== null) {
+        cancelAnimationFrame(openRafRef.current);
+      }
+    },
+    [],
+  );
+
   async function handleCopyAddress() {
     if (!walletAddress) {
       showError(t('wallet.addressUnavailable'));
@@ -104,22 +136,67 @@ export function WalletScreen({ auth }: WalletScreenProps) {
     }
   }
 
+  function showModal(originRect: RectSnapshot | null) {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    if (openRafRef.current !== null) {
+      cancelAnimationFrame(openRafRef.current);
+    }
+
+    setIsModalOpen(true);
+    setModalOriginRect(originRect);
+    setModalVisible(false);
+    openRafRef.current = requestAnimationFrame(() => {
+      setModalVisible(true);
+      openRafRef.current = null;
+    });
+  }
+
+  function openTopUpModal() {
+    setActiveModalContent('topUp');
+    showModal(snapshotRect(topUpButtonRef.current));
+  }
+
+  function openReceiveModal() {
+    setActiveModalContent('receive');
+  }
+
+  function backToTopUp() {
+    setActiveModalContent('topUp');
+  }
+
+  function closeActiveModal() {
+    if (!isModalOpen) return;
+
+    setModalVisible(false);
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+    }
+    closeTimerRef.current = setTimeout(() => {
+      setIsModalOpen(false);
+      closeTimerRef.current = null;
+    }, 300);
+  }
+
   return (
-    <section className="mx-auto flex min-h-screen w-full max-w-[420px] flex-col gap-5 p-6">
+    <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-6 pb-28">
       <header>
-        <h1 className="m-0 text-xl font-bold tracking-tight">{t('wallet.title')}</h1>
+        <h1 className="m-0 text-2xl my-4 font-bold tracking-tight">{t('wallet.title')}</h1>
       </header>
 
       <section>
         <p className="m-0 text-base text-base-content/60">{t('wallet.balance')}</p>
-        <p className="m-0 mt-1 text-3xl font-bold leading-none">{formatUsd(totalBalance, i18n.language)}</p>
+        <p className="m-0 mt-1 text-4xl font-bold leading-none">{formatUsd(totalBalance, i18n.language)}</p>
       </section>
 
-      <section className="grid grid-cols-3 gap-3">
+      <section className="grid grid-cols-3 gap-3 mt-6">
         <button
+          ref={topUpButtonRef}
           type="button"
           className="btn btn-primary h-16 text-base font-semibold"
-          onClick={() => setTopUpView('menu')}
+          onClick={openTopUpModal}
         >
           {t('wallet.topUp')}
         </button>
@@ -170,7 +247,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
           <div className="bg-base-200 p-4 text-base">{t('wallet.noAssetsFound')}</div>
         )}
         {holdings.map((asset) => (
-          <article key={`${asset.chain_id}-${asset.address}`} className="border border-base-400 bg-base-100 p-4">
+          <article key={`${asset.chain_id}-${asset.address}`} className="bg-base-100 py-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 {asset.logo ? (
@@ -187,14 +264,14 @@ export function WalletScreen({ auth }: WalletScreenProps) {
                 )}
                 <div>
                   <p className="m-0 text-base font-semibold">{asset.symbol ?? asset.name ?? t('wallet.unknownAsset')}</p>
-                  <p className="m-0 mt-1 text-sm text-base-content/60">{asset.name ?? t('wallet.token')}</p>
+                  <p className="m-0 text-sm text-base-content/60">{asset.name ?? t('wallet.token')}</p>
                 </div>
               </div>
               <div className="text-right">
                 <p className="m-0 text-base font-semibold">
                   {formatUsd(Number(asset.value_usd ?? 0), i18n.language)}
                 </p>
-                <p className="m-0 mt-1 text-sm text-base-content/60">
+                <p className="m-0 text-sm text-base-content/60">
                   {formatTokenAmount(asset.amount, asset.decimals)}
                 </p>
               </div>
@@ -203,117 +280,46 @@ export function WalletScreen({ auth }: WalletScreenProps) {
         ))}
       </section>
 
-      {topUpView && (
-        <div
-          className="fixed inset-0 z-40 bg-black/40"
-          onClick={() => setTopUpView(null)}
-          role="presentation"
+      {isModalOpen && (
+        <Modal
+          visible={modalVisible}
+          originRect={modalOriginRect}
+          onClose={closeActiveModal}
         >
-          <section
-            className="mx-auto flex min-h-screen w-full max-w-[420px] flex-col bg-base-200 p-6 pt-24"
-            onClick={(event) => event.stopPropagation()}
-          >
-            {topUpView === 'menu' && (
-              <>
-                <header className="flex items-start justify-between">
-                  <h2 className="m-0 text-4xl font-bold tracking-tight">{t('wallet.topUpTitle')}</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm h-9 min-h-0 px-3 text-xl"
-                    aria-label={t('common.close')}
-                    onClick={() => setTopUpView(null)}
-                  >
-                    ×
-                  </button>
-                </header>
-
-                <div className="mt-16 flex flex-col gap-4">
-                  <button
-                    type="button"
-                    className="flex items-center gap-4 border border-base-300 bg-base-100 px-4 py-5 text-left text-3xl font-semibold"
-                    onClick={() => setTopUpView('receive')}
-                  >
-                    <span aria-hidden>↓</span>
-                    <span>{t('wallet.receiveCrypto')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="flex items-center gap-4 border border-base-300 bg-base-100 px-4 py-5 text-left text-3xl font-semibold"
-                    onClick={() => setTopUpView('buy')}
-                  >
-                    <span aria-hidden>$</span>
-                    <span>{t('wallet.buyCrypto')}</span>
-                  </button>
-                </div>
-              </>
-            )}
-
-            {topUpView === 'receive' && (
-              <>
-                <header className="flex items-start justify-between">
-                  <h2 className="m-0 text-4xl font-bold tracking-tight">{t('wallet.receiveCryptoTitle')}</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm h-9 min-h-0 px-3 text-xl"
-                    aria-label={t('common.close')}
-                    onClick={() => setTopUpView(null)}
-                  >
-                    ×
-                  </button>
-                </header>
-
-                <div className="mt-16 flex flex-col gap-4 border border-base-300 bg-base-100 p-5">
-                  <p className="m-0 text-xl font-medium break-all">{walletAddress || t('wallet.addressUnavailable')}</p>
-                  <button
-                    type="button"
-                    className="btn btn-primary h-12 w-fit px-6 text-xl font-semibold"
-                    onClick={handleCopyAddress}
-                  >
-                    {t('wallet.copy')}
-                  </button>
-                </div>
-
-                <button
-                  type="button"
-                  className="mt-10 w-fit text-4xl"
-                  onClick={() => setTopUpView('menu')}
-                  aria-label={t('wallet.back')}
-                >
-                  ←
-                </button>
-              </>
-            )}
-
-            {topUpView === 'buy' && (
-              <>
-                <header className="flex items-start justify-between">
-                  <h2 className="m-0 text-4xl font-bold tracking-tight">{t('wallet.buyCrypto')}</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm h-9 min-h-0 px-3 text-xl"
-                    aria-label={t('common.close')}
-                    onClick={() => setTopUpView(null)}
-                  >
-                    ×
-                  </button>
-                </header>
-
-                <div className="mt-16 border border-base-300 bg-base-100 p-5">
-                  <p className="m-0 text-2xl font-medium">{t('wallet.buyComingSoon')}</p>
-                </div>
-
-                <button
-                  type="button"
-                  className="mt-10 w-fit text-4xl"
-                  onClick={() => setTopUpView('menu')}
-                  aria-label={t('wallet.back')}
-                >
-                  ←
-                </button>
-              </>
-            )}
-          </section>
-        </div>
+          <div className="relative flex-1 overflow-hidden">
+            <div
+              className={`absolute inset-0 transition-all duration-300 ${
+                activeModalContent === 'topUp'
+                  ? 'translate-x-0 opacity-100'
+                  : 'pointer-events-none -translate-x-4 opacity-0'
+              }`}
+            >
+              <TopUpContent
+                active={activeModalContent === 'topUp'}
+                onOpenReceive={openReceiveModal}
+                onClose={closeActiveModal}
+              />
+            </div>
+            <div
+              className={`absolute inset-0 transition-all duration-300 ${
+                activeModalContent === 'receive'
+                  ? 'translate-x-0 opacity-100'
+                  : 'pointer-events-none translate-x-4 opacity-0'
+              }`}
+            >
+              <ReceiveCryptoContent
+                walletAddress={walletAddress}
+                supportedChains={supportedChains}
+                defaultReceiveTokens={defaultReceiveTokens}
+                onBack={backToTopUp}
+                onCopyAddress={() => {
+                  void handleCopyAddress();
+                }}
+                onClose={closeActiveModal}
+              />
+            </div>
+          </div>
+        </Modal>
       )}
     </section>
   );

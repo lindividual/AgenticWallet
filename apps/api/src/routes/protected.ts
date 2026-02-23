@@ -1,8 +1,11 @@
 import { generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { isoBase64URL } from '@simplewebauthn/server/helpers';
 import type { Hono } from 'hono';
+import { buildAgentEventRecord, isAgentEventType, type AgentEventIngestRequest } from '../agent/events';
+import { SUPPORTED_CHAINS } from '../constants';
 import { getWebAuthnConfig } from '../config/webauthn';
 import { requireAuth } from '../middleware/auth';
+import { ingestUserAgentEvent } from '../services/agent';
 import { getChallenge, saveChallenge } from '../services/challenge';
 import { getUserSummary } from '../services/user';
 import { getWallet } from '../services/wallet';
@@ -41,9 +44,10 @@ function hasPositiveAmount(rawAmount: string | undefined): boolean {
 }
 
 function resolvePortfolioChainIds(raw: string | undefined): string {
+  const defaultChainIds = SUPPORTED_CHAINS.map((chain) => chain.chainId).join(',');
   const normalized = raw?.trim();
   if (!normalized) {
-    return '1,8453,137';
+    return defaultChainIds;
   }
 
   if (normalized === 'mainnet' || normalized === 'testnet') {
@@ -52,7 +56,7 @@ function resolvePortfolioChainIds(raw: string | undefined): string {
 
   const isValidList = /^[0-9,\s]+$/.test(normalized);
   if (!isValidList) {
-    return '1,8453,137';
+    return defaultChainIds;
   }
 
   const list = normalized
@@ -60,10 +64,14 @@ function resolvePortfolioChainIds(raw: string | undefined): string {
     .map((v) => v.trim())
     .filter(Boolean);
   if (!list.length) {
-    return '1,8453,137';
+    return defaultChainIds;
   }
 
   return list.join(',');
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input);
 }
 
 export function registerProtectedRoutes(app: Hono<AppEnv>): void {
@@ -251,6 +259,39 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
       verifiedAt: nowIso(),
       scope: 'payment',
     });
+  });
+
+  app.post('/v1/agent/events', async (c) => {
+    const userId = c.get('userId');
+    let body: AgentEventIngestRequest | null = null;
+    try {
+      body = await c.req.json<AgentEventIngestRequest>();
+    } catch {
+      body = null;
+    }
+
+    if (!body || !isAgentEventType(body.type)) {
+      return c.json({ error: 'invalid_event_type' }, 400);
+    }
+
+    if (body.payload !== undefined && !isRecord(body.payload)) {
+      return c.json({ error: 'invalid_payload' }, 400);
+    }
+
+    const event = buildAgentEventRecord(userId, body);
+
+    try {
+      const result = await ingestUserAgentEvent(c.env, userId, event);
+      return c.json(result);
+    } catch (error) {
+      return c.json(
+        {
+          error: 'agent_event_ingest_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
   });
 
   app.get('/v1/agent/recommendations', async (c) => {

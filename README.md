@@ -21,6 +21,11 @@ Passkey-only login/register MVP for an agentic crypto wallet.
 - `apps/api`: Worker API (also serves built frontend assets in production)
 - `apps/web`: React app
 
+## App Config (配置文件)
+- Edit `apps/api/src/config/appConfig.ts` to control:
+  - `supportedChains`: which chains are supported
+  - `defaultReceiveTokens`: which tokens are shown by default in receive flow
+
 ## Quick Start
 1. Install dependencies
 ```bash

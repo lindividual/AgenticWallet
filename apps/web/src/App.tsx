@@ -1,8 +1,13 @@
+import { useState } from 'react';
+import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
+import { HomeScreen } from './components/screens/HomeScreen';
+import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
 import { useWalletApp } from './hooks/useWalletApp';
 
 export function App() {
+  const [activeTab, setActiveTab] = useState<AppTab>('home');
   const {
     auth,
     authMode,
@@ -24,9 +29,18 @@ export function App() {
     );
   }
 
+  const authenticatedState = auth;
+
+  function renderAuthenticatedScreen() {
+    if (activeTab === 'home') return <HomeScreen />;
+    if (activeTab === 'trade') return <TradeScreen />;
+    return <WalletScreen auth={authenticatedState} />;
+  }
+
   return (
-    <WalletScreen
-      auth={auth}
-    />
+    <>
+      {renderAuthenticatedScreen()}
+      <BottomTabBar activeTab={activeTab} onTabChange={setActiveTab} />
+    </>
   );
 }

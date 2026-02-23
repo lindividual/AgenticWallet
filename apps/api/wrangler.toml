@@ -14,3 +14,11 @@ binding = "DB"
 database_name = "agentic_wallet_db"
 database_id = "replace-with-your-d1-database-id"
 migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "USER_AGENT"
+class_name = "UserAgentDO"
+
+[[migrations]]
+tag = "user-agent-do-v1"
+new_sqlite_classes = ["UserAgentDO"]

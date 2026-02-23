@@ -44,6 +44,7 @@
     "mockRecommendation": "生成 Agent 推荐（Mock）",
     "mockRecommendationSuccess": "已生成一条推荐（mock）。",
     "supportedChains": "支持的链",
+    "defaultReceiveTokens": "默认收款币种",
     "topUpTitle": "充值",
     "receiveCrypto": "接收加密货币",
     "buyCrypto": "购买加密货币",
@@ -60,5 +61,17 @@
     "themeLight": "浅色",
     "themeDark": "深色",
     "themeSystem": "跟随系统"
+  },
+  "tabs": {
+    "navigation": "底部导航",
+    "home": "Home",
+    "trade": "Trade",
+    "wallet": "Wallet"
+  },
+  "home": {
+    "title": "Home"
+  },
+  "trade": {
+    "title": "Trade"
   }
 }
