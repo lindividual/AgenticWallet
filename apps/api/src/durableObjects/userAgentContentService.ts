@@ -1,4 +1,4 @@
-import { generateWithLlm, getLlmStatus } from '../services/llm';
+import { generateWithLlm, getLlmErrorInfo, getLlmStatus } from '../services/llm';
 import type { Bindings } from '../types';
 import {
   buildArticleR2Key,
@@ -78,8 +78,10 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
       });
       markdown = llmResult.text;
     } catch (error) {
+      const llmError = getLlmErrorInfo(error);
       console.error('daily_digest_llm_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        ...llmError,
+        llm: llmStatus,
       });
     }
   }
@@ -178,8 +180,10 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
         rows = parsed;
       }
     } catch (error) {
+      const llmError = getLlmErrorInfo(error);
       console.error('recommendation_llm_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        ...llmError,
+        llm: llmStatus,
       });
     }
   }
@@ -246,8 +250,10 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
       });
       markdown = llmResult.text;
     } catch (error) {
+      const llmError = getLlmErrorInfo(error);
       console.error('topic_generation_llm_failed', {
-        error: error instanceof Error ? error.message : String(error),
+        ...llmError,
+        llm: llmStatus,
       });
     }
   }

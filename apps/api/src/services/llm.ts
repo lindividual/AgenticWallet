@@ -17,6 +17,16 @@ export type LlmGenerateOutput = {
   text: string;
 };
 
+export type LlmErrorInfo = {
+  message: string;
+  status?: number;
+  requestId?: string | null;
+  baseUrl?: string;
+  model?: string;
+  responseBodySnippet?: string;
+  causeMessage?: string;
+};
+
 type OpenAiChatResponse = {
   choices?: Array<{
     message?: {
@@ -27,6 +37,15 @@ type OpenAiChatResponse = {
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
+
+class LlmRequestError extends Error {
+  status?: number;
+  requestId?: string | null;
+  baseUrl?: string;
+  model?: string;
+  responseBodySnippet?: string;
+  causeMessage?: string;
+}
 
 export async function generateWithLlm(env: Bindings, input: LlmGenerateInput): Promise<LlmGenerateOutput> {
   const provider = resolveLlmProvider(env);
@@ -55,6 +74,24 @@ export function getLlmStatus(env: Bindings): {
   };
 }
 
+export function getLlmErrorInfo(error: unknown): LlmErrorInfo {
+  if (error instanceof LlmRequestError) {
+    return {
+      message: error.message,
+      status: error.status,
+      requestId: error.requestId,
+      baseUrl: error.baseUrl,
+      model: error.model,
+      responseBodySnippet: error.responseBodySnippet,
+      causeMessage: error.causeMessage,
+    };
+  }
+  if (error instanceof Error) {
+    return { message: error.message };
+  }
+  return { message: String(error) };
+}
+
 function resolveLlmProvider(env: Bindings): string {
   return (env.LLM_PROVIDER ?? 'openai').trim().toLowerCase();
 }
@@ -68,23 +105,39 @@ async function callOpenAiCompatible(env: Bindings, input: LlmGenerateInput): Pro
   const baseUrl = (env.LLM_BASE_URL ?? DEFAULT_OPENAI_BASE_URL).trim();
   const model = (env.LLM_MODEL ?? DEFAULT_OPENAI_MODEL).trim();
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages: input.messages,
-      temperature: input.temperature ?? 0.3,
-      max_tokens: input.maxTokens ?? 1200,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: input.messages,
+        temperature: input.temperature ?? 0.3,
+        max_tokens: input.maxTokens ?? 1200,
+      }),
+    });
+  } catch (error) {
+    const wrapped = new LlmRequestError('llm_network_error');
+    wrapped.baseUrl = baseUrl;
+    wrapped.model = model;
+    wrapped.causeMessage = error instanceof Error ? error.message : String(error);
+    throw wrapped;
+  }
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`llm_request_failed_${response.status}_${body}`);
+    const requestId = response.headers.get('x-request-id') ?? response.headers.get('cf-ray');
+    const wrapped = new LlmRequestError(`llm_request_failed_${response.status}`);
+    wrapped.status = response.status;
+    wrapped.requestId = requestId;
+    wrapped.baseUrl = baseUrl;
+    wrapped.model = model;
+    wrapped.responseBodySnippet = body.slice(0, 1200);
+    throw wrapped;
   }
 
   const json = (await response.json()) as OpenAiChatResponse;
