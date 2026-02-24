@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getAgentArticles, getAgentRecommendations, getWalletPortfolio } from '../../api';
+import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getWalletPortfolio } from '../../api';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { BalanceHeader } from '../BalanceHeader';
 
@@ -30,11 +30,12 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
     refetchOnWindowFocus: true,
   });
 
-  const { data: dailyData } = useQuery({
-    queryKey: ['home-agent-daily'],
-    queryFn: () => getAgentArticles({ type: 'daily', limit: 1 }),
+  const { data: dailyToday } = useQuery({
+    queryKey: ['home-agent-daily-today'],
+    queryFn: getAgentTodayDaily,
     staleTime: 45_000,
     refetchOnWindowFocus: true,
+    refetchInterval: 15_000,
   });
 
   const { data: topicData } = useQuery({
@@ -48,11 +49,20 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
     () => (recommendationsData?.recommendations ?? []).slice(0, 3),
     [recommendationsData],
   );
-  const daily = dailyData?.articles?.[0];
+  const daily = dailyToday?.article ?? null;
+  const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
   const topics = topicData?.articles ?? [];
   const totalBalance = portfolio?.totalUsd ?? 0;
   const hour = new Date().getHours();
   const greeting = hour < 12 ? t('home.greetingMorning') : hour < 18 ? t('home.greetingAfternoon') : t('home.greetingEvening');
+
+  const dailySummary = daily
+    ? daily.summary
+    : dailyToday?.status === 'failed'
+      ? t('home.todayDailyFailed')
+      : dailyToday?.status === 'stale'
+        ? t('home.todayDailyStale')
+        : t('home.todayDailyGenerating');
 
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-28">
@@ -77,19 +87,32 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
           <h2 className="m-0 text-lg font-bold">{t('home.dailyNewsTitle')}</h2>
           <span className="text-xs uppercase tracking-wide text-base-content/50">Personal Crypto Daily</span>
         </div>
-        <p className="m-0 mt-2 text-base font-semibold">{daily?.title ?? t('home.emptyDailyTitle')}</p>
-        <p className="m-0 mt-2 text-base leading-snug text-base-content/75">
-          {daily?.summary ?? t('home.emptyDailySummary')}
+        <p className="m-0 mt-2 text-base font-semibold">
+          {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
         </p>
-        {daily && (
-          <button
-            type="button"
-            className="btn btn-outline btn-sm mt-3 h-8 min-h-0 px-3"
-            onClick={() => onOpenArticle(daily.id)}
-          >
-            {t('home.readArticle')}
-          </button>
-        )}
+        <p className="m-0 mt-2 text-base leading-snug text-base-content/75">
+          {dailySummary}
+        </p>
+        <div className="mt-3 flex items-center gap-2">
+          {daily && (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm h-8 min-h-0 px-3"
+              onClick={() => onOpenArticle(daily.id)}
+            >
+              {t('home.readArticle')}
+            </button>
+          )}
+          {!daily && lastReadyDaily && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm h-8 min-h-0 px-3"
+              onClick={() => onOpenArticle(lastReadyDaily.id)}
+            >
+              {t('home.readYesterday')}
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="border border-base-400 bg-base-100 p-4">

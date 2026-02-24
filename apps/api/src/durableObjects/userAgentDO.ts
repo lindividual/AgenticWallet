@@ -1,7 +1,24 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { AgentEventRecord } from '../agent/events';
-import { generateWithLlm, getLlmStatus } from '../services/llm';
+import {
+  generateDailyDigestContent,
+  generateTopicArticleContent,
+  getArticleMarkdownContent,
+  refreshRecommendationsContent,
+} from './userAgentContentService';
 import type { Bindings } from '../types';
+import {
+  isoDate,
+  isRecommendationTriggerEvent,
+  nextUtcHour,
+  normalizeOccurredAt,
+  normalizeSqlNumber,
+  normalizeSqlString,
+  retryBackoffMs,
+  sanitizeLimit,
+  tomorrowDate,
+} from './userAgentHelpers';
+import type { ArticleRow, EventRow, JobRow, JobType, RecommendationRow, TodayDailyStatus } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
 
 const OWNER_KEY = 'owner_user_id';
@@ -10,53 +27,6 @@ const JOB_STATUS_RUNNING = 'running';
 const JOB_STATUS_SUCCEEDED = 'succeeded';
 const JOB_STATUS_FAILED = 'failed';
 const MAX_JOB_RETRIES = 3;
-
-type JobType = 'daily_digest' | 'recommendation_refresh' | 'topic_generation' | 'cleanup';
-
-type EventRow = {
-  id: string;
-  event_type: string;
-  occurred_at: string;
-  received_at: string;
-  payload_json: string;
-  dedupe_key: string | null;
-};
-
-type RecommendationRow = {
-  id: string;
-  category: string;
-  asset_name: string;
-  reason: string;
-  score: number;
-  generated_at: string;
-  valid_until: string | null;
-};
-
-type ArticleRow = {
-  id: string;
-  article_type: string;
-  title: string;
-  summary: string;
-  r2_key: string;
-  tags_json: string;
-  created_at: string;
-  status: string;
-};
-
-type ArticleContentRow = {
-  article_id: string;
-  markdown: string;
-};
-
-type JobRow = {
-  id: string;
-  job_type: JobType;
-  run_at: string;
-  status: string;
-  payload_json: string;
-  retry_count: number;
-  job_key: string | null;
-};
 
 export class UserAgentDO extends DurableObject<Bindings> {
   constructor(ctx: DurableObjectState, env: Bindings) {
@@ -189,6 +159,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ articles: ArticleRow[] }> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
+    await this.ensureTodayDailyReady();
     const limit = options?.limit ?? 20;
     const articleType = options?.articleType ?? null;
     return { articles: this.getArticles(limit, articleType) };
@@ -200,7 +171,41 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ article: ArticleRow; markdown: string } | null> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
+    await this.ensureTodayDailyReady();
     return this.getArticleDetail(articleId);
+  }
+
+  async getTodayDailyRpc(userId: string): Promise<{
+    date: string;
+    status: TodayDailyStatus;
+    article: ArticleRow | null;
+    lastReadyArticle: ArticleRow | null;
+  }> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    await this.ensureTodayDailyReady();
+
+    const now = new Date();
+    const dateKey = isoDate(now);
+    const article = this.getTodayDailyArticle(dateKey);
+    const lastReadyArticle = this.getLatestDailyBefore(dateKey);
+
+    if (article) {
+      return {
+        date: dateKey,
+        status: 'ready',
+        article,
+        lastReadyArticle,
+      };
+    }
+
+    const status = this.getTodayDailyJobStatus(dateKey);
+    return {
+      date: dateKey,
+      status,
+      article: null,
+      lastReadyArticle,
+    };
   }
 
   async enqueueJobRpc(
@@ -494,6 +499,102 @@ export class UserAgentDO extends DurableObject<Bindings> {
     await this.enqueueJob('daily_digest', nextRun.toISOString(), {}, `daily_digest:${nextDate}`);
   }
 
+  private hasTodayDailyArticle(now: Date): boolean {
+    const today = isoDate(now);
+    return Boolean(
+      this.ctx.storage.sql
+        .exec(
+          `SELECT id
+           FROM article_index
+           WHERE article_type = 'daily'
+             AND created_at >= ?
+             AND created_at < ?
+           LIMIT 1`,
+          `${today}T00:00:00.000Z`,
+          `${tomorrowDate(today)}T00:00:00.000Z`,
+        )
+        .toArray()[0],
+    );
+  }
+
+  private async ensureTodayDailyReady(): Promise<void> {
+    const now = new Date();
+    if (this.hasTodayDailyArticle(now)) return;
+    await this.alarm();
+  }
+
+  private getTodayDailyArticle(dateKey: string): ArticleRow | null {
+    return (
+      (this.ctx.storage.sql
+        .exec(
+          `SELECT
+            id,
+            article_type,
+            title,
+            summary,
+            r2_key,
+            tags_json,
+            created_at,
+            status
+           FROM article_index
+           WHERE article_type = 'daily'
+             AND created_at >= ?
+             AND created_at < ?
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          `${dateKey}T00:00:00.000Z`,
+          `${tomorrowDate(dateKey)}T00:00:00.000Z`,
+        )
+        .toArray()[0] as ArticleRow | undefined) ?? null
+    );
+  }
+
+  private getLatestDailyBefore(dateKey: string): ArticleRow | null {
+    return (
+      (this.ctx.storage.sql
+        .exec(
+          `SELECT
+            id,
+            article_type,
+            title,
+            summary,
+            r2_key,
+            tags_json,
+            created_at,
+            status
+           FROM article_index
+           WHERE article_type = 'daily'
+             AND created_at < ?
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          `${dateKey}T00:00:00.000Z`,
+        )
+        .toArray()[0] as ArticleRow | undefined) ?? null
+    );
+  }
+
+  private getTodayDailyJobStatus(dateKey: string): TodayDailyStatus {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT status
+         FROM jobs
+         WHERE job_type = 'daily_digest'
+           AND (job_key = ? OR job_key = ?)
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        `daily_digest:${dateKey}`,
+        `manual_daily_digest:${dateKey}`,
+      )
+      .toArray()[0] as { status?: string } | undefined;
+
+    const status = normalizeSqlString(row?.status);
+    if (status === JOB_STATUS_FAILED) return 'failed';
+    if (status === JOB_STATUS_QUEUED || status === JOB_STATUS_RUNNING || status === JOB_STATUS_SUCCEEDED) {
+      return 'generating';
+    }
+    return 'stale';
+  }
+
   private async enqueueJob(
     jobType: JobType,
     runAtIso: string,
@@ -632,298 +733,34 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private async generateDailyDigest(_payload: Record<string, unknown>): Promise<void> {
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) {
-      throw new Error('owner_user_not_initialized');
-    }
-
-    const now = new Date();
-    const dateKey = isoDate(now);
-    const hasTodayArticle = this.ctx.storage.sql
-      .exec(
-        `SELECT id
-         FROM article_index
-         WHERE article_type = 'daily'
-           AND created_at >= ?
-           AND created_at < ?
-         LIMIT 1`,
-        `${dateKey}T00:00:00.000Z`,
-        `${tomorrowDate(dateKey)}T00:00:00.000Z`,
-      )
-      .toArray()[0];
-
-    if (hasTodayArticle) return;
-
-    const recentEvents = this.getLatestEvents(80);
-    const eventSummary = summarizeEvents(recentEvents);
-    const llmStatus = getLlmStatus(this.env);
-
-    let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary);
-    if (llmStatus.enabled) {
-      try {
-        const llmResult = await generateWithLlm(this.env, {
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You are a crypto wallet content agent. Write concise markdown in Chinese. Focus on actionable market context and user-relevant insights.',
-            },
-            {
-              role: 'user',
-              content: [
-                `Date: ${dateKey}`,
-                `User ID: ${ownerUserId}`,
-                `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
-                `Top assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
-                'Generate a daily digest in markdown with sections: # title, ## 今日摘要, ## 关注资产, ## 可执行动作.',
-                'Keep it under 300 Chinese words.',
-              ].join('\n'),
-            },
-          ],
-          temperature: 0.4,
-          maxTokens: 900,
-        });
-        markdown = llmResult.text;
-      } catch (error) {
-        console.error('daily_digest_llm_failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const title = `日报 ${dateKey}`;
-    const summary = `今日事件 ${recentEvents.length} 条，重点资产 ${eventSummary.topAssets.slice(0, 3).join(', ') || '暂无'}。`;
-    const articleId = crypto.randomUUID();
-    const createdAt = now.toISOString();
-
-    const r2Key = buildArticleR2Key(ownerUserId, dateKey, 'daily', articleId);
-    this.ctx.storage.sql.exec(
-      `INSERT INTO article_index (
-        id,
-        article_type,
-        title,
-        summary,
-        r2_key,
-        tags_json,
-        created_at,
-        status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      articleId,
-      'daily',
-      title,
-      summary,
-      r2Key,
-      JSON.stringify(['daily', 'personalized']),
-      createdAt,
-      'ready',
-    );
-
-    await this.putArticleMarkdown(articleId, r2Key, markdown);
+    await generateDailyDigestContent(_payload, {
+      env: this.env,
+      sql: this.ctx.storage.sql,
+      getOwnerUserId: () => this.getOwnerUserId(),
+      getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
+    });
   }
 
   private async refreshRecommendations(_payload: Record<string, unknown>): Promise<void> {
-    const now = new Date();
-    const dateKey = isoDate(now);
-    const dayStart = `${dateKey}T00:00:00.000Z`;
-    const dayEnd = `${tomorrowDate(dateKey)}T00:00:00.000Z`;
-
-    const existingToday = this.ctx.storage.sql
-      .exec(
-        `SELECT id
-         FROM recommendations
-         WHERE generated_at >= ?
-           AND generated_at < ?
-         LIMIT 1`,
-        dayStart,
-        dayEnd,
-      )
-      .toArray()[0];
-    if (existingToday) return;
-
-    const events = this.getLatestEvents(120);
-    const assets = summarizeEvents(events).topAssets;
-    const top = assets.slice(0, 3);
-    const generatedAt = now.toISOString();
-    const validUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-
-    this.ctx.storage.sql.exec('DELETE FROM recommendations WHERE generated_at < ?', dayStart);
-
-    const [tradeAsset, receiveAsset, sendAsset] = [
-      top[0] ?? 'ETH',
-      top[1] ?? top[0] ?? 'USDC',
-      top[2] ?? top[0] ?? 'BNB',
-    ];
-
-    let rows: Array<{ category: string; asset: string; reason: string; score: number }> = buildFallbackRecommendations(
-      tradeAsset,
-      receiveAsset,
-      sendAsset,
-    );
-
-    const llmStatus = getLlmStatus(this.env);
-    if (llmStatus.enabled) {
-      try {
-        const llmResult = await generateWithLlm(this.env, {
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You generate JSON-only wallet asset recommendations. Output must be strict JSON without markdown.',
-            },
-            {
-              role: 'user',
-              content: [
-                `Top candidate assets: ${[tradeAsset, receiveAsset, sendAsset].join(', ')}`,
-                `Recent event counts: ${JSON.stringify(summarizeEvents(events).counts)}`,
-                'Return JSON array with 3 items and fields: category(trade|receive|send), asset, reason, score(0-1).',
-                'Language: Chinese, concise reason (under 40 Chinese characters each).',
-              ].join('\n'),
-            },
-          ],
-          temperature: 0.2,
-          maxTokens: 500,
-        });
-        const parsed = parseLlmRecommendations(llmResult.text);
-        if (parsed.length === 3) {
-          rows = parsed;
-        }
-      } catch (error) {
-        console.error('recommendation_llm_failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    for (const row of rows) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO recommendations (
-          id,
-          category,
-          asset_name,
-          reason,
-          score,
-          generated_at,
-          valid_until
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        crypto.randomUUID(),
-        row.category,
-        row.asset,
-        row.reason,
-        row.score,
-        generatedAt,
-        validUntil,
-      );
-    }
+    await refreshRecommendationsContent(_payload, {
+      env: this.env,
+      sql: this.ctx.storage.sql,
+      getOwnerUserId: () => this.getOwnerUserId(),
+      getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
+    });
   }
 
   private async generateTopicArticle(payload: Record<string, unknown>): Promise<void> {
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) {
-      throw new Error('owner_user_not_initialized');
-    }
-
-    const requestedTopic = typeof payload.topic === 'string' ? payload.topic.trim() : '';
-    const topic = requestedTopic || '市场热点追踪';
-    const now = new Date();
-    const dateKey = isoDate(now);
-    const recentEvents = this.getLatestEvents(100);
-    const eventSummary = summarizeEvents(recentEvents);
-    const llmStatus = getLlmStatus(this.env);
-
-    let markdown = buildFallbackTopicMarkdown(dateKey, topic, eventSummary);
-    if (llmStatus.enabled) {
-      try {
-        const llmResult = await generateWithLlm(this.env, {
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You are a crypto strategy writer for wallet users. Write Chinese markdown with practical steps.',
-            },
-            {
-              role: 'user',
-              content: [
-                `Date: ${dateKey}`,
-                `Topic: ${topic}`,
-                `Top assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
-                `Event counts: ${JSON.stringify(eventSummary.counts)}`,
-                'Write markdown with sections: # 标题, ## 核心观点, ## 机会与风险, ## 用户可执行动作.',
-                'Keep it under 500 Chinese words.',
-              ].join('\n'),
-            },
-          ],
-          temperature: 0.5,
-          maxTokens: 1200,
-        });
-        markdown = llmResult.text;
-      } catch (error) {
-        console.error('topic_generation_llm_failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const articleId = crypto.randomUUID();
-    const createdAt = now.toISOString();
-    const r2Key = buildArticleR2Key(ownerUserId, dateKey, 'topic', articleId, topic);
-    this.ctx.storage.sql.exec(
-      `INSERT INTO article_index (
-        id,
-        article_type,
-        title,
-        summary,
-        r2_key,
-        tags_json,
-        created_at,
-        status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      articleId,
-      'topic',
-      `专题: ${topic}`,
-      `${topic} 专题，聚焦用户高关注资产与可执行动作。`,
-      r2Key,
-      JSON.stringify(['topic', topic]),
-      createdAt,
-      'ready',
-    );
-    await this.putArticleMarkdown(articleId, r2Key, markdown);
-  }
-
-  private async putArticleMarkdown(articleId: string, r2Key: string, markdown: string): Promise<void> {
-    await this.env.AGENT_ARTICLES.put(r2Key, markdown, {
-      httpMetadata: {
-        contentType: 'text/markdown; charset=utf-8',
-      },
-      customMetadata: {
-        articleId,
-      },
+    await generateTopicArticleContent(payload, {
+      env: this.env,
+      sql: this.ctx.storage.sql,
+      getOwnerUserId: () => this.getOwnerUserId(),
+      getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
     });
-
-    // Backward-compatibility for existing read path during migration window.
-    this.ctx.storage.sql.exec(
-      `INSERT INTO article_contents (article_id, markdown)
-       VALUES (?, ?)
-       ON CONFLICT(article_id) DO UPDATE SET markdown = excluded.markdown`,
-      articleId,
-      markdown,
-    );
   }
 
   private async getArticleMarkdown(articleId: string, r2Key: string): Promise<string> {
-    const normalizedKey = normalizeR2Key(r2Key);
-    if (normalizedKey) {
-      const object = await this.env.AGENT_ARTICLES.get(normalizedKey);
-      if (object) {
-        const text = await object.text();
-        if (text) return text;
-      }
-    }
-
-    // Fallback for old records before R2 migration.
-    const content = this.ctx.storage.sql
-      .exec('SELECT article_id, markdown FROM article_contents WHERE article_id = ? LIMIT 1', articleId)
-      .toArray()[0] as ArticleContentRow | undefined;
-    return content?.markdown ?? '';
+    return getArticleMarkdownContent(this.env, this.ctx.storage.sql, articleId, r2Key);
   }
 
   private async scheduleNextAlarm(): Promise<void> {
@@ -952,264 +789,4 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
     await this.ctx.storage.setAlarm(nextTs);
   }
-}
-
-function normalizeSqlString(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') return String(value);
-  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
-  return null;
-}
-
-function normalizeSqlNumber(value: unknown): number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
-function sanitizeLimit(input: number, min: number, max: number): number {
-  if (!Number.isFinite(input)) return min;
-  const normalized = Math.floor(input);
-  if (normalized < min) return min;
-  if (normalized > max) return max;
-  return normalized;
-}
-
-function normalizeOccurredAt(value: string | undefined): string {
-  if (!value) return new Date().toISOString();
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? new Date().toISOString() : new Date(parsed).toISOString();
-}
-
-function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function tomorrowDate(date: string): string {
-  const d = new Date(`${date}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() + 1);
-  return isoDate(d);
-}
-
-function nextUtcHour(now: Date, hour: number): Date {
-  const next = new Date(now);
-  next.setUTCHours(hour, 0, 0, 0);
-  if (next.getTime() <= now.getTime()) {
-    next.setUTCDate(next.getUTCDate() + 1);
-  }
-  return next;
-}
-
-function retryBackoffMs(retryCount: number): number {
-  const base = 15_000;
-  return base * Math.pow(2, retryCount - 1);
-}
-
-function isJobType(value: string): value is JobType {
-  return new Set<JobType>(['daily_digest', 'recommendation_refresh', 'topic_generation', 'cleanup']).has(
-    value as JobType,
-  );
-}
-
-function isRecommendationTriggerEvent(eventType: string): boolean {
-  return new Set([
-    'asset_holding_snapshot',
-    'asset_viewed',
-    'asset_favorited',
-    'trade_buy',
-    'trade_sell',
-  ]).has(eventType);
-}
-
-function summarizeEvents(events: EventRow[]): {
-  counts: Record<string, number>;
-  topAssets: string[];
-} {
-  const counts: Record<string, number> = {};
-  const assetCounts: Record<string, number> = {};
-
-  for (const event of events) {
-    counts[event.event_type] = (counts[event.event_type] ?? 0) + 1;
-    const payload = safeJsonParse<Record<string, unknown>>(event.payload_json) ?? {};
-    const candidates = [payload.asset, payload.symbol, payload.token]
-      .map((value) => (typeof value === 'string' ? value.trim().toUpperCase() : ''))
-      .filter((value) => value.length >= 2 && value.length <= 16);
-    for (const asset of candidates) {
-      assetCounts[asset] = (assetCounts[asset] ?? 0) + 1;
-    }
-  }
-
-  const topAssets = Object.entries(assetCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([asset]) => asset);
-
-  return {
-    counts,
-    topAssets,
-  };
-}
-
-function buildFallbackDailyDigestMarkdown(
-  date: string,
-  eventSummary: { counts: Record<string, number>; topAssets: string[] },
-): string {
-  const items = Object.entries(eventSummary.counts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([key, count]) => `- ${key}: ${count}`)
-    .join('\n');
-
-  const assets = eventSummary.topAssets.length ? eventSummary.topAssets.join(' / ') : '暂无明显偏好资产';
-
-  return [
-    `# 每日专属日报 ${date}`,
-    '',
-    '## 今日摘要',
-    items || '- 今日暂无关键行为变化',
-    '',
-    '## 关注资产',
-    `- ${assets}`,
-    '',
-    '## 可执行动作',
-    '- 检查高频关注资产的波动与流动性。',
-    '- 若计划转账，优先确认链与资产网络一致。',
-    '- 若今日无交易计划，可先设置价格提醒。',
-  ].join('\n');
-}
-
-function buildFallbackTopicMarkdown(
-  date: string,
-  topic: string,
-  eventSummary: { counts: Record<string, number>; topAssets: string[] },
-): string {
-  const topAssets = eventSummary.topAssets.slice(0, 5).join(' / ') || '暂无';
-  const majorEvents = Object.entries(eventSummary.counts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4)
-    .map(([name, count]) => `- ${name}: ${count}`)
-    .join('\n');
-
-  return [
-    `# ${topic}（${date}）`,
-    '',
-    '## 核心观点',
-    `- 当前用户行为集中在：${topAssets}。`,
-    '',
-    '## 机会与风险',
-    majorEvents || '- 今日无显著新增行为数据。',
-    '- 机会：围绕高频关注资产进行分批策略。',
-    '- 风险：跨链与网络选择错误造成资金损耗。',
-    '',
-    '## 用户可执行动作',
-    '- 在交易前先确认链、资产、滑点和手续费。',
-    '- 对高波动资产设置分层价格提醒与仓位上限。',
-  ].join('\n');
-}
-
-function buildFallbackRecommendations(
-  tradeAsset: string,
-  receiveAsset: string,
-  sendAsset: string,
-): Array<{ category: string; asset: string; reason: string; score: number }> {
-  return [
-    {
-      category: 'trade',
-      asset: tradeAsset,
-      reason: `${tradeAsset} 在你的近期行为中关注度最高，适合优先交易观察。`,
-      score: 0.82,
-    },
-    {
-      category: 'receive',
-      asset: receiveAsset,
-      reason: `${receiveAsset} 作为接收资产可提升后续资金归集效率。`,
-      score: 0.75,
-    },
-    {
-      category: 'send',
-      asset: sendAsset,
-      reason: `${sendAsset} 在你常用链路中流动性较好，适合作为发送资产。`,
-      score: 0.7,
-    },
-  ];
-}
-
-function parseLlmRecommendations(text: string): Array<{ category: string; asset: string; reason: string; score: number }> {
-  const cleaned = extractJsonArray(text);
-  if (!cleaned) return [];
-  const parsed = safeJsonParse<unknown[]>(cleaned);
-  if (!parsed || !Array.isArray(parsed)) return [];
-
-  const normalized = parsed
-    .map((item) => {
-      if (typeof item !== 'object' || item === null) return null;
-      const row = item as Record<string, unknown>;
-      const category = typeof row.category === 'string' ? row.category.trim() : '';
-      const asset = typeof row.asset === 'string' ? row.asset.trim().toUpperCase() : '';
-      const reason = typeof row.reason === 'string' ? row.reason.trim() : '';
-      const score = typeof row.score === 'number' ? row.score : Number(row.score ?? 0);
-      if (!['trade', 'receive', 'send'].includes(category)) return null;
-      if (!asset || !reason || !Number.isFinite(score)) return null;
-      return {
-        category,
-        asset,
-        reason,
-        score: Math.max(0, Math.min(1, score)),
-      };
-    })
-    .filter((item): item is { category: string; asset: string; reason: string; score: number } => Boolean(item));
-
-  const byCategory = new Map<string, { category: string; asset: string; reason: string; score: number }>();
-  for (const item of normalized) {
-    if (!byCategory.has(item.category)) {
-      byCategory.set(item.category, item);
-    }
-  }
-  return ['trade', 'receive', 'send']
-    .map((category) => byCategory.get(category))
-    .filter((item): item is { category: string; asset: string; reason: string; score: number } => Boolean(item));
-}
-
-function extractJsonArray(text: string): string | null {
-  const trimmed = text.trim();
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return trimmed;
-  const start = trimmed.indexOf('[');
-  const end = trimmed.lastIndexOf(']');
-  if (start === -1 || end === -1 || end <= start) return null;
-  return trimmed.slice(start, end + 1);
-}
-
-function slugify(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-}
-
-function buildArticleR2Key(
-  userId: string,
-  dateKey: string,
-  type: 'daily' | 'topic',
-  articleId: string,
-  topic?: string,
-): string {
-  if (type === 'daily') {
-    return `articles/${userId}/${dateKey}-daily-${articleId}.md`;
-  }
-  const topicPart = topic ? `-${slugify(topic)}` : '';
-  return `articles/${userId}/${dateKey}-topic${topicPart}-${articleId}.md`;
-}
-
-function normalizeR2Key(raw: string): string | null {
-  const value = raw.trim();
-  if (!value) return null;
-  if (value.startsWith('inline://')) {
-    return value.slice('inline://'.length);
-  }
-  return value;
 }

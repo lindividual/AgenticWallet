@@ -122,6 +122,13 @@ export type AgentArticleDetailResponse = {
   markdown: string;
 };
 
+export type AgentTodayDailyResponse = {
+  date: string;
+  status: 'ready' | 'generating' | 'failed' | 'stale';
+  article: AgentArticle | null;
+  lastReadyArticle: AgentArticle | null;
+};
+
 export type AgentEventType =
   | 'asset_holding_snapshot'
   | 'asset_viewed'
@@ -202,6 +209,10 @@ export async function getAgentArticles(params?: {
 
 export async function getAgentArticleDetail(articleId: string): Promise<AgentArticleDetailResponse> {
   return getJson<AgentArticleDetailResponse>(`/v1/agent/articles/${articleId}`, true);
+}
+
+export async function getAgentTodayDaily(): Promise<AgentTodayDailyResponse> {
+  return getJson<AgentTodayDailyResponse>('/v1/agent/daily/today', true);
 }
 
 export async function ingestAgentEvent(

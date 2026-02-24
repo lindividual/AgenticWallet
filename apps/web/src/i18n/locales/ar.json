@@ -56,7 +56,13 @@
     "buyComingSoon": "ميزة الشراء قادمة قريبًا.",
     "receiveSelectTokenTitle": "اختر عملة الاستلام",
     "receiveSelectNetworkTitle": "اختر شبكة استلام {{token}}",
-    "receiveTransferToAddressTitle": "يرجى التحويل إلى العنوان"
+    "receiveTransferToAddressTitle": "يرجى التحويل إلى العنوان",
+    "receiveTokenTitle": "استلام {{token}}",
+    "receiveOnNetwork": "على شبكة {{network}}",
+    "receiveAddressLabel": "عنوانك",
+    "receiveOnlyTokenNotice": "أرسل {{token}} فقط إلى هذا العنوان.",
+    "receiveOnlyNetworkNotice": "هذا العنوان يدعم {{token}} على شبكة {{network}} فقط. الإرسال عبر شبكات أخرى قد يؤدي إلى فقدان الأصول.",
+    "receiveProcessingTimeNotice": "تستغرق المعالجة عادة حوالي {{minutes}} دقائق."
   },
   "settings": {
     "language": "اللغة",
@@ -80,6 +86,11 @@
     "agentEntryHint": "اكتب هدفك مثل \"تجميع دفاعي\" أو \"فرص تقلب عالية اليوم\".",
     "agentEntryAction": "تحدث مع الوكيل",
     "dailyNewsTitle": "الأخبار اليومية",
+    "todayDailyTitle": "التقرير اليومي {{date}}",
+    "todayDailyGenerating": "يتم إنشاء التقرير اليومي لليوم. يرجى المحاولة بعد قليل.",
+    "todayDailyFailed": "فشل إنشاء التقرير اليومي لليوم. سنعيد المحاولة تلقائيًا.",
+    "todayDailyStale": "التقرير اليومي لليوم غير متاح بعد. جارٍ التحضير.",
+    "readYesterday": "قراءة تقرير الأمس",
     "emptyDailyTitle": "يتم إعداد التحديث اليومي",
     "emptyDailySummary": "يتم توليد Personal crypto daily. تحقق بعد قليل.",
     "assetRecommendationsTitle": "توصيات الأصول",

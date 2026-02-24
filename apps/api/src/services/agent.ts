@@ -44,6 +44,13 @@ type AgentArticleDetailResponse = {
   markdown: string;
 };
 
+type AgentTodayDailyResponse = {
+  date: string;
+  status: 'ready' | 'generating' | 'failed' | 'stale';
+  article: AgentArticle | null;
+  lastReadyArticle: AgentArticle | null;
+};
+
 type UserAgentRpcStub = DurableObjectStub & {
   ingestEventRpc(event: AgentEventRecord): Promise<AgentEventIngestResult>;
   listRecommendationsRpc(userId: string, limit?: number): Promise<AgentRecommendationsResponse>;
@@ -55,6 +62,7 @@ type UserAgentRpcStub = DurableObjectStub & {
     },
   ): Promise<AgentArticlesResponse>;
   getArticleDetailRpc(userId: string, articleId: string): Promise<AgentArticleDetailResponse | null>;
+  getTodayDailyRpc(userId: string): Promise<AgentTodayDailyResponse>;
   enqueueJobRpc(
     userId: string,
     options: {
@@ -120,6 +128,18 @@ export async function getUserAgentArticleDetail(
   const stub = getUserAgentStub(env, userId);
   try {
     return await stub.getArticleDetailRpc(userId, articleId);
+  } catch {
+    return null;
+  }
+}
+
+export async function getUserTodayDaily(
+  env: Bindings,
+  userId: string,
+): Promise<AgentTodayDailyResponse | null> {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    return await stub.getTodayDailyRpc(userId);
   } catch {
     return null;
   }

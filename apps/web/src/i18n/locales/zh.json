@@ -56,7 +56,13 @@
     "buyComingSoon": "购买流程即将上线。",
     "receiveSelectTokenTitle": "选择接收币种",
     "receiveSelectNetworkTitle": "选择接收{{token}}的网络",
-    "receiveTransferToAddressTitle": "请转账到地址"
+    "receiveTransferToAddressTitle": "请转账到地址",
+    "receiveTokenTitle": "接收{{token}}",
+    "receiveOnNetwork": "在 {{network}} 网络",
+    "receiveAddressLabel": "你的地址",
+    "receiveOnlyTokenNotice": "仅向此地址发送 {{token}}",
+    "receiveOnlyNetworkNotice": "该地址仅支持 {{network}} 网络的 {{token}}，发送到其他网络可能导致资产丢失。",
+    "receiveProcessingTimeNotice": "到账通常需要约 {{minutes}} 分钟。"
   },
   "settings": {
     "language": "语言",
@@ -80,6 +86,11 @@
     "agentEntryHint": "输入你的目标，例如“稳健增持”或“今日高波动机会”。",
     "agentEntryAction": "和 Agent 聊聊",
     "dailyNewsTitle": "每日新闻",
+    "todayDailyTitle": "{{date}} 日报",
+    "todayDailyGenerating": "今日日报正在生成中，请稍候。",
+    "todayDailyFailed": "今日日报生成失败，系统将自动重试。",
+    "todayDailyStale": "今日日报暂不可用，系统正在准备。",
+    "readYesterday": "查看昨日回顾",
     "emptyDailyTitle": "今日快讯准备中",
     "emptyDailySummary": "Personal crypto daily 正在生成，你可以稍后回来查看。",
     "assetRecommendationsTitle": "资产推荐",

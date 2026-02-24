@@ -207,7 +207,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
         </button>
       </section>
 
-      <section className="border border-base-400 bg-base-100 p-4">
+      {/* <section className="border border-base-400 bg-base-100 p-4">
         <h2 className="m-0 text-lg font-bold">{t('wallet.today')}</h2>
         <p className="m-0 mt-2 text-base leading-snug">{dailyReport}</p>
         <p className="m-0 mt-2 text-sm text-base-content/50">{t('wallet.generatedByAgent')}</p>
@@ -219,7 +219,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
             {t('wallet.saved')}
           </button>
         </div>
-      </section>
+      </section> */}
 
       <section className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-3">

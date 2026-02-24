@@ -56,7 +56,13 @@
     "buyComingSoon": "Buy flow is coming soon.",
     "receiveSelectTokenTitle": "Select token to receive",
     "receiveSelectNetworkTitle": "Select network for {{token}}",
-    "receiveTransferToAddressTitle": "Please transfer to address"
+    "receiveTransferToAddressTitle": "Please transfer to address",
+    "receiveTokenTitle": "Receive {{token}}",
+    "receiveOnNetwork": "on the {{network}} network",
+    "receiveAddressLabel": "Your address",
+    "receiveOnlyTokenNotice": "Only send {{token}} to this address.",
+    "receiveOnlyNetworkNotice": "This address only supports {{token}} on {{network}}. Sending on other networks may result in loss.",
+    "receiveProcessingTimeNotice": "Processing usually takes about {{minutes}} minutes."
   },
   "settings": {
     "language": "Language",
@@ -80,6 +86,11 @@
     "agentEntryHint": "Type your goal, like \"defensive accumulation\" or \"today's high-volatility setups\".",
     "agentEntryAction": "Talk to Agent",
     "dailyNewsTitle": "Daily News",
+    "todayDailyTitle": "Daily {{date}}",
+    "todayDailyGenerating": "Today's daily is generating. Please check back shortly.",
+    "todayDailyFailed": "Today's daily failed to generate. We will retry automatically.",
+    "todayDailyStale": "Today's daily is not available yet. Preparing now.",
+    "readYesterday": "Read yesterday",
     "emptyDailyTitle": "Daily update is being prepared",
     "emptyDailySummary": "Personal crypto daily is generating. Check back shortly.",
     "assetRecommendationsTitle": "Asset Recommendations",
