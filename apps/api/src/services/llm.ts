@@ -25,6 +25,8 @@ export type LlmErrorInfo = {
   model?: string;
   responseBodySnippet?: string;
   causeMessage?: string;
+  attempt?: number;
+  maxAttempts?: number;
 };
 
 type OpenAiChatResponse = {
@@ -45,6 +47,8 @@ class LlmRequestError extends Error {
   model?: string;
   responseBodySnippet?: string;
   causeMessage?: string;
+  attempt?: number;
+  maxAttempts?: number;
 }
 
 export async function generateWithLlm(env: Bindings, input: LlmGenerateInput): Promise<LlmGenerateOutput> {
@@ -84,6 +88,8 @@ export function getLlmErrorInfo(error: unknown): LlmErrorInfo {
       model: error.model,
       responseBodySnippet: error.responseBodySnippet,
       causeMessage: error.causeMessage,
+      attempt: error.attempt,
+      maxAttempts: error.maxAttempts,
     };
   }
   if (error instanceof Error) {
@@ -96,6 +102,19 @@ function resolveLlmProvider(env: Bindings): string {
   return (env.LLM_PROVIDER ?? 'openai').trim().toLowerCase();
 }
 
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function backoffMs(attempt: number): number {
+  // attempt starts from 1.
+  return attempt === 1 ? 500 : 1200;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function callOpenAiCompatible(env: Bindings, input: LlmGenerateInput): Promise<LlmGenerateOutput> {
   const apiKey = env.LLM_API_KEY?.trim();
   if (!apiKey) {
@@ -104,51 +123,68 @@ async function callOpenAiCompatible(env: Bindings, input: LlmGenerateInput): Pro
 
   const baseUrl = (env.LLM_BASE_URL ?? DEFAULT_OPENAI_BASE_URL).trim();
   const model = (env.LLM_MODEL ?? DEFAULT_OPENAI_MODEL).trim();
+  const maxAttempts = 3;
 
-  let response: Response;
-  try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages: input.messages,
-        temperature: input.temperature ?? 0.3,
-        max_tokens: input.maxTokens ?? 1200,
-      }),
-    });
-  } catch (error) {
-    const wrapped = new LlmRequestError('llm_network_error');
-    wrapped.baseUrl = baseUrl;
-    wrapped.model = model;
-    wrapped.causeMessage = error instanceof Error ? error.message : String(error);
-    throw wrapped;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: input.messages,
+          temperature: input.temperature ?? 0.3,
+          max_tokens: input.maxTokens ?? 1200,
+        }),
+      });
+    } catch (error) {
+      const wrapped = new LlmRequestError('llm_network_error');
+      wrapped.baseUrl = baseUrl;
+      wrapped.model = model;
+      wrapped.causeMessage = error instanceof Error ? error.message : String(error);
+      wrapped.attempt = attempt;
+      wrapped.maxAttempts = maxAttempts;
+      if (attempt < maxAttempts) {
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      throw wrapped;
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      const requestId = response.headers.get('x-request-id') ?? response.headers.get('cf-ray');
+      const wrapped = new LlmRequestError(`llm_request_failed_${response.status}`);
+      wrapped.status = response.status;
+      wrapped.requestId = requestId;
+      wrapped.baseUrl = baseUrl;
+      wrapped.model = model;
+      wrapped.responseBodySnippet = body.slice(0, 1200);
+      wrapped.attempt = attempt;
+      wrapped.maxAttempts = maxAttempts;
+      if (attempt < maxAttempts && isRetryableStatus(response.status)) {
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      throw wrapped;
+    }
+
+    const json = (await response.json()) as OpenAiChatResponse;
+    const text = json.choices?.[0]?.message?.content?.trim();
+    if (!text) {
+      throw new Error('llm_empty_response');
+    }
+
+    return {
+      provider: 'openai',
+      model,
+      text,
+    };
   }
 
-  if (!response.ok) {
-    const body = await response.text();
-    const requestId = response.headers.get('x-request-id') ?? response.headers.get('cf-ray');
-    const wrapped = new LlmRequestError(`llm_request_failed_${response.status}`);
-    wrapped.status = response.status;
-    wrapped.requestId = requestId;
-    wrapped.baseUrl = baseUrl;
-    wrapped.model = model;
-    wrapped.responseBodySnippet = body.slice(0, 1200);
-    throw wrapped;
-  }
-
-  const json = (await response.json()) as OpenAiChatResponse;
-  const text = json.choices?.[0]?.message?.content?.trim();
-  if (!text) {
-    throw new Error('llm_empty_response');
-  }
-
-  return {
-    provider: 'openai',
-    model,
-    text,
-  };
+  throw new Error('llm_retry_exhausted');
 }

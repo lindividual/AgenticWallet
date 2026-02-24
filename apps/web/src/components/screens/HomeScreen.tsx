@@ -73,7 +73,7 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
         locale={i18n.language}
       />
 
-      <section className="border border-base-400 bg-base-100 p-4">
+      <section className="bg-base-100">
         <p className="m-0 text-sm uppercase tracking-wide text-base-content/50">{t('home.agentEntryLabel')}</p>
         <h2 className="m-0 mt-2 text-xl font-bold">{greeting}</h2>
         <p className="m-0 mt-2 text-base text-base-content/70">{t('home.agentEntryHint')}</p>
@@ -82,7 +82,7 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
         </button>
       </section>
 
-      <section className="border border-base-400 bg-base-100 p-4">
+      <section className="bg-base-100">
         <div className="flex items-start justify-between gap-3">
           <h2 className="m-0 text-lg font-bold">{t('home.dailyNewsTitle')}</h2>
           <span className="text-xs uppercase tracking-wide text-base-content/50">Personal Crypto Daily</span>
@@ -115,7 +115,7 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
         </div>
       </section>
 
-      <section className="border border-base-400 bg-base-100 p-4">
+      <section className="bg-base-100">
         <h2 className="m-0 text-lg font-bold">{t('home.assetRecommendationsTitle')}</h2>
         <div className="mt-3 flex flex-col gap-3">
           {recommendations.length === 0 && (
@@ -130,7 +130,7 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
         </div>
       </section>
 
-      <section className="border border-base-400 bg-base-100 p-4">
+      <section className="bg-base-100">
         <h2 className="m-0 text-lg font-bold">{t('home.topicRecommendationsTitle')}</h2>
         <div className="mt-3 flex flex-col gap-3">
           {topics.length === 0 && <p className="m-0 text-base text-base-content/70">{t('home.emptyTopics')}</p>}

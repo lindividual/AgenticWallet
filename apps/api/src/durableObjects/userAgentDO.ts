@@ -8,6 +8,14 @@ import {
 } from './userAgentContentService';
 import type { Bindings } from '../types';
 import {
+  enqueueJob,
+  JOB_STATUS_FAILED,
+  JOB_STATUS_QUEUED,
+  JOB_STATUS_RUNNING,
+  JOB_STATUS_SUCCEEDED,
+  runDueJobs,
+} from './userAgentJobRunner';
+import {
   isoDate,
   isRecommendationTriggerEvent,
   nextUtcHour,
@@ -18,14 +26,10 @@ import {
   sanitizeLimit,
   tomorrowDate,
 } from './userAgentHelpers';
-import type { ArticleRow, EventRow, JobRow, JobType, RecommendationRow, TodayDailyStatus } from './userAgentTypes';
+import type { ArticleRow, EventRow, JobType, RecommendationRow, TodayDailyStatus } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
 
 const OWNER_KEY = 'owner_user_id';
-const JOB_STATUS_QUEUED = 'queued';
-const JOB_STATUS_RUNNING = 'running';
-const JOB_STATUS_SUCCEEDED = 'succeeded';
-const JOB_STATUS_FAILED = 'failed';
 const MAX_JOB_RETRIES = 3;
 
 export class UserAgentDO extends DurableObject<Bindings> {
@@ -232,32 +236,11 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   async alarm(): Promise<void> {
-    const now = new Date();
-    const dueJobs = this.ctx.storage.sql
-      .exec(
-        `SELECT
-          id,
-          job_type,
-          run_at,
-          status,
-          payload_json,
-          retry_count,
-          job_key
-         FROM jobs
-         WHERE status = ?
-           AND run_at <= ?
-         ORDER BY run_at ASC
-         LIMIT 10`,
-        JOB_STATUS_QUEUED,
-        now.toISOString(),
-      )
-      .toArray() as JobRow[];
-
-    for (const job of dueJobs) {
-      await this.runJob(job);
-    }
-
-    await this.scheduleNextAlarm();
+    await runDueJobs({
+      sql: this.ctx.storage.sql,
+      alarmStorage: this.ctx.storage,
+      executeJob: (jobType, payload) => this.executeJob(jobType, payload),
+    });
   }
 
   private async ingestEvent(event: AgentEventRecord): Promise<{
@@ -601,117 +584,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
     payload: Record<string, unknown>,
     jobKey: string | null,
   ): Promise<{ jobId: string; deduped: boolean }> {
-    const normalizedJobKey = jobKey?.trim() || null;
-    if (normalizedJobKey) {
-      const existing = this.ctx.storage.sql
-        .exec('SELECT id FROM jobs WHERE job_key = ? LIMIT 1', normalizedJobKey)
-        .toArray()[0] as Record<string, unknown> | undefined;
-      const existingId = normalizeSqlString(existing?.id);
-      if (existingId) {
-        return { jobId: existingId, deduped: true };
-      }
-    }
-
-    const jobId = crypto.randomUUID();
-    const nowIso = new Date().toISOString();
-    this.ctx.storage.sql.exec(
-      `INSERT INTO jobs (
-        id,
-        job_type,
-        run_at,
-        status,
-        payload_json,
-        retry_count,
-        job_key,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      jobId,
+    return enqueueJob({
+      sql: this.ctx.storage.sql,
+      alarmStorage: this.ctx.storage,
       jobType,
       runAtIso,
-      JOB_STATUS_QUEUED,
-      JSON.stringify(payload),
-      0,
-      normalizedJobKey,
-      nowIso,
-      nowIso,
-    );
-
-    await this.scheduleNextAlarm();
-    return { jobId, deduped: false };
-  }
-
-  private async runJob(job: JobRow): Promise<void> {
-    const startedAtMs = Date.now();
-    const nowIso = new Date().toISOString();
-    console.log('user_agent_job_started', {
-      jobId: job.id,
-      jobType: job.job_type,
-      runAt: job.run_at,
-      retryCount: job.retry_count,
+      payload,
+      jobKey,
     });
-    this.ctx.storage.sql.exec(
-      'UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?',
-      JOB_STATUS_RUNNING,
-      nowIso,
-      job.id,
-    );
-
-    try {
-      const payload = safeJsonParse<Record<string, unknown>>(job.payload_json) ?? {};
-      await this.executeJob(job.job_type, payload);
-      this.ctx.storage.sql.exec(
-        'UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?',
-        JOB_STATUS_SUCCEEDED,
-        new Date().toISOString(),
-        job.id,
-      );
-      console.log('user_agent_job_succeeded', {
-        jobId: job.id,
-        jobType: job.job_type,
-        durationMs: Date.now() - startedAtMs,
-      });
-    } catch (error) {
-      const nextRetry = job.retry_count + 1;
-      const durationMs = Date.now() - startedAtMs;
-      if (nextRetry > MAX_JOB_RETRIES) {
-        this.ctx.storage.sql.exec(
-          'UPDATE jobs SET status = ?, retry_count = ?, updated_at = ? WHERE id = ?',
-          JOB_STATUS_FAILED,
-          nextRetry,
-          new Date().toISOString(),
-          job.id,
-        );
-        console.error('user_agent_job_failed', {
-          jobId: job.id,
-          jobType: job.job_type,
-          retryCount: nextRetry,
-          durationMs,
-          finalFailed: true,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return;
-      }
-
-      const nextRun = new Date(Date.now() + retryBackoffMs(nextRetry)).toISOString();
-      this.ctx.storage.sql.exec(
-        'UPDATE jobs SET status = ?, retry_count = ?, run_at = ?, updated_at = ? WHERE id = ?',
-        JOB_STATUS_QUEUED,
-        nextRetry,
-        nextRun,
-        new Date().toISOString(),
-        job.id,
-      );
-      console.error('user_agent_job_failed', {
-        jobId: job.id,
-        jobType: job.job_type,
-        retryCount: nextRetry,
-        durationMs,
-        finalFailed: false,
-        nextRun,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   private async executeJob(jobType: JobType, payload: Record<string, unknown>): Promise<void> {
@@ -761,32 +641,5 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
   private async getArticleMarkdown(articleId: string, r2Key: string): Promise<string> {
     return getArticleMarkdownContent(this.env, this.ctx.storage.sql, articleId, r2Key);
-  }
-
-  private async scheduleNextAlarm(): Promise<void> {
-    const nextRow = this.ctx.storage.sql
-      .exec(
-        `SELECT run_at
-         FROM jobs
-         WHERE status = ?
-         ORDER BY run_at ASC
-         LIMIT 1`,
-        JOB_STATUS_QUEUED,
-      )
-      .toArray()[0] as Record<string, unknown> | undefined;
-
-    const runAtIso = normalizeSqlString(nextRow?.run_at);
-    if (!runAtIso) {
-      await this.ctx.storage.deleteAlarm();
-      return;
-    }
-
-    const nextTs = Date.parse(runAtIso);
-    if (!Number.isFinite(nextTs)) {
-      await this.ctx.storage.deleteAlarm();
-      return;
-    }
-
-    await this.ctx.storage.setAlarm(nextTs);
   }
 }
