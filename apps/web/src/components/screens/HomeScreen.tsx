@@ -90,7 +90,7 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
         <p className="m-0 mt-2 text-base font-semibold">
           {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
         </p>
-        <p className="m-0 mt-2 text-base leading-snug text-base-content/75">
+        <p className="m-0 mt-2 truncate text-base leading-snug text-base-content/75">
           {dailySummary}
         </p>
         <div className="mt-3 flex items-center gap-2">

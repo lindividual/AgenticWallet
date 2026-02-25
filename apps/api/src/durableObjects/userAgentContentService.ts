@@ -99,8 +99,8 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     }
   }
 
-  const title = `日报 ${dateKey}`;
-  const summary = `今日事件 ${recentEvents.length} 条，重点资产 ${eventSummary.topAssets.slice(0, 3).join(', ') || '暂无'}。`;
+  const title = buildDailyTitle(dateKey, language.localeCode);
+  const summary = buildDailySummary(markdown, language.localeCode);
   const articleId = crypto.randomUUID();
   const createdAt = now.toISOString();
 
@@ -224,6 +224,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
 }
 
 function resolveDailyLanguage(locale: string | null): {
+  localeCode: 'zh' | 'en' | 'ar';
   outputLanguage: string;
   maxLengthRule: string;
   focusPoints: string;
@@ -231,6 +232,7 @@ function resolveDailyLanguage(locale: string | null): {
   const normalized = (locale ?? '').toLowerCase();
   if (normalized.startsWith('zh')) {
     return {
+      localeCode: 'zh',
       outputLanguage: 'Simplified Chinese',
       maxLengthRule: 'at most 280 Chinese characters',
       focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
@@ -238,16 +240,46 @@ function resolveDailyLanguage(locale: string | null): {
   }
   if (normalized.startsWith('ar')) {
     return {
+      localeCode: 'ar',
       outputLanguage: 'Arabic',
       maxLengthRule: 'at most 220 words',
       focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
     };
   }
   return {
+    localeCode: 'en',
     outputLanguage: 'English',
     maxLengthRule: 'at most 180 words',
     focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
   };
+}
+
+function buildDailyTitle(dateKey: string, localeCode: 'zh' | 'en' | 'ar'): string {
+  if (localeCode === 'zh') return `日报 ${dateKey}`;
+  if (localeCode === 'ar') return `التقرير اليومي ${dateKey}`;
+  return `Daily ${dateKey}`;
+}
+
+function buildDailySummary(markdown: string, localeCode: 'zh' | 'en' | 'ar'): string {
+  const cleaned = markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]+`/g, ' ')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_~>-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) {
+    if (localeCode === 'zh') return '今日日报已生成，点击查看详情。';
+    if (localeCode === 'ar') return 'تم إنشاء تقرير اليوم. افتح القراءة للتفاصيل.';
+    return "Today's daily is ready. Open to read details.";
+  }
+
+  const maxLength = localeCode === 'zh' ? 48 : localeCode === 'ar' ? 90 : 110;
+  if (cleaned.length <= maxLength) return cleaned;
+  return `${cleaned.slice(0, maxLength).trimEnd()}…`;
 }
 
 async function fetchNewsHeadlines(env: Bindings): Promise<string[]> {
