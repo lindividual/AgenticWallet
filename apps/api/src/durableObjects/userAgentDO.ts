@@ -26,13 +26,22 @@ import {
   sanitizeLimit,
   tomorrowDate,
 } from './userAgentHelpers';
-import type { ArticleRow, EventRow, JobType, RecommendationRow, TodayDailyStatus } from './userAgentTypes';
+import type {
+  ArticleRow,
+  EventRow,
+  JobType,
+  PortfolioSnapshotPoint,
+  RecommendationRow,
+  TodayDailyStatus,
+} from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
 
 const OWNER_KEY = 'owner_user_id';
 const USER_LOCALE_KEY = 'user_locale';
 const REQUEST_LOCALE_KEY = 'request_locale';
 const MAX_JOB_RETRIES = 3;
+const HOURLY_SNAPSHOT_RETENTION_HOURS = 72;
+const DAILY_SNAPSHOT_RETENTION_DAYS = 180;
 
 export class UserAgentDO extends DurableObject<Bindings> {
   constructor(ctx: DurableObjectState, env: Bindings) {
@@ -131,6 +140,23 @@ export class UserAgentDO extends DurableObject<Bindings> {
           session_id TEXT NOT NULL,
           role TEXT NOT NULL,
           content TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )`,
+      );
+      this.ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS portfolio_snapshots_hourly (
+          bucket_hour_utc TEXT PRIMARY KEY,
+          total_usd REAL NOT NULL,
+          holdings_json TEXT NOT NULL,
+          as_of TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        )`,
+      );
+      this.ctx.storage.sql.exec(
+        `CREATE TABLE IF NOT EXISTS portfolio_snapshots_daily (
+          bucket_date_utc TEXT PRIMARY KEY,
+          total_usd REAL NOT NULL,
+          as_of TEXT NOT NULL,
           created_at TEXT NOT NULL
         )`,
       );
@@ -247,6 +273,24 @@ export class UserAgentDO extends DurableObject<Bindings> {
     await this.ensureDailyDigestJobs();
     await this.alarm();
     return { ok: true };
+  }
+
+  async savePortfolioSnapshotRpc(
+    userId: string,
+    input: { totalUsd: number; holdings: unknown[]; asOf?: string },
+  ): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    const asOf = normalizeOccurredAt(input.asOf);
+    this.savePortfolioSnapshot(asOf, input.totalUsd, input.holdings ?? []);
+    return { ok: true };
+  }
+
+  async listPortfolioSnapshotsRpc(
+    userId: string,
+    period: '24h' | '7d' | '30d',
+  ): Promise<{ points: PortfolioSnapshotPoint[] }> {
+    this.ensureOwner(userId);
+    return { points: this.listPortfolioSnapshots(period) };
   }
 
   async alarm(): Promise<void> {
@@ -705,5 +749,105 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
   private async getArticleMarkdown(articleId: string, r2Key: string): Promise<string> {
     return getArticleMarkdownContent(this.env, this.ctx.storage.sql, articleId, r2Key);
+  }
+
+  private toHourBucket(asOf: string): string {
+    return `${asOf.slice(0, 13)}:00:00.000Z`;
+  }
+
+  private toDateBucket(asOf: string): string {
+    return asOf.slice(0, 10);
+  }
+
+  private savePortfolioSnapshot(asOf: string, totalUsd: number, holdings: unknown[]): void {
+    const safeTotalUsd = Number.isFinite(totalUsd) ? totalUsd : 0;
+    const hourBucket = this.toHourBucket(asOf);
+    const dateBucket = this.toDateBucket(asOf);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO portfolio_snapshots_hourly (
+         bucket_hour_utc, total_usd, holdings_json, as_of, created_at
+       ) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(bucket_hour_utc) DO UPDATE SET
+         total_usd = excluded.total_usd,
+         holdings_json = excluded.holdings_json,
+         as_of = excluded.as_of,
+         created_at = excluded.created_at`,
+      hourBucket,
+      safeTotalUsd,
+      JSON.stringify(holdings ?? []),
+      asOf,
+      asOf,
+    );
+
+    const isUtcMidnight = asOf.slice(11, 13) === '00';
+    if (isUtcMidnight) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO portfolio_snapshots_daily (
+           bucket_date_utc, total_usd, as_of, created_at
+         ) VALUES (?, ?, ?, ?)
+         ON CONFLICT(bucket_date_utc) DO UPDATE SET
+           total_usd = excluded.total_usd,
+           as_of = excluded.as_of,
+           created_at = excluded.created_at`,
+        dateBucket,
+        safeTotalUsd,
+        asOf,
+        asOf,
+      );
+    }
+
+    this.cleanupPortfolioSnapshots(asOf);
+  }
+
+  private cleanupPortfolioSnapshots(asOf: string): void {
+    const nowTs = Date.parse(asOf);
+    if (!Number.isFinite(nowTs)) return;
+    const hourlyCutoff = new Date(nowTs - HOURLY_SNAPSHOT_RETENTION_HOURS * 60 * 60 * 1000).toISOString();
+    const dailyCutoff = new Date(nowTs - DAILY_SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    this.ctx.storage.sql.exec('DELETE FROM portfolio_snapshots_hourly WHERE bucket_hour_utc < ?', hourlyCutoff);
+    this.ctx.storage.sql.exec('DELETE FROM portfolio_snapshots_daily WHERE bucket_date_utc < ?', dailyCutoff);
+  }
+
+  private listPortfolioSnapshots(period: '24h' | '7d' | '30d'): PortfolioSnapshotPoint[] {
+    if (period === '24h') {
+      const rows = this.ctx.storage.sql
+        .exec(
+          `SELECT bucket_hour_utc as ts, total_usd
+           FROM portfolio_snapshots_hourly
+           ORDER BY bucket_hour_utc DESC
+           LIMIT 24`,
+        )
+        .toArray() as Array<{ ts?: string; total_usd?: number }>;
+      return rows
+        .reverse()
+        .map((row) => ({
+          ts: normalizeSqlString(row.ts) ?? '',
+          total_usd: normalizeSqlNumber(row.total_usd),
+        }))
+        .filter((row) => Boolean(row.ts));
+    }
+
+    const limit = period === '7d' ? 7 : 30;
+    const rows = this.ctx.storage.sql
+      .exec(
+        `SELECT bucket_date_utc as ts, total_usd
+         FROM portfolio_snapshots_daily
+         ORDER BY bucket_date_utc DESC
+         LIMIT ?`,
+        limit,
+      )
+      .toArray() as Array<{ ts?: string; total_usd?: number }>;
+    return rows
+      .reverse()
+      .map((row) => {
+        const day = normalizeSqlString(row.ts);
+        return {
+          ts: day ? `${day}T00:00:00.000Z` : '',
+          total_usd: normalizeSqlNumber(row.total_usd),
+        };
+      })
+      .filter((row) => Boolean(row.ts));
   }
 }

@@ -18,6 +18,8 @@ export type Bindings = {
   LLM_API_KEY?: string;
   LLM_MODEL?: string;
   DAILY_NEWS_FEEDS?: string;
+  TOKEN_LIST_URLS?: string;
+  TOKEN_LIST_MAX_TOKENS?: string;
 };
 
 export type Variables = {

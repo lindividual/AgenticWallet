@@ -95,6 +95,38 @@ export type WalletPortfolioResponse = {
   holdings: SimEvmBalance[];
 };
 
+export type MarketToken = {
+  chain_id: number;
+  address: string;
+  symbol: string;
+  name: string | null;
+  decimals: number | null;
+  logo_uri: string | null;
+  source: string;
+  confidence: number;
+  updated_at: string;
+};
+
+export type TopMarketAsset = {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string;
+  current_price: number;
+  market_cap_rank: number | null;
+  price_change_percentage_24h: number | null;
+};
+
+export type CoinDetail = {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  description: string;
+  currentPriceUsd: number | null;
+  homepage: string | null;
+};
+
 export type AgentRecommendation = {
   id: string;
   kind: string;
@@ -190,6 +222,155 @@ export async function getWalletPortfolio(): Promise<WalletPortfolioResponse> {
 
 export async function getAppConfig(): Promise<AppConfigResponse> {
   return getJson<AppConfigResponse>('/v1/app-config');
+}
+
+export async function getMarketTokens(params?: {
+  chainId?: number;
+  q?: string;
+  limit?: number;
+}): Promise<{ tokens: MarketToken[] }> {
+  const query = new URLSearchParams();
+  if (params?.chainId) query.set('chainId', String(params.chainId));
+  if (params?.q) query.set('q', params.q);
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return getJson<{ tokens: MarketToken[] }>(`/v1/market/tokens${suffix ? `?${suffix}` : ''}`, true);
+}
+
+export async function runMarketTokenIngest(): Promise<{ ok: true; imported: number; sourceCount: number }> {
+  return postJson<{ ok: true; imported: number; sourceCount: number }>(
+    '/v1/market/tokens/ingest/run',
+    {},
+    true,
+  );
+}
+
+export async function getTopMarketAssets(limit = 30): Promise<TopMarketAsset[]> {
+  const perPage = Math.min(Math.max(Math.trunc(limit), 1), 250);
+  const response = await fetch(
+    `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1&sparkline=false&price_change_percentage=24h`,
+    {
+      headers: { accept: 'application/json' },
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`coingecko_top_assets_failed_${response.status}`);
+  }
+  const rows = (await response.json()) as TopMarketAsset[];
+  return rows;
+}
+
+type CoinPlatformRow = {
+  id: string;
+  platforms?: Record<string, string>;
+};
+
+type SupportedPlatform = 'ethereum' | 'binance-smart-chain' | 'base';
+const NATIVE_COIN_IDS_BY_PLATFORM: Record<SupportedPlatform, string[]> = {
+  ethereum: ['ethereum'],
+  'binance-smart-chain': ['binancecoin'],
+  base: ['ethereum'],
+};
+
+let platformIdCache:
+  | {
+      ts: number;
+      byPlatform: Record<SupportedPlatform, Set<string>>;
+    }
+  | null = null;
+
+const PLATFORM_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+async function getCoinIdsBySupportedPlatforms(): Promise<Record<SupportedPlatform, Set<string>>> {
+  const now = Date.now();
+  if (platformIdCache && now - platformIdCache.ts < PLATFORM_CACHE_TTL_MS) {
+    return platformIdCache.byPlatform;
+  }
+
+  const response = await fetch('https://api.coingecko.com/api/v3/coins/list?include_platform=true', {
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`coingecko_platform_list_failed_${response.status}`);
+  }
+  const rows = (await response.json()) as CoinPlatformRow[];
+  const byPlatform: Record<SupportedPlatform, Set<string>> = {
+    ethereum: new Set<string>(),
+    'binance-smart-chain': new Set<string>(),
+    base: new Set<string>(),
+  };
+
+  for (const row of rows) {
+    if (!row.id || !row.platforms) continue;
+    for (const key of Object.keys(byPlatform) as SupportedPlatform[]) {
+      const hasPlatformKey = Object.prototype.hasOwnProperty.call(row.platforms, key);
+      if (hasPlatformKey) {
+        byPlatform[key].add(row.id);
+      }
+    }
+  }
+
+  for (const key of Object.keys(byPlatform) as SupportedPlatform[]) {
+    for (const nativeId of NATIVE_COIN_IDS_BY_PLATFORM[key]) {
+      byPlatform[key].add(nativeId);
+    }
+  }
+
+  platformIdCache = { ts: now, byPlatform };
+  return byPlatform;
+}
+
+export async function getTopMarketAssetsBySupportedChains(
+  limit = 30,
+  platforms: SupportedPlatform[] = ['ethereum', 'binance-smart-chain', 'base'],
+): Promise<TopMarketAsset[]> {
+  const [marketRows, byPlatform] = await Promise.all([
+    getTopMarketAssets(250),
+    getCoinIdsBySupportedPlatforms(),
+  ]);
+  const allowedIds = new Set<string>();
+  for (const platform of platforms) {
+    for (const id of byPlatform[platform]) {
+      allowedIds.add(id);
+    }
+  }
+  return marketRows.filter((row) => allowedIds.has(row.id)).slice(0, Math.max(1, Math.trunc(limit)));
+}
+
+function stripHtml(input: string): string {
+  return input
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export async function getCoinDetail(coinId: string): Promise<CoinDetail> {
+  const response = await fetch(`https://api.coingecko.com/api/v3/coins/${encodeURIComponent(coinId)}`, {
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`coingecko_coin_detail_failed_${response.status}`);
+  }
+  const data = (await response.json()) as {
+    id?: string;
+    symbol?: string;
+    name?: string;
+    description?: { en?: string };
+    image?: { large?: string; small?: string; thumb?: string };
+    market_data?: { current_price?: { usd?: number } };
+    links?: { homepage?: string[] };
+  };
+  return {
+    id: data.id ?? coinId,
+    symbol: (data.symbol ?? '').toUpperCase(),
+    name: data.name ?? coinId,
+    description: stripHtml(data.description?.en ?? ''),
+    image: data.image?.large ?? data.image?.small ?? data.image?.thumb ?? null,
+    currentPriceUsd: Number.isFinite(Number(data.market_data?.current_price?.usd))
+      ? Number(data.market_data?.current_price?.usd)
+      : null,
+    homepage: data.links?.homepage?.find((item) => Boolean(item?.trim())) ?? null,
+  };
 }
 
 export async function getAgentRecommendations(): Promise<{ recommendations: AgentRecommendation[] }> {

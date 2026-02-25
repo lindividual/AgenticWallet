@@ -51,6 +51,11 @@ type AgentTodayDailyResponse = {
   lastReadyArticle: AgentArticle | null;
 };
 
+type AgentPortfolioSnapshotPoint = {
+  ts: string;
+  total_usd: number;
+};
+
 type UserAgentRpcStub = DurableObjectStub & {
   ingestEventRpc(event: AgentEventRecord): Promise<AgentEventIngestResult>;
   setUserLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
@@ -75,6 +80,14 @@ type UserAgentRpcStub = DurableObjectStub & {
     },
   ): Promise<{ ok: true; jobId: string; deduped: boolean }>;
   runJobsNowRpc(userId: string): Promise<{ ok: true }>;
+  savePortfolioSnapshotRpc(
+    userId: string,
+    input: { totalUsd: number; holdings: unknown[]; asOf?: string },
+  ): Promise<{ ok: true }>;
+  listPortfolioSnapshotsRpc(
+    userId: string,
+    period: '24h' | '7d' | '30d',
+  ): Promise<{ points: AgentPortfolioSnapshotPoint[] }>;
 };
 
 function getUserAgentStub(env: Bindings, userId: string): UserAgentRpcStub {
@@ -182,4 +195,27 @@ export async function enqueueUserAgentJob(
 export async function runUserAgentJobsNow(env: Bindings, userId: string): Promise<void> {
   const stub = getUserAgentStub(env, userId);
   await stub.runJobsNowRpc(userId);
+}
+
+export async function saveUserPortfolioSnapshot(
+  env: Bindings,
+  userId: string,
+  input: { totalUsd: number; holdings: unknown[]; asOf?: string },
+): Promise<void> {
+  const stub = getUserAgentStub(env, userId);
+  await stub.savePortfolioSnapshotRpc(userId, input);
+}
+
+export async function listUserPortfolioSnapshots(
+  env: Bindings,
+  userId: string,
+  period: '24h' | '7d' | '30d',
+): Promise<AgentPortfolioSnapshotPoint[]> {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    const data = await stub.listPortfolioSnapshotsRpc(userId, period);
+    return data.points ?? [];
+  } catch {
+    return [];
+  }
 }

@@ -117,6 +117,26 @@
     "listenFailed": "听书失败，请重试"
   },
   "trade": {
-    "title": "Trade"
+    "title": "交易",
+    "subtitle": "从 token catalog 读取 Top 资产",
+    "refresh": "刷新",
+    "refreshing": "刷新中...",
+    "syncTokens": "同步 Token 列表",
+    "ingestSuccess": "Token 收录完成：导入 {{count}} 条",
+    "ingestFailed": "Token 收录失败：{{message}}",
+    "loadingAssets": "正在加载 Top 资产...",
+    "loadFailed": "资产加载失败：{{message}}",
+    "empty": "暂时没有 token 数据，请先点击“同步 Token 列表”。",
+    "viewDetail": "查看详情",
+    "unknownAsset": "未知资产",
+    "backToList": "返回",
+    "detailTitle": "资产详情",
+    "currentPrice": "当前价格（USD）",
+    "refreshPrice": "刷新价格",
+    "priceUnavailable": "暂无价格",
+    "aboutAsset": "资产介绍",
+    "loadingDetail": "正在加载资产详情...",
+    "noDescription": "暂时没有资产介绍。",
+    "visitWebsite": "访问官网"
   }
 }

@@ -117,6 +117,26 @@
     "listenFailed": "Listen failed, please try again"
   },
   "trade": {
-    "title": "Trade"
+    "title": "Trade",
+    "subtitle": "Top assets from token catalog",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing...",
+    "syncTokens": "Sync token list",
+    "ingestSuccess": "Token ingest completed: {{count}} imported",
+    "ingestFailed": "Token ingest failed: {{message}}",
+    "loadingAssets": "Loading top assets...",
+    "loadFailed": "Failed to load assets: {{message}}",
+    "empty": "No token data yet. Click \"Sync token list\" first.",
+    "viewDetail": "View detail",
+    "unknownAsset": "Unknown",
+    "backToList": "Back",
+    "detailTitle": "Asset Detail",
+    "currentPrice": "Current Price (USD)",
+    "refreshPrice": "Refresh price",
+    "priceUnavailable": "Price unavailable",
+    "aboutAsset": "About this asset",
+    "loadingDetail": "Loading asset detail...",
+    "noDescription": "No asset introduction available yet.",
+    "visitWebsite": "Visit official website"
   }
 }

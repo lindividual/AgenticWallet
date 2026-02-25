@@ -46,3 +46,8 @@ export type JobRow = {
 };
 
 export type TodayDailyStatus = 'ready' | 'generating' | 'failed' | 'stale';
+
+export type PortfolioSnapshotPoint = {
+  ts: string;
+  total_usd: number;
+};

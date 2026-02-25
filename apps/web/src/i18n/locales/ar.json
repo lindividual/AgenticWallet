@@ -117,6 +117,26 @@
     "listenFailed": "تعذر الاستماع، حاول مرة أخرى"
   },
   "trade": {
-    "title": "Trade"
+    "title": "تداول",
+    "subtitle": "أهم الأصول من فهرس التوكنات",
+    "refresh": "تحديث",
+    "refreshing": "جارٍ التحديث...",
+    "syncTokens": "مزامنة قائمة التوكنات",
+    "ingestSuccess": "اكتمل إدخال التوكنات: {{count}}",
+    "ingestFailed": "فشل إدخال التوكنات: {{message}}",
+    "loadingAssets": "جارٍ تحميل الأصول...",
+    "loadFailed": "فشل تحميل الأصول: {{message}}",
+    "empty": "لا توجد بيانات توكنات بعد. اضغط مزامنة قائمة التوكنات.",
+    "viewDetail": "عرض التفاصيل",
+    "unknownAsset": "غير معروف",
+    "backToList": "رجوع",
+    "detailTitle": "تفاصيل الأصل",
+    "currentPrice": "السعر الحالي (USD)",
+    "refreshPrice": "تحديث السعر",
+    "priceUnavailable": "السعر غير متاح",
+    "aboutAsset": "عن هذا الأصل",
+    "loadingDetail": "جارٍ تحميل التفاصيل...",
+    "noDescription": "لا يوجد وصف متاح حالياً.",
+    "visitWebsite": "زيارة الموقع الرسمي"
   }
 }

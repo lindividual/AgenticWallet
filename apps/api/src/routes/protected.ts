@@ -1,73 +1,18 @@
 import { generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { isoBase64URL } from '@simplewebauthn/server/helpers';
 import type { Hono } from 'hono';
-import { SUPPORTED_CHAINS } from '../constants';
 import { getWebAuthnConfig } from '../config/webauthn';
 import { requireAuth } from '../middleware/auth';
 import { registerAgentRoutes } from './agent';
 import { getChallenge, saveChallenge } from '../services/challenge';
 import { getUserSummary } from '../services/user';
 import { getWallet } from '../services/wallet';
+import { fetchWalletPortfolio, upsertTokenMetadataFromPortfolio } from '../services/market';
+import { listUserPortfolioSnapshots, saveUserPortfolioSnapshot } from '../services/agent';
 import type { AppEnv, PayVerifyConfirmRequest } from '../types';
 import { safeJsonParse } from '../utils/json';
 import { nowIso } from '../utils/time';
-
-type SimBalanceRow = {
-  chain: string;
-  chain_id: number;
-  address: string;
-  amount: string;
-  symbol?: string;
-  name?: string;
-  decimals?: number;
-  price_usd?: number;
-  value_usd?: number;
-  logo?: string;
-  url?: string;
-};
-
-type SimBalancesResponse = {
-  wallet_address: string;
-  balances: SimBalanceRow[];
-};
-
-function hasPositiveAmount(rawAmount: string | undefined): boolean {
-  if (!rawAmount) return false;
-  const normalized = rawAmount.trim();
-  if (!normalized || normalized === '0') return false;
-  if (/^\d+$/.test(normalized)) {
-    return BigInt(normalized) > 0n;
-  }
-  const asNumber = Number(normalized);
-  return Number.isFinite(asNumber) && asNumber > 0;
-}
-
-function resolvePortfolioChainIds(raw: string | undefined): string {
-  const defaultChainIds = SUPPORTED_CHAINS.map((chain) => chain.chainId).join(',');
-  const normalized = raw?.trim();
-  if (!normalized) {
-    return defaultChainIds;
-  }
-
-  if (normalized === 'mainnet' || normalized === 'testnet') {
-    return normalized;
-  }
-
-  const isValidList = /^[0-9,\s]+$/.test(normalized);
-  if (!isValidList) {
-    return defaultChainIds;
-  }
-
-  const list = normalized
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean);
-  if (!list.length) {
-    return defaultChainIds;
-  }
-
-  return list.join(',');
-}
+import { registerMarketRoutes } from './market';
 
 export function registerProtectedRoutes(app: Hono<AppEnv>): void {
   app.use('/v1/*', requireAuth);
@@ -89,56 +34,65 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
       return c.json({ error: 'wallet_not_found' }, 404);
     }
 
-    const simApiKey = c.env.SIM_API_KEY?.trim();
-    if (!simApiKey) {
-      return c.json({ error: 'sim_api_key_not_configured' }, 500);
-    }
-    const chainIds = resolvePortfolioChainIds(c.env.PORTFOLIO_CHAIN_IDS);
-    console.log(
-      `[wallet/portfolio] start userId=${userId} walletAddress=${walletAddress} chainIds=${chainIds}`,
-    );
-
-    const simResponse = await fetch(
-      `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=${encodeURIComponent(chainIds)}`,
-      {
-        method: 'GET',
-        headers: {
-          'X-Sim-Api-Key': simApiKey,
-        },
-      },
-    );
-
-    const simData = (await simResponse.json()) as SimBalancesResponse & { error?: string; message?: string };
-    if (!simResponse.ok) {
-      console.log(
-        `[wallet/portfolio] sim_error status=${simResponse.status} error=${simData.error ?? 'unknown'} message=${simData.message ?? 'n/a'}`,
-      );
+    let result;
+    try {
+      result = await fetchWalletPortfolio(c.env, walletAddress);
+    } catch (error) {
       return c.json(
         {
-          error: simData.error ?? 'sim_request_failed',
-          message: simData.message ?? 'failed_to_fetch_portfolio',
+          error: 'portfolio_fetch_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,
       );
     }
-
-    const holdings = (simData.balances ?? [])
-      .filter((row) => Number(row.value_usd ?? 0) > 0 || hasPositiveAmount(row.amount))
-      .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
-    const totalUsd = holdings.reduce((acc, row) => acc + Number(row.value_usd ?? 0), 0);
+    const holdings = result.holdings;
+    const totalUsd = result.totalUsd;
     const sample = holdings
       .slice(0, 3)
       .map((row) => `${row.chain_id}:${row.symbol ?? row.name ?? 'unknown'}:${row.amount}:$${row.value_usd ?? 'null'}`)
       .join('|');
     console.log(
-      `[wallet/portfolio] sim_ok raw=${simData.balances?.length ?? 0} filtered=${holdings.length} totalUsd=${totalUsd} sample=${sample || 'none'}`,
+      `[wallet/portfolio] sim_ok filtered=${holdings.length} totalUsd=${totalUsd} sample=${sample || 'none'}`,
     );
+    await upsertTokenMetadataFromPortfolio(c.env, holdings, result.asOf);
+    await saveUserPortfolioSnapshot(c.env, userId, {
+      totalUsd,
+      holdings,
+      asOf: result.asOf,
+    });
 
     return c.json({
       walletAddress,
       totalUsd,
       holdings,
     });
+  });
+
+  app.get('/v1/wallet/portfolio/snapshots', async (c) => {
+    const userId = c.get('userId');
+    const periodRaw = c.req.query('period');
+    const period = periodRaw === '7d' || periodRaw === '30d' ? periodRaw : '24h';
+    let points = await listUserPortfolioSnapshots(c.env, userId, period);
+
+    if (!points.length) {
+      const wallet = await getWallet(c.env.DB, userId);
+      const walletAddress = wallet?.address;
+      if (!walletAddress) {
+        return c.json({ error: 'wallet_not_found' }, 404);
+      }
+
+      const result = await fetchWalletPortfolio(c.env, walletAddress);
+      await upsertTokenMetadataFromPortfolio(c.env, result.holdings, result.asOf);
+      await saveUserPortfolioSnapshot(c.env, userId, {
+        totalUsd: result.totalUsd,
+        holdings: result.holdings,
+        asOf: result.asOf,
+      });
+      points = await listUserPortfolioSnapshots(c.env, userId, period);
+    }
+
+    return c.json({ period, points });
   });
 
   app.post('/v1/pay/verify/options', async (c) => {
@@ -255,5 +209,6 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
       scope: 'payment',
     });
   });
+  registerMarketRoutes(app);
   registerAgentRoutes(app);
 }
