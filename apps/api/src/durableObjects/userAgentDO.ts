@@ -30,6 +30,8 @@ import type { ArticleRow, EventRow, JobType, RecommendationRow, TodayDailyStatus
 import { safeJsonParse } from '../utils/json';
 
 const OWNER_KEY = 'owner_user_id';
+const USER_LOCALE_KEY = 'user_locale';
+const REQUEST_LOCALE_KEY = 'request_locale';
 const MAX_JOB_RETRIES = 3;
 
 export class UserAgentDO extends DurableObject<Bindings> {
@@ -143,6 +145,18 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }> {
     await this.ensureDailyDigestJobs();
     return this.ingestEvent(event);
+  }
+
+  async setUserLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    this.setUserLocale(locale);
+    return { ok: true };
+  }
+
+  async setRequestLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    this.setRequestLocale(locale);
+    return { ok: true };
   }
 
   async listRecommendationsRpc(
@@ -334,6 +348,55 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (!valueJson) return null;
     const parsed = safeJsonParse<{ userId?: string }>(valueJson);
     return parsed?.userId ?? null;
+  }
+
+  private setUserLocale(locale: string | null): void {
+    const normalized = locale?.trim().toLowerCase() ?? '';
+    const value = normalized.slice(0, 32);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO agent_state (key, value_json, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+      USER_LOCALE_KEY,
+      JSON.stringify({ locale: value || null }),
+      new Date().toISOString(),
+    );
+  }
+
+  private setRequestLocale(locale: string | null): void {
+    const normalized = locale?.trim().toLowerCase() ?? '';
+    const value = normalized.slice(0, 32);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO agent_state (key, value_json, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+      REQUEST_LOCALE_KEY,
+      JSON.stringify({ locale: value || null }),
+      new Date().toISOString(),
+    );
+  }
+
+  private getLocaleByKey(key: string): string | null {
+    const row = this.ctx.storage.sql
+      .exec('SELECT value_json FROM agent_state WHERE key = ? LIMIT 1', key)
+      .toArray()[0] as Record<string, unknown> | undefined;
+    const valueJson = normalizeSqlString(row?.value_json);
+    if (!valueJson) return null;
+    const parsed = safeJsonParse<{ locale?: string | null }>(valueJson);
+    const locale = parsed?.locale;
+    if (typeof locale !== 'string') return null;
+    const normalized = locale.trim().toLowerCase();
+    return normalized || null;
+  }
+
+  private getEffectiveLocale(): string | null {
+    const userLocale = this.getLocaleByKey(USER_LOCALE_KEY);
+    if (userLocale) return userLocale;
+    return this.getLocaleByKey(REQUEST_LOCALE_KEY);
   }
 
   private countEvents(): number {
@@ -617,6 +680,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       env: this.env,
       sql: this.ctx.storage.sql,
       getOwnerUserId: () => this.getOwnerUserId(),
+      getPreferredLocale: () => this.getEffectiveLocale(),
       getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
     });
   }

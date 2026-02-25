@@ -8,6 +8,8 @@ import {
   listUserAgentArticles,
   listUserAgentRecommendations,
   runUserAgentJobsNow,
+  syncUserAgentPreferredLocale,
+  syncUserAgentRequestLocale,
 } from '../services/agent';
 import { getLlmStatus } from '../services/llm';
 import type { AppEnv } from '../types';
@@ -16,6 +18,17 @@ import { nowIso } from '../utils/time';
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === 'object' && input !== null && !Array.isArray(input);
+}
+
+function normalizePreferredLocale(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const first = raw
+    .split(',')
+    .map((item) => item.split(';')[0] ?? item)
+    .map((item) => item.trim())
+    .filter(Boolean)[0];
+  if (!first) return null;
+  return first.toLowerCase();
 }
 
 function toApiArticle(row: {
@@ -43,6 +56,7 @@ function toApiArticle(row: {
 export function registerAgentRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/agent/events', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     let body: AgentEventIngestRequest | null = null;
     try {
       body = await c.req.json<AgentEventIngestRequest>();
@@ -76,6 +90,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/agent/recommendations', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const doRecommendations = await listUserAgentRecommendations(c.env, userId, 10);
     if (doRecommendations.length > 0) {
       return c.json({
@@ -115,6 +130,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/agent/articles', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const articleType = c.req.query('type') ?? undefined;
     const limitRaw = c.req.query('limit');
     const limit = limitRaw ? Number(limitRaw) : 20;
@@ -130,6 +146,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/agent/daily/today', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const daily = await getUserTodayDaily(c.env, userId);
     if (!daily) {
       return c.json({ error: 'daily_unavailable' }, 503);
@@ -145,6 +162,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/agent/articles/:articleId', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const articleId = c.req.param('articleId');
     const detail = await getUserAgentArticleDetail(c.env, userId, articleId);
     if (!detail) {
@@ -158,12 +176,21 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     });
   });
 
+  app.post('/v1/agent/preferences/locale', async (c) => {
+    const userId = c.get('userId');
+    const body = await c.req.json<{ locale?: string }>().catch(() => ({ locale: undefined }));
+    const locale = typeof body.locale === 'string' ? body.locale.trim().toLowerCase().slice(0, 32) : '';
+    await syncUserAgentPreferredLocale(c.env, userId, locale || null);
+    return c.json({ ok: true });
+  });
+
   app.get('/v1/agent/llm/status', async (c) => {
     return c.json(getLlmStatus(c.env));
   });
 
   app.post('/v1/agent/jobs/daily-digest/run', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const today = new Date().toISOString().slice(0, 10);
     const result = await enqueueUserAgentJob(c.env, userId, {
       jobType: 'daily_digest',
@@ -177,6 +204,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
   app.post('/v1/agent/jobs/recommendations/run', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const today = new Date().toISOString().slice(0, 10);
     const result = await enqueueUserAgentJob(c.env, userId, {
       jobType: 'recommendation_refresh',
@@ -190,6 +218,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
   app.post('/v1/agent/jobs/topic/run', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const body = await c.req.json<{ topic?: string }>().catch(
       () =>
         ({
@@ -209,6 +238,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
   app.post('/v1/agent/recommendations/mock', async (c) => {
     const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     await c.env.DB.prepare(
       'INSERT INTO recommendations (id, user_id, kind, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     )

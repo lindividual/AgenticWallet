@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useMatch, useNavigate } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
 import { HomeScreen } from './components/screens/HomeScreen';
 import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
+import { setAgentPreferredLocale } from './api';
 import { useWalletApp } from './hooks/useWalletApp';
 
 const ARTICLE_EXIT_MS = 220;
 
 export function App() {
+  const { i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const articleMatch = useMatch({ from: '/article/$articleId', shouldThrow: false });
@@ -37,6 +40,13 @@ export function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!auth) return;
+    const locale = (i18n.resolvedLanguage ?? i18n.language ?? '').trim();
+    if (!locale) return;
+    setAgentPreferredLocale(locale).catch(() => undefined);
+  }, [auth, i18n.language, i18n.resolvedLanguage]);
 
   useEffect(() => {
     if (routeArticleId) {

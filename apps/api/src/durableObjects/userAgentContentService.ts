@@ -21,8 +21,14 @@ type ContentDeps = {
   env: Bindings;
   sql: SqlStorage;
   getOwnerUserId: () => string | null;
+  getPreferredLocale?: () => string | null;
   getLatestEvents: (limit?: number) => EventRow[];
 };
+
+const DEFAULT_NEWS_FEEDS = [
+  'https://www.coindesk.com/arc/outboundfeeds/rss/',
+  'https://cointelegraph.com/rss',
+];
 
 export async function generateDailyDigestContent(_payload: Record<string, unknown>, deps: ContentDeps): Promise<void> {
   const ownerUserId = deps.getOwnerUserId();
@@ -49,6 +55,9 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
 
   const recentEvents = deps.getLatestEvents(80);
   const eventSummary = summarizeEvents(recentEvents);
+  const preferredLocale = deps.getPreferredLocale?.() ?? null;
+  const language = resolveDailyLanguage(preferredLocale);
+  const newsHeadlines = await fetchNewsHeadlines(deps.env);
   const llmStatus = getLlmStatus(deps.env);
 
   let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary);
@@ -59,7 +68,7 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
           {
             role: 'system',
             content:
-              'You are a crypto wallet content agent. Write concise markdown in Chinese. Focus on actionable market context and user-relevant insights.',
+              `You are a crypto wallet daily brief writer. Write in ${language.outputLanguage}. Keep it concise, natural, and directly useful.`,
           },
           {
             role: 'user',
@@ -68,8 +77,12 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
               `User ID: ${ownerUserId}`,
               `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
               `Top assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
-              'Generate a daily digest in markdown with sections: # title, ## 今日摘要, ## 关注资产, ## 可执行动作.',
-              'Keep it under 300 Chinese words.',
+              newsHeadlines.length
+                ? `Latest crypto headlines: ${newsHeadlines.map((item) => `- ${item}`).join(' ')}`
+                : 'Latest crypto headlines: unavailable',
+              `Focus points: ${language.focusPoints}`,
+              `Length limit: ${language.maxLengthRule}.`,
+              'Do not use rigid section templates. Natural structure is preferred.',
             ].join('\n'),
           },
         ],
@@ -208,6 +221,95 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
       validUntil,
     );
   }
+}
+
+function resolveDailyLanguage(locale: string | null): {
+  outputLanguage: string;
+  maxLengthRule: string;
+  focusPoints: string;
+} {
+  const normalized = (locale ?? '').toLowerCase();
+  if (normalized.startsWith('zh')) {
+    return {
+      outputLanguage: 'Simplified Chinese',
+      maxLengthRule: 'at most 280 Chinese characters',
+      focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
+    };
+  }
+  if (normalized.startsWith('ar')) {
+    return {
+      outputLanguage: 'Arabic',
+      maxLengthRule: 'at most 220 words',
+      focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
+    };
+  }
+  return {
+    outputLanguage: 'English',
+    maxLengthRule: 'at most 180 words',
+    focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
+  };
+}
+
+async function fetchNewsHeadlines(env: Bindings): Promise<string[]> {
+  const feedList = (env.DAILY_NEWS_FEEDS ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const feeds = feedList.length ? feedList : DEFAULT_NEWS_FEEDS;
+  const headlines: string[] = [];
+
+  for (const feed of feeds.slice(0, 4)) {
+    try {
+      const res = await fetch(feed, {
+        headers: {
+          accept: 'application/rss+xml, application/xml, text/xml',
+        },
+      });
+      if (!res.ok) continue;
+      const xml = await res.text();
+      const items = extractRssTitles(xml);
+      for (const title of items) {
+        if (!headlines.includes(title)) {
+          headlines.push(title);
+        }
+        if (headlines.length >= 8) {
+          return headlines;
+        }
+      }
+    } catch {
+      // Ignore feed errors and continue with available sources.
+    }
+  }
+
+  return headlines;
+}
+
+function extractRssTitles(xml: string): string[] {
+  const titles: string[] = [];
+  const itemMatches = xml.matchAll(/<item[\s\S]*?<\/item>/gi);
+  for (const match of itemMatches) {
+    const item = match[0];
+    const titleMatch = item.match(/<title>([\s\S]*?)<\/title>/i);
+    if (!titleMatch?.[1]) continue;
+    const decoded = decodeXmlEntities(stripCdata(titleMatch[1])).trim();
+    if (!decoded) continue;
+    titles.push(decoded);
+    if (titles.length >= 5) break;
+  }
+  return titles;
+}
+
+function stripCdata(value: string): string {
+  return value.replace(/^<!\[CDATA\[/, '').replace(/\]\]>$/, '');
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 export async function generateTopicArticleContent(payload: Record<string, unknown>, deps: ContentDeps): Promise<void> {

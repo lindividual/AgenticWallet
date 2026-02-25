@@ -215,6 +215,16 @@ export async function getAgentTodayDaily(): Promise<AgentTodayDailyResponse> {
   return getJson<AgentTodayDailyResponse>('/v1/agent/daily/today', true);
 }
 
+export async function setAgentPreferredLocale(locale: string): Promise<{ ok: true }> {
+  return postJson<{ ok: true }>(
+    '/v1/agent/preferences/locale',
+    {
+      locale,
+    },
+    true,
+  );
+}
+
 export async function ingestAgentEvent(
   type: AgentEventType,
   payload?: Record<string, unknown>,

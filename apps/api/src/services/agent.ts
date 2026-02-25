@@ -53,6 +53,8 @@ type AgentTodayDailyResponse = {
 
 type UserAgentRpcStub = DurableObjectStub & {
   ingestEventRpc(event: AgentEventRecord): Promise<AgentEventIngestResult>;
+  setUserLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
+  setRequestLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
   listRecommendationsRpc(userId: string, limit?: number): Promise<AgentRecommendationsResponse>;
   listArticlesRpc(
     userId: string,
@@ -87,6 +89,24 @@ export async function ingestUserAgentEvent(
 ): Promise<AgentEventIngestResult> {
   const stub = getUserAgentStub(env, userId);
   return stub.ingestEventRpc(event);
+}
+
+export async function syncUserAgentRequestLocale(env: Bindings, userId: string, locale: string | null): Promise<void> {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    await stub.setRequestLocaleRpc(userId, locale);
+  } catch {
+    // Ignore request locale sync failures. Content generation falls back to defaults.
+  }
+}
+
+export async function syncUserAgentPreferredLocale(env: Bindings, userId: string, locale: string | null): Promise<void> {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    await stub.setUserLocaleRpc(userId, locale);
+  } catch {
+    // Ignore user locale sync failures. Content generation falls back to defaults.
+  }
 }
 
 export async function listUserAgentRecommendations(
