@@ -42,6 +42,7 @@ cp apps/web/.env.example apps/web/.env
 ```
 - Update `apps/api/.dev.vars` RPC values:
   - `SIM_API_KEY`
+  - `BGW_API_KEY` / `BGW_API_SECRET` (optional, defaults to Bitget Wallet public demo credentials)
   - `PORTFOLIO_CHAIN_IDS` (optional: `mainnet`, `testnet`, or chain id list like `1,8453,137`)
   - `ETHEREUM_RPC_URL`
   - `BASE_RPC_URL`

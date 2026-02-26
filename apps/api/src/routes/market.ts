@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { ingestTokenLists, listTokenCatalog } from '../services/market';
+import { fetchBitgetTokenDetail, fetchBitgetTokenKline, fetchBitgetTopMarketAssets } from '../services/bitgetWallet';
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/market/tokens/ingest/run', async (c) => {
@@ -22,32 +23,117 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     return c.json({ tokens });
   });
 
+  app.get('/v1/market/top-assets', async (c) => {
+    const limitRaw = Number(c.req.query('limit'));
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 30;
+    const name = c.req.query('name') ?? 'topGainers';
+    const chainsRaw = c.req.query('chains') ?? '';
+    const chains = chainsRaw
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+
+    try {
+      const assets = await fetchBitgetTopMarketAssets(c.env, {
+        name,
+        limit,
+        chains,
+      });
+      return c.json({ assets });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'bitget_top_assets_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/market/token-detail', async (c) => {
+    const chain = (c.req.query('chain') ?? '').trim();
+    const contract = (c.req.query('contract') ?? '').trim();
+    if (!chain) {
+      return c.json({ error: 'invalid_chain' }, 400);
+    }
+
+    try {
+      const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
+      if (!detail) {
+        return c.json({ error: 'token_not_found' }, 404);
+      }
+      return c.json({ detail });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'bitget_token_detail_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/market/kline', async (c) => {
+    const chain = (c.req.query('chain') ?? '').trim();
+    const contract = (c.req.query('contract') ?? '').trim();
+    const period = (c.req.query('period') ?? '1h').trim();
+    const sizeRaw = Number(c.req.query('size'));
+    const size = Number.isFinite(sizeRaw) ? sizeRaw : 60;
+    if (!chain) {
+      return c.json({ error: 'invalid_chain' }, 400);
+    }
+
+    try {
+      const candles = await fetchBitgetTokenKline(c.env, {
+        chain,
+        contract,
+        period,
+        size,
+      });
+      return c.json({ period, candles });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'bitget_kline_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
   app.get('/v1/market/sources', (c) => {
     return c.json({
       realtime: {
-        mode: 'direct_ws',
+        mode: 'signed_rest',
         providers: [
           {
-            name: 'binance',
-            ws: 'wss://stream.binance.com:9443/ws/<symbol>@ticker',
+            name: 'bitget_wallet_tob',
+            rest: 'https://bopenapi.bgwapi.io/bgw-pro/market/v3/topRank/detail',
           },
         ],
       },
       klines: {
-        mode: 'direct_rest_polling',
+        mode: 'signed_rest_polling',
         providers: [
           {
-            name: 'binance',
-            rest: 'https://api.binance.com/api/v3/klines?symbol=<symbol>&interval=1h&limit=<n>',
-          },
-          {
-            name: 'coingecko_onchain',
-            rest:
-              'https://pro-api.coingecko.com/api/v3/onchain/networks/<network>/tokens/<token_address>/ohlcv/<timeframe>',
+            name: 'bitget_wallet_tob',
+            rest: 'https://bopenapi.bgwapi.io/bgw-pro/market/v3/coin/getKline',
           },
         ],
       },
-      note: 'Backend does not persist kline or realtime prices.',
+      tokenDetail: {
+        mode: 'signed_rest',
+        providers: [
+          {
+            name: 'bitget_wallet_tob',
+            rest: 'https://bopenapi.bgwapi.io/bgw-pro/market/v3/coin/batchGetBaseInfo',
+          },
+        ],
+      },
+      note: 'Backend proxies Bitget Wallet ToB market/token/kline APIs.',
     });
   });
 }
