@@ -156,6 +156,8 @@
     "klinePeriod1h": "1س",
     "klinePeriod4h": "4س",
     "klinePeriod1d": "1ي",
+    "buy": "شراء",
+    "sell": "بيع",
     "aboutAsset": "عن هذا الأصل",
     "loadingDetail": "جارٍ تحميل التفاصيل...",
     "noDescription": "لا يوجد وصف متاح حالياً.",

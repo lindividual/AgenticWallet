@@ -156,6 +156,8 @@
     "klinePeriod1h": "1小时",
     "klinePeriod4h": "4小时",
     "klinePeriod1d": "1天",
+    "buy": "买入",
+    "sell": "卖出",
     "aboutAsset": "资产介绍",
     "loadingDetail": "正在加载资产详情...",
     "noDescription": "暂时没有资产介绍。",

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
 import type { CandlePoint, LivelinePoint } from 'liveline';
@@ -78,8 +78,10 @@ function formatRiskLabel(rawRisk: string | null | undefined, t: (key: string) =>
 
 export function TradeScreen() {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
   const [selected, setSelected] = useState<TopMarketAsset | null>(null);
   const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>('1h');
+  const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
 
   const {
     data: assetsData,
@@ -123,6 +125,7 @@ export function TradeScreen() {
     queryFn: () =>
       getTokenKline((selected as TopMarketAsset).chain, (selected as TopMarketAsset).contract, klinePeriod, 60),
     enabled: Boolean(selected),
+    placeholderData: (previous) => previous,
     staleTime: 20_000,
     refetchInterval: 30_000,
   });
@@ -152,6 +155,21 @@ export function TradeScreen() {
       ? chartLine[chartLine.length - 1].value
       : detail?.currentPriceUsd ?? selected?.current_price ?? 0;
 
+  async function switchKlinePeriod(nextPeriod: KlinePeriod): Promise<void> {
+    if (!selected || nextPeriod === klinePeriod || pendingKlinePeriod) return;
+    setPendingKlinePeriod(nextPeriod);
+    try {
+      await queryClient.fetchQuery({
+        queryKey: ['trade-token-kline', selected.chain, selected.contract, nextPeriod],
+        queryFn: () => getTokenKline(selected.chain, selected.contract, nextPeriod, 60),
+        staleTime: 20_000,
+      });
+      setKlinePeriod(nextPeriod);
+    } finally {
+      setPendingKlinePeriod(null);
+    }
+  }
+
   if (selected) {
     const displayContract = (detail?.contract ?? selected.contract).trim();
     const displayChain = (detail?.chain ?? selected.chain).trim().toUpperCase();
@@ -159,15 +177,15 @@ export function TradeScreen() {
     const chartWindow = Math.max(candleWidth * Math.min(chartCandles.length || 30, 60), candleWidth * 10);
 
     return (
-      <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-28">
+      <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-44">
         <header className="mt-4 flex items-center justify-between">
-          <button type="button" className="btn btn-sm btn-outline px-3" onClick={() => setSelected(null)}>
+          <button type="button" className="btn btn-sm btn-ghost border-0 px-3" onClick={() => setSelected(null)}>
             {t('trade.backToList')}
           </button>
           <h1 className="m-0 text-xl font-bold tracking-tight">{t('trade.detailTitle')}</h1>
         </header>
 
-        <section className="border border-base-300 bg-base-100 p-4">
+        <section className="p-0">
           <div className="flex items-center gap-3">
             {selected.image ? (
               <img
@@ -199,7 +217,7 @@ export function TradeScreen() {
             </div>
             <button
               type="button"
-              className="btn btn-sm btn-outline px-3"
+              className="btn btn-sm btn-ghost border-0 px-3"
               onClick={() => void refetchDetail()}
               disabled={isDetailFetching}
             >
@@ -211,56 +229,14 @@ export function TradeScreen() {
           </p>
         </section>
 
-        <section className="border border-base-300 bg-base-100 p-4">
-          <h2 className="m-0 text-lg font-bold">{t('trade.tokenInfo')}</h2>
-          {isDetailLoading ? (
-            <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.loadingDetail')}</p>
-          ) : (
-            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.chain')}</p>
-                <p className="m-0 mt-1 font-medium">{displayChain || '--'}</p>
-              </div>
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.contract')}</p>
-                <p className="m-0 mt-1 truncate font-medium">{displayContract || t('trade.nativeToken')}</p>
-              </div>
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.marketCap')}</p>
-                <p className="m-0 mt-1 font-medium">{formatCompact(selected.market_cap, i18n.language)}</p>
-              </div>
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.turnover24h')}</p>
-                <p className="m-0 mt-1 font-medium">{formatCompact(selected.turnover_24h, i18n.language)}</p>
-              </div>
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.holders')}</p>
-                <p className="m-0 mt-1 font-medium">{formatCompact(detail?.holders, i18n.language)}</p>
-              </div>
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.liquidity')}</p>
-                <p className="m-0 mt-1 font-medium">{formatCompact(detail?.liquidityUsd, i18n.language)}</p>
-              </div>
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.top10HolderPercent')}</p>
-                <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(detail?.top10HolderPercent)}</p>
-              </div>
-              <div className="rounded border border-base-300 p-2">
-                <p className="m-0 text-xs text-base-content/60">{t('trade.lockLpPercent')}</p>
-                <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(detail?.lockLpPercent)}</p>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="border border-base-300 bg-base-100 p-4">
+        <section className="p-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="m-0 text-lg font-bold">{t('trade.klineTitle')}</h2>
             <button
               type="button"
-              className="btn btn-sm btn-outline px-3"
+              className="btn btn-sm btn-ghost border-0 px-3"
               onClick={() => void refetchKline()}
-              disabled={isKlineFetching}
+              disabled={isKlineFetching || pendingKlinePeriod != null}
             >
               {isKlineFetching ? t('trade.refreshing') : t('trade.refreshKline')}
             </button>
@@ -270,19 +246,24 @@ export function TradeScreen() {
               <button
                 key={option.value}
                 type="button"
-                className={`btn btn-xs px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() => setKlinePeriod(option.value)}
+                className={`btn btn-xs border-0 px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => void switchKlinePeriod(option.value)}
+                disabled={pendingKlinePeriod != null}
               >
-                {t(option.labelKey)}
+                {pendingKlinePeriod === option.value ? (
+                  <span className="loading loading-spinner loading-xs" />
+                ) : (
+                  t(option.labelKey)
+                )}
               </button>
             ))}
           </div>
-          {isKlineLoading ? (
+          {isKlineLoading && chartCandles.length === 0 ? (
             <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.loadingKline')}</p>
           ) : chartCandles.length === 0 ? (
             <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.noKline')}</p>
           ) : (
-            <div className="mt-3 h-72 overflow-hidden rounded border border-base-300 bg-base-100 p-2">
+            <div className="mt-3 h-72 overflow-hidden rounded bg-base-200/40 p-2">
               <Liveline
                 mode="candle"
                 data={chartLine}
@@ -300,6 +281,59 @@ export function TradeScreen() {
             </div>
           )}
         </section>
+
+        <section className="p-0">
+          <h2 className="m-0 text-lg font-bold">{t('trade.tokenInfo')}</h2>
+          {isDetailLoading ? (
+            <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.loadingDetail')}</p>
+          ) : (
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.chain')}</p>
+                <p className="m-0 mt-1 font-medium">{displayChain || '--'}</p>
+              </div>
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.contract')}</p>
+                <p className="m-0 mt-1 truncate font-medium">{displayContract || t('trade.nativeToken')}</p>
+              </div>
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.marketCap')}</p>
+                <p className="m-0 mt-1 font-medium">{formatCompact(selected.market_cap, i18n.language)}</p>
+              </div>
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.turnover24h')}</p>
+                <p className="m-0 mt-1 font-medium">{formatCompact(selected.turnover_24h, i18n.language)}</p>
+              </div>
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.holders')}</p>
+                <p className="m-0 mt-1 font-medium">{formatCompact(detail?.holders, i18n.language)}</p>
+              </div>
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.liquidity')}</p>
+                <p className="m-0 mt-1 font-medium">{formatCompact(detail?.liquidityUsd, i18n.language)}</p>
+              </div>
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.top10HolderPercent')}</p>
+                <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(detail?.top10HolderPercent)}</p>
+              </div>
+              <div className="rounded bg-base-200/40 p-2">
+                <p className="m-0 text-xs text-base-content/60">{t('trade.lockLpPercent')}</p>
+                <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(detail?.lockLpPercent)}</p>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <div className="fixed bottom-20 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 px-5">
+          <div className="grid grid-cols-2 gap-3">
+            <button type="button" className="btn btn-success border-0">
+              {t('trade.buy')}
+            </button>
+            <button type="button" className="btn btn-error border-0">
+              {t('trade.sell')}
+            </button>
+          </div>
+        </div>
       </section>
     );
   }
@@ -314,7 +348,7 @@ export function TradeScreen() {
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="btn btn-sm btn-outline px-3"
+          className="btn btn-sm btn-ghost border-0 px-3"
           onClick={() => void refetch()}
           disabled={isFetching}
         >
@@ -322,9 +356,9 @@ export function TradeScreen() {
         </button>
       </div>
 
-      {isLoading && <div className="border border-base-300 bg-base-100 p-4">{t('trade.loadingAssets')}</div>}
+      {isLoading && <div className="bg-base-100 p-4">{t('trade.loadingAssets')}</div>}
       {isError && (
-        <div className="border border-error bg-error/10 p-4 text-error">
+        <div className="bg-error/10 p-4 text-error">
           {t('trade.loadFailed', { message: (error as Error).message })}
         </div>
       )}
@@ -337,7 +371,7 @@ export function TradeScreen() {
           <button
             key={token.id}
             type="button"
-            className="w-full cursor-pointer border border-base-300 px-3 text-left transition-colors hover:bg-base-200"
+            className="w-full cursor-pointer px-3 text-left transition-colors hover:bg-base-200/60"
             onClick={() => setSelected(token)}
           >
             <AssetListItem
