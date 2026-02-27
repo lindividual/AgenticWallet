@@ -26,6 +26,7 @@ import {
   sanitizeLimit,
   tomorrowDate,
 } from './userAgentHelpers';
+import { initializeAgentSchema } from './userAgentSchema';
 import type {
   ArticleRow,
   EventRow,
@@ -47,119 +48,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
     this.ctx.blockConcurrencyWhile(async () => {
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS agent_state (
-          key TEXT PRIMARY KEY,
-          value_json TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS user_events (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          event_type TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          dedupe_key TEXT,
-          occurred_at TEXT NOT NULL,
-          received_at TEXT NOT NULL
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        'CREATE UNIQUE INDEX IF NOT EXISTS idx_user_events_dedupe_key ON user_events(dedupe_key) WHERE dedupe_key IS NOT NULL',
-      );
-      this.ctx.storage.sql.exec(
-        'CREATE INDEX IF NOT EXISTS idx_user_events_occurred_at ON user_events(occurred_at DESC)',
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS jobs (
-          id TEXT PRIMARY KEY,
-          job_type TEXT NOT NULL,
-          run_at TEXT NOT NULL,
-          status TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          retry_count INTEGER NOT NULL DEFAULT 0,
-          job_key TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        )`,
-      );
-      try {
-        this.ctx.storage.sql.exec('ALTER TABLE jobs ADD COLUMN job_key TEXT');
-      } catch {
-        // Column already exists on new tables; ignore on older instances.
-      }
-      this.ctx.storage.sql.exec(
-        'CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_job_key ON jobs(job_key) WHERE job_key IS NOT NULL',
-      );
-      this.ctx.storage.sql.exec(
-        'CREATE INDEX IF NOT EXISTS idx_jobs_status_run_at ON jobs(status, run_at)',
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS article_index (
-          id TEXT PRIMARY KEY,
-          article_type TEXT NOT NULL,
-          title TEXT NOT NULL,
-          summary TEXT NOT NULL,
-          r2_key TEXT NOT NULL,
-          tags_json TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          status TEXT NOT NULL
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS article_contents (
-          article_id TEXT PRIMARY KEY,
-          markdown TEXT NOT NULL,
-          FOREIGN KEY(article_id) REFERENCES article_index(id)
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS recommendations (
-          id TEXT PRIMARY KEY,
-          category TEXT NOT NULL,
-          asset_name TEXT NOT NULL,
-          reason TEXT NOT NULL,
-          score REAL NOT NULL,
-          generated_at TEXT NOT NULL,
-          valid_until TEXT
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS guide_prompts (
-          id TEXT PRIMARY KEY,
-          page TEXT NOT NULL,
-          content TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          expires_at TEXT
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS chat_messages (
-          id TEXT PRIMARY KEY,
-          session_id TEXT NOT NULL,
-          role TEXT NOT NULL,
-          content TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS portfolio_snapshots_hourly (
-          bucket_hour_utc TEXT PRIMARY KEY,
-          total_usd REAL NOT NULL,
-          holdings_json TEXT NOT NULL,
-          as_of TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        )`,
-      );
-      this.ctx.storage.sql.exec(
-        `CREATE TABLE IF NOT EXISTS portfolio_snapshots_daily (
-          bucket_date_utc TEXT PRIMARY KEY,
-          total_usd REAL NOT NULL,
-          as_of TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        )`,
-      );
+      initializeAgentSchema(this.ctx.storage.sql);
     });
   }
 
@@ -734,6 +623,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       env: this.env,
       sql: this.ctx.storage.sql,
       getOwnerUserId: () => this.getOwnerUserId(),
+      getPreferredLocale: () => this.getEffectiveLocale(),
       getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
     });
   }
@@ -743,6 +633,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       env: this.env,
       sql: this.ctx.storage.sql,
       getOwnerUserId: () => this.getOwnerUserId(),
+      getPreferredLocale: () => this.getEffectiveLocale(),
       getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
     });
   }
