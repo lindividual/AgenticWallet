@@ -25,10 +25,87 @@ type ContentDeps = {
   getLatestEvents: (limit?: number) => EventRow[];
 };
 
+type PortfolioSnapshotRow = {
+  bucket_hour_utc?: string;
+  total_usd?: number;
+  holdings_json?: string;
+};
+
 const DEFAULT_NEWS_FEEDS = [
   'https://www.coindesk.com/arc/outboundfeeds/rss/',
   'https://cointelegraph.com/rss',
 ];
+
+function getLatestPortfolioSnapshot(sql: SqlStorage): PortfolioSnapshotRow | null {
+  const rows = sql
+    .exec(
+      `SELECT bucket_hour_utc, total_usd, holdings_json
+       FROM portfolio_snapshots_hourly
+       ORDER BY bucket_hour_utc DESC
+       LIMIT 1`,
+    )
+    .toArray() as PortfolioSnapshotRow[];
+  return rows[0] ?? null;
+}
+
+function getPortfolioChange24h(sql: SqlStorage): { currentUsd: number; previousUsd: number; changePercent: number } | null {
+  const rows = sql
+    .exec(
+      `SELECT total_usd
+       FROM portfolio_snapshots_hourly
+       ORDER BY bucket_hour_utc DESC
+       LIMIT 24`,
+    )
+    .toArray() as Array<{ total_usd?: number }>;
+  if (rows.length < 2) return null;
+  const current = Number(rows[0]?.total_usd ?? 0);
+  const oldest = Number(rows[rows.length - 1]?.total_usd ?? 0);
+  if (oldest === 0) return null;
+  return {
+    currentUsd: current,
+    previousUsd: oldest,
+    changePercent: ((current - oldest) / oldest) * 100,
+  };
+}
+
+function buildPortfolioContext(sql: SqlStorage): string {
+  const snapshot = getLatestPortfolioSnapshot(sql);
+  if (!snapshot) return 'Portfolio data: unavailable (new user or no portfolio sync yet).';
+
+  const totalUsd = Number(snapshot.total_usd ?? 0);
+  let holdingsSummary = '';
+  try {
+    const holdings = JSON.parse(snapshot.holdings_json ?? '[]') as Array<{
+      symbol?: string;
+      name?: string;
+      chain_id?: number;
+      value_usd?: number;
+      amount?: string;
+    }>;
+    const top5 = holdings
+      .filter((h) => Number(h.value_usd ?? 0) > 0)
+      .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0))
+      .slice(0, 5);
+    if (top5.length > 0) {
+      holdingsSummary = top5
+        .map((h) => `${h.symbol ?? h.name ?? '???'}: $${Number(h.value_usd ?? 0).toFixed(2)}`)
+        .join(', ');
+    }
+  } catch {
+    // Ignore parse errors.
+  }
+
+  const change = getPortfolioChange24h(sql);
+  const changeLine = change
+    ? `24h change: ${change.changePercent >= 0 ? '+' : ''}${change.changePercent.toFixed(2)}% ($${change.previousUsd.toFixed(2)} → $${change.currentUsd.toFixed(2)})`
+    : '24h change: insufficient data';
+
+  return [
+    `Total portfolio value: $${totalUsd.toFixed(2)}`,
+    holdingsSummary ? `Top holdings: ${holdingsSummary}` : 'Top holdings: N/A',
+    changeLine,
+  ].join('\n');
+}
 
 export async function generateDailyDigestContent(_payload: Record<string, unknown>, deps: ContentDeps): Promise<void> {
   const ownerUserId = deps.getOwnerUserId();
@@ -59,35 +136,24 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
   const language = resolveDailyLanguage(preferredLocale);
   const newsHeadlines = await fetchNewsHeadlines(deps.env);
   const llmStatus = getLlmStatus(deps.env);
+  const portfolioContext = buildPortfolioContext(deps.sql);
 
-  let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary);
+  let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary, language.localeCode);
   if (llmStatus.enabled) {
     try {
       const llmResult = await generateWithLlm(deps.env, {
         messages: [
           {
             role: 'system',
-            content:
-              `You are a crypto wallet daily brief writer. Write in ${language.outputLanguage}. Keep it concise, natural, and directly useful.`,
+            content: buildDailyDigestSystemPrompt(language),
           },
           {
             role: 'user',
-            content: [
-              `Date: ${dateKey}`,
-              `User ID: ${ownerUserId}`,
-              `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
-              `Top assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
-              newsHeadlines.length
-                ? `Latest crypto headlines: ${newsHeadlines.map((item) => `- ${item}`).join(' ')}`
-                : 'Latest crypto headlines: unavailable',
-              `Focus points: ${language.focusPoints}`,
-              `Length limit: ${language.maxLengthRule}.`,
-              'Do not use rigid section templates. Natural structure is preferred.',
-            ].join('\n'),
+            content: buildDailyDigestUserPrompt(dateKey, ownerUserId, eventSummary, newsHeadlines, portfolioContext, language),
           },
         ],
-        temperature: 0.4,
-        maxTokens: 900,
+        temperature: 0.45,
+        maxTokens: 1500,
       });
       markdown = llmResult.text;
     } catch (error) {
@@ -165,6 +231,10 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
 
   let rows = buildFallbackRecommendations(tradeAsset, receiveAsset, sendAsset);
 
+  const preferredLocale = deps.getPreferredLocale?.() ?? null;
+  const language = resolveRecommendationLanguage(preferredLocale);
+  const portfolioContext = buildPortfolioContext(deps.sql);
+
   const llmStatus = getLlmStatus(deps.env);
   if (llmStatus.enabled) {
     try {
@@ -172,21 +242,15 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
         messages: [
           {
             role: 'system',
-            content:
-              'You generate JSON-only wallet asset recommendations. Output must be strict JSON without markdown.',
+            content: buildRecommendationSystemPrompt(language),
           },
           {
             role: 'user',
-            content: [
-              `Top candidate assets: ${[tradeAsset, receiveAsset, sendAsset].join(', ')}`,
-              `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
-              'Return JSON array with 3 items and fields: category(trade|receive|send), asset, reason, score(0-1).',
-              'Language: Chinese, concise reason (under 40 Chinese characters each).',
-            ].join('\n'),
+            content: buildRecommendationUserPrompt(tradeAsset, receiveAsset, sendAsset, eventSummary, portfolioContext, language),
           },
         ],
-        temperature: 0.2,
-        maxTokens: 500,
+        temperature: 0.25,
+        maxTokens: 800,
       });
       const parsed = parseLlmRecommendations(llmResult.text);
       if (parsed.length === 3) {
@@ -223,35 +287,160 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
   }
 }
 
-function resolveDailyLanguage(locale: string | null): {
+type DailyLanguage = {
   localeCode: 'zh' | 'en' | 'ar';
   outputLanguage: string;
   maxLengthRule: string;
   focusPoints: string;
-} {
+};
+
+function resolveDailyLanguage(locale: string | null): DailyLanguage {
   const normalized = (locale ?? '').toLowerCase();
   if (normalized.startsWith('zh')) {
     return {
       localeCode: 'zh',
       outputLanguage: 'Simplified Chinese',
-      maxLengthRule: 'at most 280 Chinese characters',
-      focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
+      maxLengthRule: 'approximately 300–400 Chinese characters',
+      focusPoints: 'portfolio performance, market context, user asset behavior, actionable suggestions, and risk awareness',
     };
   }
   if (normalized.startsWith('ar')) {
     return {
       localeCode: 'ar',
       outputLanguage: 'Arabic',
-      maxLengthRule: 'at most 220 words',
-      focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
+      maxLengthRule: 'approximately 250–350 words',
+      focusPoints: 'portfolio performance, market context, user asset behavior, actionable suggestions, and risk awareness',
     };
   }
   return {
     localeCode: 'en',
     outputLanguage: 'English',
-    maxLengthRule: 'at most 180 words',
-    focusPoints: 'market context, user asset behavior, clear action, and risk reminder',
+    maxLengthRule: 'approximately 200–300 words',
+    focusPoints: 'portfolio performance, market context, user asset behavior, actionable suggestions, and risk awareness',
   };
+}
+
+function resolveRecommendationLanguage(locale: string | null): {
+  localeCode: 'zh' | 'en' | 'ar';
+  outputLanguage: string;
+  reasonLengthHint: string;
+} {
+  const normalized = (locale ?? '').toLowerCase();
+  if (normalized.startsWith('zh')) {
+    return {
+      localeCode: 'zh',
+      outputLanguage: 'Simplified Chinese',
+      reasonLengthHint: 'under 50 Chinese characters each',
+    };
+  }
+  if (normalized.startsWith('ar')) {
+    return {
+      localeCode: 'ar',
+      outputLanguage: 'Arabic',
+      reasonLengthHint: 'under 40 words each',
+    };
+  }
+  return {
+    localeCode: 'en',
+    outputLanguage: 'English',
+    reasonLengthHint: 'under 30 words each',
+  };
+}
+
+function buildDailyDigestSystemPrompt(language: DailyLanguage): string {
+  return [
+    `You are a personal crypto wallet assistant writing a daily brief for a wallet user.`,
+    `Write entirely in ${language.outputLanguage}.`,
+    ``,
+    `Guidelines:`,
+    `- Lead with the most important insight (portfolio change, significant market move, or user behavior pattern).`,
+    `- Reference the user's actual holdings and portfolio value when available.`,
+    `- Incorporate recent crypto headlines to provide market context, but keep it relevant to the user's holdings.`,
+    `- End with 1–3 actionable suggestions grounded in the user's portfolio composition.`,
+    `- Include a brief risk reminder when suggesting actions.`,
+    `- Use markdown formatting naturally (headers, bold, lists) but avoid rigid templates.`,
+    `- Tone: knowledgeable friend, not a formal analyst. Be concise and directly useful.`,
+    `- Do NOT fabricate price data or percentages. Only reference data provided to you.`,
+  ].join('\n');
+}
+
+function buildDailyDigestUserPrompt(
+  dateKey: string,
+  ownerUserId: string,
+  eventSummary: { counts: Record<string, number>; topAssets: string[] },
+  newsHeadlines: string[],
+  portfolioContext: string,
+  language: DailyLanguage,
+): string {
+  const eventLines = Object.entries(eventSummary.counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([type, count]) => `  ${type}: ${count}`)
+    .join('\n');
+
+  return [
+    `Date: ${dateKey}`,
+    `User ID: ${ownerUserId}`,
+    ``,
+    `--- Portfolio ---`,
+    portfolioContext,
+    ``,
+    `--- User Behavior (recent) ---`,
+    eventLines || '  No recent activity recorded.',
+    `Top interacted assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
+    ``,
+    `--- Market Headlines ---`,
+    newsHeadlines.length
+      ? newsHeadlines.map((h) => `- ${h}`).join('\n')
+      : 'Unavailable (skip market commentary if no headlines).',
+    ``,
+    `--- Output Requirements ---`,
+    `Length: ${language.maxLengthRule}.`,
+    `Focus: ${language.focusPoints}.`,
+    `Format: Markdown. Natural structure preferred over rigid sections.`,
+  ].join('\n');
+}
+
+function buildRecommendationSystemPrompt(language: {
+  outputLanguage: string;
+}): string {
+  return [
+    `You generate personalized wallet asset recommendations in strict JSON format.`,
+    `Write the "reason" field in ${language.outputLanguage}.`,
+    ``,
+    `Guidelines:`,
+    `- Ground recommendations in the user's actual portfolio and behavior data.`,
+    `- Each recommendation should have a clear, specific rationale.`,
+    `- The score (0–1) should reflect confidence based on available data quality.`,
+    `- Do NOT output markdown, only raw JSON.`,
+  ].join('\n');
+}
+
+function buildRecommendationUserPrompt(
+  tradeAsset: string,
+  receiveAsset: string,
+  sendAsset: string,
+  eventSummary: { counts: Record<string, number>; topAssets: string[] },
+  portfolioContext: string,
+  language: { reasonLengthHint: string },
+): string {
+  return [
+    `Top candidate assets: ${[tradeAsset, receiveAsset, sendAsset].join(', ')}`,
+    ``,
+    `Portfolio context:`,
+    portfolioContext,
+    ``,
+    `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
+    `Top interacted assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
+    ``,
+    `Return a JSON array with exactly 3 objects. Each object must have:`,
+    `- "category": one of "trade", "receive", "send"`,
+    `- "asset": the token symbol (e.g. "ETH", "USDC")`,
+    `- "reason": a concise explanation (${language.reasonLengthHint})`,
+    `- "score": a confidence score between 0 and 1`,
+    ``,
+    `Base recommendations on the user's portfolio composition and behavior patterns.`,
+  ].join('\n');
 }
 
 function buildDailyTitle(dateKey: string, localeCode: 'zh' | 'en' | 'ar'): string {
@@ -290,26 +479,31 @@ async function fetchNewsHeadlines(env: Bindings): Promise<string[]> {
   const feeds = feedList.length ? feedList : DEFAULT_NEWS_FEEDS;
   const headlines: string[] = [];
 
-  for (const feed of feeds.slice(0, 4)) {
+  const fetchPromises = feeds.slice(0, 4).map(async (feed) => {
     try {
       const res = await fetch(feed, {
         headers: {
           accept: 'application/rss+xml, application/xml, text/xml',
+          'user-agent': 'AgenticWallet/1.0 RSS Reader',
         },
+        signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) continue;
+      if (!res.ok) return [];
       const xml = await res.text();
-      const items = extractRssTitles(xml);
-      for (const title of items) {
-        if (!headlines.includes(title)) {
-          headlines.push(title);
-        }
-        if (headlines.length >= 8) {
-          return headlines;
-        }
-      }
+      return extractRssTitles(xml);
     } catch {
-      // Ignore feed errors and continue with available sources.
+      return [];
+    }
+  });
+
+  const results = await Promise.allSettled(fetchPromises);
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue;
+    for (const title of result.value) {
+      if (!headlines.includes(title)) {
+        headlines.push(title);
+      }
+      if (headlines.length >= 10) return headlines;
     }
   }
 
@@ -351,36 +545,52 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
   }
 
   const requestedTopic = typeof payload.topic === 'string' ? payload.topic.trim() : '';
-  const topic = requestedTopic || '市场热点追踪';
+  const preferredLocale = deps.getPreferredLocale?.() ?? null;
+  const language = resolveDailyLanguage(preferredLocale);
+  const topic = requestedTopic || (language.localeCode === 'zh' ? '市场热点追踪' : language.localeCode === 'ar' ? 'تتبع النقاط الساخنة في السوق' : 'Market Hot Topics');
   const now = new Date();
   const dateKey = isoDate(now);
   const recentEvents = deps.getLatestEvents(100);
   const eventSummary = summarizeEvents(recentEvents);
   const llmStatus = getLlmStatus(deps.env);
+  const portfolioContext = buildPortfolioContext(deps.sql);
 
-  let markdown = buildFallbackTopicMarkdown(dateKey, topic, eventSummary);
+  let markdown = buildFallbackTopicMarkdown(dateKey, topic, eventSummary, language.localeCode);
   if (llmStatus.enabled) {
     try {
       const llmResult = await generateWithLlm(deps.env, {
         messages: [
           {
             role: 'system',
-            content: 'You are a crypto strategy writer for wallet users. Write Chinese markdown with practical steps.',
+            content: [
+              `You are a crypto strategy writer for wallet users. Write in ${language.outputLanguage}.`,
+              `Use markdown with practical, actionable content.`,
+              `Ground your analysis in the user's actual portfolio data when available.`,
+              `Include risk awareness alongside opportunities.`,
+            ].join(' '),
           },
           {
             role: 'user',
             content: [
               `Date: ${dateKey}`,
               `Topic: ${topic}`,
+              ``,
+              `Portfolio context:`,
+              portfolioContext,
+              ``,
               `Top assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
               `Event counts: ${JSON.stringify(eventSummary.counts)}`,
-              'Write markdown with sections: # 标题, ## 核心观点, ## 机会与风险, ## 用户可执行动作.',
-              'Keep it under 500 Chinese words.',
+              ``,
+              language.localeCode === 'zh'
+                ? 'Write markdown: # 标题, ## 核心观点, ## 机会与风险, ## 用户可执行动作. Under 500 Chinese characters.'
+                : language.localeCode === 'ar'
+                  ? 'Write markdown: # Title, ## Key Insights, ## Opportunities & Risks, ## Actionable Steps. Under 400 words.'
+                  : 'Write markdown: # Title, ## Key Insights, ## Opportunities & Risks, ## Actionable Steps. Under 350 words.',
             ].join('\n'),
           },
         ],
         temperature: 0.5,
-        maxTokens: 1200,
+        maxTokens: 1500,
       });
       markdown = llmResult.text;
     } catch (error) {
@@ -391,6 +601,17 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
       });
     }
   }
+
+  const topicTitle = language.localeCode === 'zh'
+    ? `专题: ${topic}`
+    : language.localeCode === 'ar'
+      ? `موضوع: ${topic}`
+      : `Topic: ${topic}`;
+  const topicSummary = language.localeCode === 'zh'
+    ? `${topic} 专题，聚焦用户高关注资产与可执行动作。`
+    : language.localeCode === 'ar'
+      ? `موضوع ${topic}، يركز على الأصول الأكثر متابعة والإجراءات القابلة للتنفيذ.`
+      : `${topic} deep dive focusing on your top assets and actionable steps.`;
 
   const articleId = crypto.randomUUID();
   const createdAt = now.toISOString();
@@ -408,8 +629,8 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     articleId,
     'topic',
-    `专题: ${topic}`,
-    `${topic} 专题，聚焦用户高关注资产与可执行动作。`,
+    topicTitle,
+    topicSummary,
     r2Key,
     JSON.stringify(['topic', topic]),
     createdAt,
@@ -434,7 +655,6 @@ export async function putArticleMarkdownContent(
     },
   });
 
-  // Backward-compatibility for existing read path during migration window.
   sql.exec(
     `INSERT INTO article_contents (article_id, markdown)
      VALUES (?, ?)
@@ -459,7 +679,6 @@ export async function getArticleMarkdownContent(
     }
   }
 
-  // Fallback for old records before R2 migration.
   const content = sql
     .exec('SELECT article_id, markdown FROM article_contents WHERE article_id = ? LIMIT 1', articleId)
     .toArray()[0] as ArticleContentRow | undefined;

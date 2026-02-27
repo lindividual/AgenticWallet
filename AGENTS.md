@@ -9,6 +9,16 @@ npm workspaces monorepo with two apps:
 - **`apps/api`** — Cloudflare Worker (Hono) serving API at `/v1/*` and static frontend assets. Uses Wrangler for local dev (D1, Durable Objects, R2 all emulated locally).
 - **`apps/web`** — React + Vite SPA.
 
+Backend route structure (under `apps/api/src/routes/`):
+- `public.ts` — auth register/login, chains, app-config (no auth required)
+- `protected.ts` — route registrar + `/v1/me` endpoint
+- `wallet.ts` — portfolio routes
+- `payment.ts` — payment verification routes
+- `agent.ts` — agent events, articles, daily digest, recommendations, jobs
+- `market.ts` — token catalog and market data sources
+
+Daily digest content generation lives in `durableObjects/userAgentContentService.ts`. It reads portfolio snapshots from the DO's local SQLite, fetches RSS headlines, and calls the LLM (if configured) with enriched context. Fallback content is locale-aware (zh/en/ar).
+
 ### Running dev servers
 
 See `README.md` "Quick Start" for full details. Key commands:

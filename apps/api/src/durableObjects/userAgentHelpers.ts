@@ -102,14 +102,48 @@ export function summarizeEvents(events: Array<{ event_type: string; payload_json
   };
 }
 
-export function buildFallbackDailyDigestMarkdown(date: string, eventSummary: EventSummary): string {
+export function buildFallbackDailyDigestMarkdown(date: string, eventSummary: EventSummary, localeCode: 'zh' | 'en' | 'ar' = 'zh'): string {
   const items = Object.entries(eventSummary.counts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([key, count]) => `- ${key}: ${count}`)
     .join('\n');
 
-  const assets = eventSummary.topAssets.length ? eventSummary.topAssets.join(' / ') : '暂无明显偏好资产';
+  const assets = eventSummary.topAssets.length ? eventSummary.topAssets.join(' / ') : '';
+
+  if (localeCode === 'ar') {
+    return [
+      `# التقرير اليومي ${date}`,
+      '',
+      '## ملخص اليوم',
+      items || '- لا توجد تغييرات سلوكية ملحوظة اليوم',
+      '',
+      '## الأصول المتابعة',
+      `- ${assets || 'لا توجد أصول مفضلة واضحة'}`,
+      '',
+      '## الإجراءات المقترحة',
+      '- راقب تقلبات الأصول الأكثر متابعة.',
+      '- تأكد من توافق الشبكة قبل التحويل.',
+      '- فكر في إعداد تنبيهات الأسعار.',
+    ].join('\n');
+  }
+
+  if (localeCode === 'en') {
+    return [
+      `# Daily Brief ${date}`,
+      '',
+      '## Today\'s Summary',
+      items || '- No notable activity changes today',
+      '',
+      '## Watched Assets',
+      `- ${assets || 'No clear asset preference yet'}`,
+      '',
+      '## Suggested Actions',
+      '- Check volatility and liquidity of your most-watched assets.',
+      '- Verify chain and network compatibility before transfers.',
+      '- Consider setting price alerts if no trades are planned.',
+    ].join('\n');
+  }
 
   return [
     `# 每日专属日报 ${date}`,
@@ -118,7 +152,7 @@ export function buildFallbackDailyDigestMarkdown(date: string, eventSummary: Eve
     items || '- 今日暂无关键行为变化',
     '',
     '## 关注资产',
-    `- ${assets}`,
+    `- ${assets || '暂无明显偏好资产'}`,
     '',
     '## 可执行动作',
     '- 检查高频关注资产的波动与流动性。',
@@ -127,19 +161,55 @@ export function buildFallbackDailyDigestMarkdown(date: string, eventSummary: Eve
   ].join('\n');
 }
 
-export function buildFallbackTopicMarkdown(date: string, topic: string, eventSummary: EventSummary): string {
-  const topAssets = eventSummary.topAssets.slice(0, 5).join(' / ') || '暂无';
+export function buildFallbackTopicMarkdown(date: string, topic: string, eventSummary: EventSummary, localeCode: 'zh' | 'en' | 'ar' = 'zh'): string {
+  const topAssets = eventSummary.topAssets.slice(0, 5).join(' / ') || '';
   const majorEvents = Object.entries(eventSummary.counts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)
     .map(([name, count]) => `- ${name}: ${count}`)
     .join('\n');
 
+  if (localeCode === 'en') {
+    return [
+      `# ${topic} (${date})`,
+      '',
+      '## Key Insights',
+      `- User activity concentrated on: ${topAssets || 'N/A'}.`,
+      '',
+      '## Opportunities & Risks',
+      majorEvents || '- No significant new activity data today.',
+      '- Opportunity: Consider staged strategies for frequently watched assets.',
+      '- Risk: Cross-chain and network mismatches can cause fund loss.',
+      '',
+      '## Actionable Steps',
+      '- Verify chain, asset, slippage, and fees before trading.',
+      '- Set tiered price alerts and position limits for volatile assets.',
+    ].join('\n');
+  }
+
+  if (localeCode === 'ar') {
+    return [
+      `# ${topic} (${date})`,
+      '',
+      '## الرؤى الرئيسية',
+      `- نشاط المستخدم يتركز على: ${topAssets || 'غير متوفر'}.`,
+      '',
+      '## الفرص والمخاطر',
+      majorEvents || '- لا توجد بيانات نشاط جديدة ملحوظة.',
+      '- فرصة: فكر في استراتيجيات مرحلية للأصول المتابعة.',
+      '- مخاطر: أخطاء الشبكة عبر السلاسل قد تسبب خسائر.',
+      '',
+      '## الإجراءات المقترحة',
+      '- تحقق من السلسلة والأصول والرسوم قبل التداول.',
+      '- قم بتعيين تنبيهات الأسعار وحدود المراكز للأصول المتقلبة.',
+    ].join('\n');
+  }
+
   return [
     `# ${topic}（${date}）`,
     '',
     '## 核心观点',
-    `- 当前用户行为集中在：${topAssets}。`,
+    `- 当前用户行为集中在：${topAssets || '暂无'}。`,
     '',
     '## 机会与风险',
     majorEvents || '- 今日无显著新增行为数据。',
