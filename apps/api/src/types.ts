@@ -20,6 +20,8 @@ export type Bindings = {
   DAILY_NEWS_FEEDS?: string;
   TOKEN_LIST_URLS?: string;
   TOKEN_LIST_MAX_TOKENS?: string;
+  BGW_API_KEY?: string;
+  BGW_API_SECRET?: string;
 };
 
 export type Variables = {
