@@ -46,7 +46,7 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
   });
 
   const recommendations = useMemo(
-    () => (recommendationsData?.recommendations ?? []).slice(0, 3),
+    () => (recommendationsData?.recommendations ?? []).slice(0, 5),
     [recommendationsData],
   );
   const daily = dailyToday?.article ?? null;
@@ -123,7 +123,10 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
           )}
           {recommendations.map((item) => (
             <article key={item.id} className="border border-base-300 bg-base-200 p-3">
-              <p className="m-0 text-base font-semibold">{item.title}</p>
+              <div className="flex items-center gap-2">
+                <span className="badge badge-sm badge-outline opacity-70">{item.kind}</span>
+                <p className="m-0 text-base font-semibold">{item.title}</p>
+              </div>
               <p className="m-0 mt-1 text-sm text-base-content/70">{item.content}</p>
             </article>
           ))}

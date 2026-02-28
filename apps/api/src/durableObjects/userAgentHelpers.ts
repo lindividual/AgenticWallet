@@ -223,31 +223,95 @@ export function buildFallbackTopicMarkdown(date: string, topic: string, eventSum
 }
 
 export function buildFallbackRecommendations(
-  tradeAsset: string,
-  receiveAsset: string,
-  sendAsset: string,
+  userTopAssets: string[],
+  portfolioHoldings: Array<{ symbol: string; valueUsd: number }>,
+  marketAssets: Array<{
+    symbol?: string;
+    price_change_percentage_24h?: number | null;
+    chain?: string;
+  }>,
 ): RecommendationDraft[] {
-  return [
-    {
-      category: 'trade',
-      asset: tradeAsset,
-      reason: `${tradeAsset} 在你的近期行为中关注度最高，适合优先交易观察。`,
+  const recs: RecommendationDraft[] = [];
+  const used = new Set<string>();
+
+  const trendingCoin = marketAssets.find((a) => a.symbol && !used.has(a.symbol.toUpperCase()));
+  if (trendingCoin?.symbol) {
+    const sym = trendingCoin.symbol.toUpperCase();
+    used.add(sym);
+    const pct = trendingCoin.price_change_percentage_24h;
+    const changeStr = pct != null ? `24h涨幅${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` : '近期表现活跃';
+    recs.push({
+      category: 'trending',
+      asset: sym,
+      reason: `${sym} 市场热门，${changeStr}，值得关注。`,
+      score: 0.85,
+    });
+  }
+
+  const topHolding = portfolioHoldings.find((h) => !used.has(h.symbol));
+  if (topHolding) {
+    used.add(topHolding.symbol);
+    recs.push({
+      category: 'portfolio',
+      asset: topHolding.symbol,
+      reason: `${topHolding.symbol} 是你持仓中价值最高的资产，建议持续关注走势。`,
       score: 0.82,
-    },
-    {
-      category: 'receive',
-      asset: receiveAsset,
-      reason: `${receiveAsset} 作为接收资产可提升后续资金归集效率。`,
+    });
+  }
+
+  const interest = userTopAssets.find((a) => !used.has(a));
+  if (interest) {
+    used.add(interest);
+    recs.push({
+      category: 'interest',
+      asset: interest,
+      reason: `${interest} 在你的近期行为中关注度最高，适合优先观察。`,
+      score: 0.78,
+    });
+  }
+
+  const secondTrending = marketAssets.find((a) => a.symbol && !used.has(a.symbol.toUpperCase()));
+  if (secondTrending?.symbol) {
+    const sym = secondTrending.symbol.toUpperCase();
+    used.add(sym);
+    recs.push({
+      category: 'momentum',
+      asset: sym,
+      reason: `${sym} 在市场排行中表现突出，可作为短期交易机会。`,
       score: 0.75,
-    },
-    {
-      category: 'send',
-      asset: sendAsset,
-      reason: `${sendAsset} 在你常用链路中流动性较好，适合作为发送资产。`,
-      score: 0.7,
-    },
-  ];
+    });
+  }
+
+  const defaults = ['ETH', 'SOL', 'BNB', 'USDC', 'BTC'];
+  const diversify = defaults.find((d) => !used.has(d));
+  if (diversify) {
+    used.add(diversify);
+    recs.push({
+      category: 'diversify',
+      asset: diversify,
+      reason: `${diversify} 是主流资产，适合用于分散投资组合风险。`,
+      score: 0.72,
+    });
+  }
+
+  while (recs.length < 5) {
+    const fallback = defaults.find((d) => !used.has(d)) ?? 'ETH';
+    used.add(fallback);
+    recs.push({
+      category: 'diversify',
+      asset: fallback,
+      reason: `${fallback} 是成熟的加密资产，适合纳入投资观察。`,
+      score: 0.65,
+    });
+  }
+
+  return recs.slice(0, 5);
 }
+
+const VALID_RECOMMENDATION_CATEGORIES = new Set([
+  'trade', 'receive', 'send',
+  'trending', 'portfolio', 'interest', 'diversify', 'momentum',
+]);
 
 export function parseLlmRecommendations(text: string): RecommendationDraft[] {
   const cleaned = extractJsonArray(text);
@@ -255,34 +319,30 @@ export function parseLlmRecommendations(text: string): RecommendationDraft[] {
   const parsed = safeJsonParse<unknown[]>(cleaned);
   if (!parsed || !Array.isArray(parsed)) return [];
 
-  const normalized = parsed
-    .map((item) => {
-      if (typeof item !== 'object' || item === null) return null;
-      const row = item as Record<string, unknown>;
-      const category = typeof row.category === 'string' ? row.category.trim() : '';
-      const asset = typeof row.asset === 'string' ? row.asset.trim().toUpperCase() : '';
-      const reason = typeof row.reason === 'string' ? row.reason.trim() : '';
-      const score = typeof row.score === 'number' ? row.score : Number(row.score ?? 0);
-      if (!['trade', 'receive', 'send'].includes(category)) return null;
-      if (!asset || !reason || !Number.isFinite(score)) return null;
-      return {
-        category,
-        asset,
-        reason,
-        score: Math.max(0, Math.min(1, score)),
-      };
-    })
-    .filter((item): item is RecommendationDraft => Boolean(item));
+  const seen = new Set<string>();
+  const results: RecommendationDraft[] = [];
 
-  const byCategory = new Map<string, RecommendationDraft>();
-  for (const item of normalized) {
-    if (!byCategory.has(item.category)) {
-      byCategory.set(item.category, item);
-    }
+  for (const item of parsed) {
+    if (typeof item !== 'object' || item === null) continue;
+    const row = item as Record<string, unknown>;
+    const category = typeof row.category === 'string' ? row.category.trim().toLowerCase() : '';
+    const asset = typeof row.asset === 'string' ? row.asset.trim().toUpperCase() : '';
+    const reason = typeof row.reason === 'string' ? row.reason.trim() : '';
+    const score = typeof row.score === 'number' ? row.score : Number(row.score ?? 0);
+    if (!VALID_RECOMMENDATION_CATEGORIES.has(category)) continue;
+    if (!asset || !reason || !Number.isFinite(score)) continue;
+    if (seen.has(asset)) continue;
+    seen.add(asset);
+    results.push({
+      category,
+      asset,
+      reason,
+      score: Math.max(0, Math.min(1, score)),
+    });
+    if (results.length >= 5) break;
   }
-  return ['trade', 'receive', 'send']
-    .map((category) => byCategory.get(category))
-    .filter((item): item is RecommendationDraft => Boolean(item));
+
+  return results;
 }
 
 export function buildArticleR2Key(

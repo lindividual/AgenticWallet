@@ -1,4 +1,6 @@
 import { generateWithLlm, getLlmErrorInfo, getLlmStatus } from '../services/llm';
+import { fetchBitgetTopMarketAssets, type BitgetTopMarketAsset } from '../services/bitgetWallet';
+import { fetchOpenNewsCryptoNews, fetchOpenTwitterCryptoTweets, type NewsItem, type TweetItem } from '../services/openNews';
 import type { Bindings } from '../types';
 import {
   buildArticleR2Key,
@@ -134,9 +136,18 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
   const eventSummary = summarizeEvents(recentEvents);
   const preferredLocale = deps.getPreferredLocale?.() ?? null;
   const language = resolveDailyLanguage(preferredLocale);
-  const newsHeadlines = await fetchNewsHeadlines(deps.env);
-  const llmStatus = getLlmStatus(deps.env);
   const portfolioContext = buildPortfolioContext(deps.sql);
+  const llmStatus = getLlmStatus(deps.env);
+
+  const userCoins = eventSummary.topAssets.slice(0, 5);
+  const searchKeywords = userCoins.length > 0 ? userCoins : ['bitcoin', 'ethereum', 'crypto'];
+
+  const [newsHeadlines, openNewsItems, twitterItems, marketAssets] = await Promise.all([
+    fetchNewsHeadlines(deps.env),
+    fetchOpenNewsCryptoNews(deps.env, { keywords: searchKeywords, limit: 8 }),
+    fetchOpenTwitterCryptoTweets(deps.env, { keywords: searchKeywords, limit: 6 }),
+    fetchBitgetTopMarketAssets(deps.env, { name: 'topGainers', limit: 10 }).catch(() => [] as BitgetTopMarketAsset[]),
+  ]);
 
   let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary, language.localeCode);
   if (llmStatus.enabled) {
@@ -149,11 +160,21 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
           },
           {
             role: 'user',
-            content: buildDailyDigestUserPrompt(dateKey, ownerUserId, eventSummary, newsHeadlines, portfolioContext, language),
+            content: buildDailyDigestUserPrompt(
+              dateKey,
+              ownerUserId,
+              eventSummary,
+              newsHeadlines,
+              portfolioContext,
+              language,
+              openNewsItems,
+              twitterItems,
+              marketAssets,
+            ),
           },
         ],
-        temperature: 0.45,
-        maxTokens: 1500,
+        temperature: 0.5,
+        maxTokens: 2000,
       });
       markdown = llmResult.text;
     } catch (error) {
@@ -216,20 +237,22 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
 
   const events = deps.getLatestEvents(120);
   const eventSummary = summarizeEvents(events);
-  const assets = eventSummary.topAssets;
-  const top = assets.slice(0, 3);
   const generatedAt = now.toISOString();
   const validUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   deps.sql.exec('DELETE FROM recommendations WHERE generated_at < ?', dayStart);
 
-  const [tradeAsset, receiveAsset, sendAsset] = [
-    top[0] ?? 'ETH',
-    top[1] ?? top[0] ?? 'USDC',
-    top[2] ?? top[0] ?? 'BNB',
-  ];
+  let marketAssets: BitgetTopMarketAsset[] = [];
+  try {
+    marketAssets = await fetchBitgetTopMarketAssets(deps.env, { name: 'topGainers', limit: 20 });
+  } catch {
+    // Bitget API may be unavailable; continue with empty market data.
+  }
 
-  let rows = buildFallbackRecommendations(tradeAsset, receiveAsset, sendAsset);
+  const userTopAssets = eventSummary.topAssets.slice(0, 5);
+  const portfolioHoldings = getPortfolioHoldings(deps.sql);
+
+  let rows = buildFallbackRecommendations(userTopAssets, portfolioHoldings, marketAssets);
 
   const preferredLocale = deps.getPreferredLocale?.() ?? null;
   const language = resolveRecommendationLanguage(preferredLocale);
@@ -246,15 +269,21 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
           },
           {
             role: 'user',
-            content: buildRecommendationUserPrompt(tradeAsset, receiveAsset, sendAsset, eventSummary, portfolioContext, language),
+            content: buildRecommendationUserPrompt(
+              eventSummary,
+              portfolioContext,
+              marketAssets,
+              userTopAssets,
+              language,
+            ),
           },
         ],
-        temperature: 0.25,
-        maxTokens: 800,
+        temperature: 0.3,
+        maxTokens: 1200,
       });
       const parsed = parseLlmRecommendations(llmResult.text);
-      if (parsed.length === 3) {
-        rows = parsed;
+      if (parsed.length >= 3) {
+        rows = parsed.slice(0, 5);
       }
     } catch (error) {
       const llmError = getLlmErrorInfo(error);
@@ -287,6 +316,27 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
   }
 }
 
+function getPortfolioHoldings(sql: SqlStorage): Array<{ symbol: string; valueUsd: number }> {
+  const snapshot = getLatestPortfolioSnapshot(sql);
+  if (!snapshot?.holdings_json) return [];
+  try {
+    const holdings = JSON.parse(snapshot.holdings_json) as Array<{
+      symbol?: string;
+      value_usd?: number;
+    }>;
+    return holdings
+      .filter((h) => h.symbol && Number(h.value_usd ?? 0) > 0)
+      .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0))
+      .slice(0, 10)
+      .map((h) => ({
+        symbol: (h.symbol ?? '').toUpperCase(),
+        valueUsd: Number(h.value_usd ?? 0),
+      }));
+  } catch {
+    return [];
+  }
+}
+
 type DailyLanguage = {
   localeCode: 'zh' | 'en' | 'ar';
   outputLanguage: string;
@@ -300,23 +350,23 @@ function resolveDailyLanguage(locale: string | null): DailyLanguage {
     return {
       localeCode: 'zh',
       outputLanguage: 'Simplified Chinese',
-      maxLengthRule: 'approximately 300–400 Chinese characters',
-      focusPoints: 'portfolio performance, market context, user asset behavior, actionable suggestions, and risk awareness',
+      maxLengthRule: 'approximately 400–600 Chinese characters',
+      focusPoints: 'portfolio performance, market trends, news synthesis, social sentiment, user asset behavior, actionable suggestions, and risk awareness',
     };
   }
   if (normalized.startsWith('ar')) {
     return {
       localeCode: 'ar',
       outputLanguage: 'Arabic',
-      maxLengthRule: 'approximately 250–350 words',
-      focusPoints: 'portfolio performance, market context, user asset behavior, actionable suggestions, and risk awareness',
+      maxLengthRule: 'approximately 300–450 words',
+      focusPoints: 'portfolio performance, market trends, news synthesis, social sentiment, user asset behavior, actionable suggestions, and risk awareness',
     };
   }
   return {
     localeCode: 'en',
     outputLanguage: 'English',
-    maxLengthRule: 'approximately 200–300 words',
-    focusPoints: 'portfolio performance, market context, user asset behavior, actionable suggestions, and risk awareness',
+    maxLengthRule: 'approximately 300–450 words',
+    focusPoints: 'portfolio performance, market trends, news synthesis, social sentiment, user asset behavior, actionable suggestions, and risk awareness',
   };
 }
 
@@ -330,20 +380,20 @@ function resolveRecommendationLanguage(locale: string | null): {
     return {
       localeCode: 'zh',
       outputLanguage: 'Simplified Chinese',
-      reasonLengthHint: 'under 50 Chinese characters each',
+      reasonLengthHint: '每条不超过60个中文字符',
     };
   }
   if (normalized.startsWith('ar')) {
     return {
       localeCode: 'ar',
       outputLanguage: 'Arabic',
-      reasonLengthHint: 'under 40 words each',
+      reasonLengthHint: 'under 45 words each',
     };
   }
   return {
     localeCode: 'en',
     outputLanguage: 'English',
-    reasonLengthHint: 'under 30 words each',
+    reasonLengthHint: 'under 35 words each',
   };
 }
 
@@ -352,13 +402,18 @@ function buildDailyDigestSystemPrompt(language: DailyLanguage): string {
     `You are a personal crypto wallet assistant writing a daily brief for a wallet user.`,
     `Write entirely in ${language.outputLanguage}.`,
     ``,
+    `You have access to multiple data sources: portfolio data, market trends, crypto news, and social media sentiment. Use whichever sources have meaningful content to construct today's brief.`,
+    ``,
     `Guidelines:`,
-    `- Lead with the most important insight (portfolio change, significant market move, or user behavior pattern).`,
+    `- Choose a flexible structure based on what's most interesting today. Don't follow a rigid template.`,
+    `- Possible sections (pick and combine freely): market pulse, portfolio spotlight, trending coins, news highlights, social buzz, action items, risk notes.`,
+    `- Lead with the single most impactful insight — could be a portfolio swing, breaking news, viral social sentiment, or a market trend.`,
     `- Reference the user's actual holdings and portfolio value when available.`,
-    `- Incorporate recent crypto headlines to provide market context, but keep it relevant to the user's holdings.`,
-    `- End with 1–3 actionable suggestions grounded in the user's portfolio composition.`,
+    `- Weave in social media sentiment (tweets, KOL opinions) when available — attribute insights but don't list raw tweets.`,
+    `- Synthesize news from multiple sources into coherent narratives rather than listing headlines.`,
+    `- End with 1–3 actionable suggestions grounded in the combined data.`,
     `- Include a brief risk reminder when suggesting actions.`,
-    `- Use markdown formatting naturally (headers, bold, lists) but avoid rigid templates.`,
+    `- Use markdown formatting naturally (headers, bold, lists, blockquotes). Vary the structure day-to-day.`,
     `- Tone: knowledgeable friend, not a formal analyst. Be concise and directly useful.`,
     `- Do NOT fabricate price data or percentages. Only reference data provided to you.`,
   ].join('\n');
@@ -371,6 +426,9 @@ function buildDailyDigestUserPrompt(
   newsHeadlines: string[],
   portfolioContext: string,
   language: DailyLanguage,
+  openNewsItems: NewsItem[] = [],
+  twitterItems: TweetItem[] = [],
+  marketAssets: BitgetTopMarketAsset[] = [],
 ): string {
   const eventLines = Object.entries(eventSummary.counts)
     .sort((a, b) => b[1] - a[1])
@@ -378,7 +436,41 @@ function buildDailyDigestUserPrompt(
     .map(([type, count]) => `  ${type}: ${count}`)
     .join('\n');
 
-  return [
+  const allNews: string[] = [];
+  if (openNewsItems.length > 0) {
+    for (const item of openNewsItems) {
+      const rating = item.rating != null ? ` [AI rating: ${item.rating}]` : '';
+      const src = item.source ? ` (${item.source})` : '';
+      allNews.push(`- ${item.title}${src}${rating}`);
+    }
+  }
+  if (newsHeadlines.length > 0) {
+    for (const h of newsHeadlines) {
+      if (!allNews.some((n) => n.includes(h.slice(0, 30)))) {
+        allNews.push(`- ${h}`);
+      }
+    }
+  }
+
+  const twitterSection = twitterItems.length > 0
+    ? twitterItems
+        .map((t) => `- @${t.handle || t.author}: "${t.text.slice(0, 200)}" (❤${t.likes} 🔁${t.retweets})`)
+        .join('\n')
+    : '';
+
+  const marketSection = marketAssets.length > 0
+    ? marketAssets
+        .slice(0, 8)
+        .map((a) => {
+          const change = a.price_change_percentage_24h != null
+            ? ` (24h: ${Number(a.price_change_percentage_24h) >= 0 ? '+' : ''}${Number(a.price_change_percentage_24h).toFixed(2)}%)`
+            : '';
+          return `- ${a.symbol}: $${Number(a.current_price ?? 0).toPrecision(4)}${change}`;
+        })
+        .join('\n')
+    : '';
+
+  const sections = [
     `Date: ${dateKey}`,
     `User ID: ${ownerUserId}`,
     ``,
@@ -388,58 +480,94 @@ function buildDailyDigestUserPrompt(
     `--- User Behavior (recent) ---`,
     eventLines || '  No recent activity recorded.',
     `Top interacted assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
-    ``,
-    `--- Market Headlines ---`,
-    newsHeadlines.length
-      ? newsHeadlines.map((h) => `- ${h}`).join('\n')
-      : 'Unavailable (skip market commentary if no headlines).',
-    ``,
-    `--- Output Requirements ---`,
+  ];
+
+  if (marketSection) {
+    sections.push('', '--- Market Trending (Bitget) ---', marketSection);
+  }
+
+  sections.push(
+    '',
+    '--- Crypto News ---',
+    allNews.length > 0
+      ? allNews.slice(0, 12).join('\n')
+      : 'No headlines available (skip news commentary).',
+  );
+
+  if (twitterSection) {
+    sections.push('', '--- Social Buzz (Twitter/X) ---', twitterSection);
+  }
+
+  sections.push(
+    '',
+    '--- Output Requirements ---',
     `Length: ${language.maxLengthRule}.`,
     `Focus: ${language.focusPoints}.`,
-    `Format: Markdown. Natural structure preferred over rigid sections.`,
-  ].join('\n');
+    `Format: Markdown. Pick a structure that best fits today's data — no fixed template required. Synthesize across sources.`,
+  );
+
+  return sections.join('\n');
 }
 
 function buildRecommendationSystemPrompt(language: {
   outputLanguage: string;
 }): string {
   return [
-    `You generate personalized wallet asset recommendations in strict JSON format.`,
+    `You generate personalized crypto investment recommendations in strict JSON format.`,
     `Write the "reason" field in ${language.outputLanguage}.`,
     ``,
     `Guidelines:`,
-    `- Ground recommendations in the user's actual portfolio and behavior data.`,
-    `- Each recommendation should have a clear, specific rationale.`,
-    `- The score (0–1) should reflect confidence based on available data quality.`,
+    `- Recommend exactly 5 coins combining market trends, user portfolio, and user behavior.`,
+    `- Use real market data provided (trending coins, price changes) to inform recommendations.`,
+    `- Mix different recommendation types: trending opportunities, portfolio-related, user interests, diversification.`,
+    `- Each recommendation should have a clear, specific rationale tied to the data.`,
+    `- The score (0–1) should reflect confidence based on data quality and relevance.`,
     `- Do NOT output markdown, only raw JSON.`,
+    `- Do NOT recommend coins only from user holdings — include market trending opportunities.`,
   ].join('\n');
 }
 
 function buildRecommendationUserPrompt(
-  tradeAsset: string,
-  receiveAsset: string,
-  sendAsset: string,
   eventSummary: { counts: Record<string, number>; topAssets: string[] },
   portfolioContext: string,
+  marketAssets: BitgetTopMarketAsset[],
+  userTopAssets: string[],
   language: { reasonLengthHint: string },
 ): string {
+  const marketLines = marketAssets
+    .slice(0, 10)
+    .map((a) => {
+      const change = a.price_change_percentage_24h != null
+        ? `24h: ${Number(a.price_change_percentage_24h) >= 0 ? '+' : ''}${Number(a.price_change_percentage_24h).toFixed(2)}%`
+        : '';
+      const cap = a.market_cap != null ? `mcap: $${Number(a.market_cap).toLocaleString()}` : '';
+      return `  ${a.symbol} (${a.chain}): $${Number(a.current_price ?? 0).toPrecision(4)} ${[change, cap].filter(Boolean).join(', ')}`;
+    })
+    .join('\n');
+
   return [
-    `Top candidate assets: ${[tradeAsset, receiveAsset, sendAsset].join(', ')}`,
-    ``,
-    `Portfolio context:`,
+    `--- Portfolio ---`,
     portfolioContext,
     ``,
+    `--- User Behavior ---`,
     `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
-    `Top interacted assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
+    `Top interacted assets: ${userTopAssets.join(', ') || 'N/A'}`,
     ``,
-    `Return a JSON array with exactly 3 objects. Each object must have:`,
-    `- "category": one of "trade", "receive", "send"`,
-    `- "asset": the token symbol (e.g. "ETH", "USDC")`,
-    `- "reason": a concise explanation (${language.reasonLengthHint})`,
+    `--- Market Trending (Bitget) ---`,
+    marketLines || '  No market data available.',
+    ``,
+    `Return a JSON array with exactly 5 objects. Each object must have:`,
+    `- "category": one of "trending", "portfolio", "interest", "diversify", "momentum"`,
+    `- "asset": the token symbol (e.g. "ETH", "USDC", "SOL")`,
+    `- "reason": a concise investment rationale (${language.reasonLengthHint})`,
     `- "score": a confidence score between 0 and 1`,
     ``,
-    `Base recommendations on the user's portfolio composition and behavior patterns.`,
+    `Requirements:`,
+    `- At least 1 coin from market trending data`,
+    `- At least 1 coin related to user's existing portfolio`,
+    `- At least 1 coin based on user's recent interaction interests`,
+    `- Diversify across different chains and risk profiles when possible`,
+    `- Recommendations should be actionable investment suggestions`,
   ].join('\n');
 }
 

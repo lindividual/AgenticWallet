@@ -19,3 +19,7 @@ LLM_API_KEY=replace-with-llm-api-key
 # Optional Bitget Wallet ToB API override (defaults to built-in public demo key/secret)
 BGW_API_KEY=
 BGW_API_SECRET=
+
+# Optional OpenNews / OpenTwitter data sources (from https://6551.io/mcp)
+OPENNEWS_TOKEN=
+TWITTER_TOKEN=
