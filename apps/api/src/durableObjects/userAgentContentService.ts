@@ -282,8 +282,10 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
         maxTokens: 1200,
       });
       const parsed = parseLlmRecommendations(llmResult.text);
-      if (parsed.length >= 3) {
-        rows = parsed.slice(0, 5);
+      if (parsed.length > 0) {
+        const usedAssets = new Set(parsed.map((r) => r.asset));
+        const fillers = rows.filter((r) => !usedAssets.has(r.asset));
+        rows = [...parsed, ...fillers].slice(0, 5);
       }
     } catch (error) {
       const llmError = getLlmErrorInfo(error);
@@ -465,7 +467,10 @@ function buildDailyDigestUserPrompt(
           const change = a.price_change_percentage_24h != null
             ? ` (24h: ${Number(a.price_change_percentage_24h) >= 0 ? '+' : ''}${Number(a.price_change_percentage_24h).toFixed(2)}%)`
             : '';
-          return `- ${a.symbol}: $${Number(a.current_price ?? 0).toPrecision(4)}${change}`;
+          const price = a.current_price != null
+            ? `$${Number(a.current_price).toPrecision(4)}`
+            : 'Price N/A';
+          return `- ${a.symbol}: ${price}${change}`;
         })
         .join('\n')
     : '';
@@ -541,7 +546,8 @@ function buildRecommendationUserPrompt(
         ? `24h: ${Number(a.price_change_percentage_24h) >= 0 ? '+' : ''}${Number(a.price_change_percentage_24h).toFixed(2)}%`
         : '';
       const cap = a.market_cap != null ? `mcap: $${Number(a.market_cap).toLocaleString()}` : '';
-      return `  ${a.symbol} (${a.chain}): $${Number(a.current_price ?? 0).toPrecision(4)} ${[change, cap].filter(Boolean).join(', ')}`;
+      const price = a.current_price != null ? `$${Number(a.current_price).toPrecision(4)}` : 'N/A';
+      return `  ${a.symbol} (${a.chain}): ${price} ${[change, cap].filter(Boolean).join(', ')}`;
     })
     .join('\n');
 

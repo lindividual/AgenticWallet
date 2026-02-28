@@ -89,13 +89,22 @@ export async function fetchOpenNewsCryptoNews(
     return list
       .filter((item) => item.title?.trim())
       .slice(0, limit)
-      .map((item) => ({
-        title: (item.title ?? '').trim(),
-        source: (item.source ?? '').trim(),
-        summary: (item.summary ?? '').trim(),
-        coin: (item.coin ?? '').trim(),
-        rating: typeof item.rating === 'number' ? item.rating : null,
-      }));
+      .map((item) => {
+        const ratingNumber =
+          typeof item.rating === 'number'
+            ? item.rating
+            : typeof item.rating === 'string'
+              ? Number(item.rating)
+              : NaN;
+
+        return {
+          title: (item.title ?? '').trim(),
+          source: (item.source ?? '').trim(),
+          summary: (item.summary ?? '').trim(),
+          coin: (item.coin ?? '').trim(),
+          rating: Number.isFinite(ratingNumber) ? ratingNumber : null,
+        };
+      });
   } catch {
     return [];
   }
