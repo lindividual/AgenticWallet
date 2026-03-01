@@ -39,6 +39,7 @@ export function App() {
     loading,
     setAuthMode,
     handleLogin,
+    handleLogout,
     handleRegister,
   } = useWalletApp();
 
@@ -174,11 +175,12 @@ export function App() {
           auth={authenticatedState}
           onOpenArticle={handleOpenArticle}
           onOpenToken={handleOpenTokenByRoute}
+          onLogout={handleLogout}
         />
       );
     }
-    if (activeTab === 'trade') return <TradeScreen onOpenToken={handleOpenToken} />;
-    return <WalletScreen auth={authenticatedState} />;
+    if (activeTab === 'trade') return <TradeScreen onOpenToken={handleOpenToken} onLogout={handleLogout} />;
+    return <WalletScreen auth={authenticatedState} onLogout={handleLogout} />;
   }
 
   return (

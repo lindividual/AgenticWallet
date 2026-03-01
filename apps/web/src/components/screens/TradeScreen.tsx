@@ -4,9 +4,11 @@ import { useTranslation } from 'react-i18next';
 import { getMarketShelves, type MarketShelf, type TopMarketAsset } from '../../api';
 import { AssetListItem } from '../AssetListItem';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { SettingsDropdown } from '../SettingsDropdown';
 
 type TradeScreenProps = {
   onOpenToken: (token: TopMarketAsset, shelfId: string) => void;
+  onLogout: () => void;
 };
 
 function formatPct(value: number | null | undefined): string {
@@ -25,7 +27,7 @@ const PULL_REFRESH_THRESHOLD_PX = 72;
 const PULL_REFRESH_MAX_PX = 120;
 const MANUAL_REFRESH_COOLDOWN_MS = 5_000;
 
-export function TradeScreen({ onOpenToken }: TradeScreenProps) {
+export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
   const { t, i18n } = useTranslation();
   const pullStartYRef = useRef<number | null>(null);
   const lastManualRefreshAtRef = useRef(0);
@@ -107,8 +109,9 @@ export function TradeScreen({ onOpenToken }: TradeScreenProps) {
       onTouchEnd={handleListTouchEnd}
       onTouchCancel={handleListTouchEnd}
     >
-      <header className="mt-4">
+      <header className="mt-4 flex items-center justify-between gap-3">
         <h1 className="m-0 text-2xl font-bold tracking-tight">{t('trade.title')}</h1>
+        <SettingsDropdown onLogout={onLogout} />
       </header>
 
       {(pullDistance > 0 || isPullRefreshing) && (

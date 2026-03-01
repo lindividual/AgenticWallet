@@ -5,6 +5,7 @@ import {
   clearToken,
   getJson,
   getToken,
+  logout,
   postJson,
   setToken,
   type AuthVerifyResponse,
@@ -108,10 +109,18 @@ export function useWalletApp() {
     }
   }
 
-  function handleLogout() {
-    clearToken();
-    setAuth(null);
-    showSuccess(t('auth.logoutSuccess'));
+  async function handleLogout() {
+    setLoading(true);
+    try {
+      await logout();
+      clearToken();
+      setAuth(null);
+      showSuccess(t('auth.logoutSuccess'));
+    } catch (err) {
+      showError(`${t('common.error')}: ${(err as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function mockRecommendation() {

@@ -5,11 +5,13 @@ import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getMarke
 import type { AuthState } from '../../hooks/useWalletApp';
 import { BalanceHeader } from '../BalanceHeader';
 import { AssetListItem } from '../AssetListItem';
+import { SettingsDropdown } from '../SettingsDropdown';
 
 type HomeScreenProps = {
   auth: AuthState;
   onOpenArticle: (articleId: string) => void;
   onOpenToken: (chain: string, contract: string) => void;
+  onLogout: () => void;
 };
 
 function getRecommendationInitial(label: string): string {
@@ -34,7 +36,7 @@ type RecommendationDisplayAsset = {
   contract: string | null;
 };
 
-export function HomeScreen({ auth, onOpenArticle, onOpenToken }: HomeScreenProps) {
+export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeScreenProps) {
   const { t, i18n } = useTranslation();
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
 
@@ -136,6 +138,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken }: HomeScreenProps
         balanceLabel={t('wallet.balance')}
         totalBalance={totalBalance}
         locale={i18n.language}
+        rightAction={<SettingsDropdown onLogout={onLogout} />}
       />
 
       {totalBalance <= 0 && (

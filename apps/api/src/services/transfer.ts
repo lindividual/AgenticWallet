@@ -165,7 +165,12 @@ async function buildTransferContext(env: Bindings, userId: string, chainId: numb
     throw new Error('wallet_not_found');
   }
 
-  const privateKey = await decryptString(wallet.encryptedPrivateKey, env.APP_SECRET);
+  let privateKey: string;
+  try {
+    privateKey = await decryptString(wallet.encryptedPrivateKey, env.APP_SECRET);
+  } catch {
+    throw new Error('wallet_key_decryption_failed');
+  }
   const smartAccount = await createBiconomyMultichainAccount(env, privateKey as `0x${string}`);
   const deployment = smartAccount.deploymentOn(chainId, true);
 

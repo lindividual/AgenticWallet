@@ -73,19 +73,36 @@ export function TransferContent({
       return;
     }
 
+    const requestPayload = {
+      chainId,
+      toAddress: toAddress.trim(),
+      amount: amount.trim(),
+      tokenAddress: presetAsset?.tokenAddress,
+      tokenSymbol: presetAsset?.tokenSymbol,
+      tokenDecimals: presetAsset?.tokenDecimals,
+    };
+    console.log('[wallet-ui][transfer/quote] request', requestPayload);
+
     setQuoting(true);
     try {
-      const nextQuote = await quoteTransfer({
-        chainId,
-        toAddress: toAddress.trim(),
-        amount: amount.trim(),
-        tokenAddress: presetAsset?.tokenAddress,
-        tokenSymbol: presetAsset?.tokenSymbol,
-        tokenDecimals: presetAsset?.tokenDecimals,
-      });
+      const nextQuote = await quoteTransfer(requestPayload);
       setQuote(nextQuote);
+      console.log('[wallet-ui][transfer/quote] success', {
+        chainId: nextQuote.chainId,
+        toAddress: nextQuote.toAddress,
+        tokenAddress: nextQuote.tokenAddress,
+        tokenSymbol: nextQuote.tokenSymbol,
+        tokenDecimals: nextQuote.tokenDecimals,
+        amountInput: nextQuote.amountInput,
+        amountRaw: nextQuote.amountRaw,
+        estimatedFeeWei: nextQuote.estimatedFeeWei,
+      });
     } catch (error) {
       setQuote(null);
+      console.error('[wallet-ui][transfer/quote] failed', {
+        request: requestPayload,
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
       showError(`${t('wallet.transferFailed')}: ${(error as Error).message}`);
     } finally {
       setQuoting(false);
@@ -100,19 +117,37 @@ export function TransferContent({
 
     setSubmitting(true);
     try {
-      const result = await submitTransfer({
+      const submitPayload = {
         chainId: quote.chainId,
         toAddress: quote.toAddress,
         amount: quote.amountInput,
         tokenAddress: quote.tokenAddress ?? undefined,
         tokenSymbol: quote.tokenSymbol ?? undefined,
         tokenDecimals: quote.tokenDecimals,
+      };
+      console.log('[wallet-ui][transfer/submit] request', submitPayload);
+
+      const result = await submitTransfer(submitPayload);
+      console.log('[wallet-ui][transfer/submit] success', {
+        id: result.transfer.id,
+        status: result.transfer.status,
+        txHash: result.transfer.txHash,
+        chainId: result.transfer.chainId,
       });
 
       onSubmitted(result.transfer);
       showSuccess(t('wallet.transferSuccess'));
       onClose();
     } catch (error) {
+      console.error('[wallet-ui][transfer/submit] failed', {
+        chainId: quote.chainId,
+        toAddress: quote.toAddress,
+        tokenAddress: quote.tokenAddress,
+        tokenSymbol: quote.tokenSymbol,
+        tokenDecimals: quote.tokenDecimals,
+        amountInput: quote.amountInput,
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
       showError(`${t('wallet.transferFailed')}: ${(error as Error).message}`);
     } finally {
       setSubmitting(false);

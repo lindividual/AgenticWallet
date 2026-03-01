@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { formatUsdAdaptive } from '../utils/currency';
 
 type BalanceHeaderProps = {
@@ -5,13 +6,15 @@ type BalanceHeaderProps = {
   balanceLabel: string;
   totalBalance: number;
   locale: string;
+  rightAction?: ReactNode;
 };
 
-export function BalanceHeader({ title, balanceLabel, totalBalance, locale }: BalanceHeaderProps) {
+export function BalanceHeader({ title, balanceLabel, totalBalance, locale, rightAction }: BalanceHeaderProps) {
   return (
     <>
-      <header>
+      <header className="flex items-center justify-between gap-3">
         <h1 className="m-0 text-2xl my-4 font-bold tracking-tight">{title}</h1>
+        {rightAction ? <div className="shrink-0">{rightAction}</div> : null}
       </header>
       <section>
         <p className="m-0 text-base text-base-content/60">{balanceLabel}</p>

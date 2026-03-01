@@ -1,9 +1,17 @@
 import { DEFAULT_MEE_VERSION, MEEVersion } from '@biconomy/abstractjs';
 
+function isPlaceholderValue(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.includes('replace-with-') || normalized.endsWith('/replace') || normalized === 'replace';
+}
+
 export function requiredEnv(value: string | undefined, key: string): string {
   const resolved = value?.trim();
   if (!resolved) {
     throw new Error(`${key}_is_required`);
+  }
+  if (isPlaceholderValue(resolved)) {
+    throw new Error(`invalid_${key}_placeholder`);
   }
   return resolved;
 }

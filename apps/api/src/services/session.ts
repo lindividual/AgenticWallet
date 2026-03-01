@@ -29,3 +29,7 @@ export async function getSessionByToken(
     expiresAt: session.expires_at,
   };
 }
+
+export async function deleteSessionByToken(db: D1Database, token: string): Promise<void> {
+  await db.prepare('DELETE FROM sessions WHERE id = ?').bind(token).run();
+}

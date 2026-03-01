@@ -7,7 +7,11 @@ const LANGUAGES = [
   { code: 'ar', label: 'العربية' },
 ] as const;
 
-export function SettingsDropdown() {
+type SettingsDropdownProps = {
+  onLogout?: () => void | Promise<void>;
+};
+
+export function SettingsDropdown({ onLogout }: SettingsDropdownProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
 
@@ -73,6 +77,16 @@ export function SettingsDropdown() {
             </button>
           </li>
         ))}
+        {onLogout ? (
+          <>
+            <li className="divider my-1" />
+            <li>
+              <button type="button" className="text-error" onClick={onLogout}>
+                {t('common.logout')}
+              </button>
+            </li>
+          </>
+        ) : null}
       </ul>
     </div>
   );

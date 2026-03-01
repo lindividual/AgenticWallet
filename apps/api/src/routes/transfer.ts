@@ -51,7 +51,8 @@ function toErrorStatus(error: unknown): 400 | 404 | 502 {
   if (
     message.startsWith('invalid_') ||
     message.startsWith('insufficient_') ||
-    message === 'unsupported_chain'
+    message === 'unsupported_chain' ||
+    message === 'wallet_key_decryption_failed'
   ) {
     return 400;
   }
@@ -87,36 +88,89 @@ async function maybeRefreshSubmittedTransfer(
 export function registerTransferRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/transfer/quote', async (c) => {
     const userId = c.get('userId');
+    const requestId = crypto.randomUUID();
 
     let body: TransferQuoteRequest;
     try {
       body = await c.req.json<TransferQuoteRequest>();
     } catch {
+      console.error('[transfer/quote] invalid_request', { requestId, userId });
       return c.json({ error: 'invalid_request' }, 400);
     }
 
+    console.log('[transfer/quote] request', {
+      requestId,
+      userId,
+      chainId: body.chainId,
+      toAddress: body.toAddress,
+      amount: body.amount,
+      tokenAddress: body.tokenAddress ?? null,
+      tokenSymbol: body.tokenSymbol ?? null,
+      tokenDecimals: body.tokenDecimals ?? null,
+    });
+
     try {
       const prepared = await prepareTransfer(c.env, userId, body);
+      console.log('[transfer/quote] success', {
+        requestId,
+        userId,
+        chainId: prepared.quote.chainId,
+        fromAddress: prepared.quote.fromAddress,
+        toAddress: prepared.quote.toAddress,
+        tokenAddress: prepared.quote.tokenAddress,
+        tokenSymbol: prepared.quote.tokenSymbol,
+        tokenDecimals: prepared.quote.tokenDecimals,
+        amountInput: prepared.quote.amountInput,
+        amountRaw: prepared.quote.amountRaw,
+        estimatedFeeWei: prepared.quote.estimatedFeeWei,
+      });
       return c.json(prepared.quote);
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'transfer_quote_failed';
+      const status = toErrorStatus(error);
+      console.error('[transfer/quote] failed', {
+        requestId,
+        userId,
+        chainId: body.chainId,
+        toAddress: body.toAddress,
+        tokenAddress: body.tokenAddress ?? null,
+        tokenSymbol: body.tokenSymbol ?? null,
+        tokenDecimals: body.tokenDecimals ?? null,
+        amount: body.amount,
+        status,
+        error: message,
+      });
       return c.json(
         {
-          error: error instanceof Error ? error.message : 'transfer_quote_failed',
+          error: message,
         },
-        toErrorStatus(error),
+        status,
       );
     }
   });
 
   app.post('/v1/transfer/submit', async (c) => {
     const userId = c.get('userId');
+    const requestId = crypto.randomUUID();
 
     let body: TransferSubmitRequest;
     try {
       body = await c.req.json<TransferSubmitRequest>();
     } catch {
+      console.error('[transfer/submit] invalid_request', { requestId, userId });
       return c.json({ error: 'invalid_request' }, 400);
     }
+    console.log('[transfer/submit] request', {
+      requestId,
+      userId,
+      chainId: body.chainId,
+      toAddress: body.toAddress,
+      amount: body.amount,
+      tokenAddress: body.tokenAddress ?? null,
+      tokenSymbol: body.tokenSymbol ?? null,
+      tokenDecimals: body.tokenDecimals ?? null,
+      idempotencyKey: body.idempotencyKey ?? null,
+    });
 
     try {
       const prepared = await prepareTransfer(c.env, userId, body);
@@ -138,6 +192,11 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       });
 
       if (transferCreated.deduped) {
+        console.log('[transfer/submit] deduped', {
+          requestId,
+          userId,
+          transferId: transferCreated.transfer.id,
+        });
         return c.json({
           transfer: toApiTransfer(transferCreated.transfer),
           deduped: true,
@@ -179,6 +238,12 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
           errorCode: null,
           errorMessage: null,
         });
+        console.log('[transfer/submit] confirmed', {
+          requestId,
+          userId,
+          transferId: transferCreated.transfer.id,
+          txHash,
+        });
         return c.json({ transfer: toApiTransfer(confirmed ?? submitted ?? transferCreated.transfer), deduped: false });
       }
 
@@ -188,16 +253,42 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
           errorCode: 'tx_reverted',
           errorMessage: 'transaction reverted on chain',
         });
+        console.error('[transfer/submit] onchain_failed', {
+          requestId,
+          userId,
+          transferId: transferCreated.transfer.id,
+          txHash,
+        });
         return c.json({ transfer: toApiTransfer(failed ?? submitted ?? transferCreated.transfer), deduped: false });
       }
 
+      console.log('[transfer/submit] submitted_pending', {
+        requestId,
+        userId,
+        transferId: transferCreated.transfer.id,
+        txHash,
+      });
       return c.json({ transfer: toApiTransfer(submitted ?? transferCreated.transfer), deduped: false });
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'transfer_submit_failed';
+      const status = toErrorStatus(error);
+      console.error('[transfer/submit] failed', {
+        requestId,
+        userId,
+        chainId: body.chainId,
+        toAddress: body.toAddress,
+        tokenAddress: body.tokenAddress ?? null,
+        tokenSymbol: body.tokenSymbol ?? null,
+        tokenDecimals: body.tokenDecimals ?? null,
+        amount: body.amount,
+        status,
+        error: message,
+      });
       return c.json(
         {
-          error: error instanceof Error ? error.message : 'transfer_submit_failed',
+          error: message,
         },
-        toErrorStatus(error),
+        status,
       );
     }
   });

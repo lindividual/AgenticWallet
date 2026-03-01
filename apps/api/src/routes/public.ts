@@ -21,6 +21,20 @@ import type {
 import { safeJsonParse } from '../utils/json';
 import { nowIso } from '../utils/time';
 
+function isUniqueConstraintError(error: unknown, field: string): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes('unique') && message.includes(field.toLowerCase());
+}
+
+async function cleanupPartialRegistration(db: D1Database, userId: string): Promise<void> {
+  await db.batch([
+    db.prepare('DELETE FROM wallet_chain_accounts WHERE user_id = ?').bind(userId),
+    db.prepare('DELETE FROM wallets WHERE user_id = ?').bind(userId),
+    db.prepare('DELETE FROM users WHERE id = ?').bind(userId),
+  ]);
+}
+
 export function registerPublicRoutes(app: Hono<AppEnv>): void {
   app.get('/', (c) => c.json({ ok: true, service: 'agentic-wallet-api', version: 'mvp-passkey' }));
 
@@ -33,16 +47,9 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
       body = {};
     }
 
-    const now = nowIso();
     const userId = crypto.randomUUID();
     const handle = `user_${userId.slice(0, 8)}`;
     const displayName = sanitizeDisplayName(body.displayName) ?? handle;
-
-    await c.env.DB.prepare(
-      'INSERT INTO users (id, handle, display_name, created_at) VALUES (?, ?, ?, ?)',
-    )
-      .bind(userId, handle, displayName, now)
-      .run();
 
     const options = await generateRegistrationOptions({
       rpName: webauthn.rpName,
@@ -112,27 +119,88 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
     const credentialId = credential.id;
     const publicKeyB64 = isoBase64URL.fromBuffer(credential.publicKey);
     const transports = body.response.response.transports ?? [];
+    const now = nowIso();
+    const handle = `user_${body.userId.slice(0, 8)}`;
 
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        `INSERT INTO passkeys (
-          id, user_id, credential_id, public_key_b64, counter, transports_json, device_type, backed_up, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        crypto.randomUUID(),
-        body.userId,
+    try {
+      await c.env.DB.prepare(
+        'INSERT INTO users (id, handle, display_name, created_at) VALUES (?, ?, ?, ?)',
+      )
+        .bind(body.userId, handle, handle, now)
+        .run();
+    } catch (error) {
+      if (isUniqueConstraintError(error, 'users.id') || isUniqueConstraintError(error, 'users.handle')) {
+        return c.json({ error: 'registration_user_conflict' }, 409);
+      }
+      console.error('[auth/register/verify] user_insert_failed', {
+        userId: body.userId,
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
+      return c.json(
+        {
+          error: 'registration_user_insert_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+
+    let wallet;
+    try {
+      wallet = await bootstrapWalletForUser(c.env, body.userId);
+    } catch (error) {
+      await cleanupPartialRegistration(c.env.DB, body.userId);
+      console.error('[auth/register/verify] bootstrap_failed', {
+        userId: body.userId,
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
+      return c.json(
+        {
+          error: 'wallet_bootstrap_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+
+    try {
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          `INSERT INTO passkeys (
+            id, user_id, credential_id, public_key_b64, counter, transports_json, device_type, backed_up, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(
+          crypto.randomUUID(),
+          body.userId,
+          credentialId,
+          publicKeyB64,
+          credential.counter,
+          JSON.stringify(transports),
+          verification.registrationInfo.credentialDeviceType,
+          verification.registrationInfo.credentialBackedUp ? 1 : 0,
+          nowIso(),
+        ),
+        c.env.DB.prepare('DELETE FROM auth_challenges WHERE id = ?').bind(body.challengeId),
+      ]);
+    } catch (error) {
+      await cleanupPartialRegistration(c.env.DB, body.userId);
+      if (isUniqueConstraintError(error, 'passkeys.credential_id')) {
+        return c.json({ error: 'passkey_already_registered' }, 409);
+      }
+      console.error('[auth/register/verify] passkey_insert_failed', {
+        userId: body.userId,
         credentialId,
-        publicKeyB64,
-        credential.counter,
-        JSON.stringify(transports),
-        verification.registrationInfo.credentialDeviceType,
-        verification.registrationInfo.credentialBackedUp ? 1 : 0,
-        nowIso(),
-      ),
-      c.env.DB.prepare('DELETE FROM auth_challenges WHERE id = ?').bind(body.challengeId),
-    ]);
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
+      return c.json(
+        {
+          error: 'registration_passkey_insert_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
 
-    const wallet = await bootstrapWalletForUser(c.env, body.userId);
     const session = await createSession(c.env.DB, body.userId);
     const user = await getUserSummary(c.env.DB, body.userId);
 

@@ -311,6 +311,10 @@ export async function getWalletPortfolio(): Promise<WalletPortfolioResponse> {
   return getJson<WalletPortfolioResponse>('/v1/wallet/portfolio', true);
 }
 
+export async function logout(): Promise<{ ok: true }> {
+  return postJson<{ ok: true }>('/v1/auth/logout', {}, true);
+}
+
 export async function quoteTransfer(request: TransferQuoteRequest): Promise<TransferQuoteResponse> {
   return postJson<TransferQuoteResponse>('/v1/transfer/quote', request, true);
 }

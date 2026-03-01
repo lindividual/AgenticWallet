@@ -12,9 +12,11 @@ import type { AuthState } from '../../hooks/useWalletApp';
 import { AssetListItem } from '../AssetListItem';
 import { BalanceHeader } from '../BalanceHeader';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { SettingsDropdown } from '../SettingsDropdown';
 
 type WalletScreenProps = {
   auth: AuthState;
+  onLogout: () => void;
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer';
@@ -40,7 +42,7 @@ function getAssetInitial(asset: SimEvmBalance): string {
   return label[0].toUpperCase();
 }
 
-export function WalletScreen({ auth }: WalletScreenProps) {
+export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess } = useToast();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -224,6 +226,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
         balanceLabel={t('wallet.balance')}
         totalBalance={totalBalance}
         locale={i18n.language}
+        rightAction={<SettingsDropdown onLogout={onLogout} />}
       />
 
       <section className="grid grid-cols-3 gap-3 mt-6">

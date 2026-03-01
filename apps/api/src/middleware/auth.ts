@@ -19,5 +19,6 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
 
   c.set('userId', session.userId);
+  c.set('sessionToken', token);
   await next();
 };
