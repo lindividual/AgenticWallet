@@ -18,6 +18,12 @@ type WalletScreenProps = {
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer';
+type TransferPresetAsset = {
+  chainId: number;
+  tokenAddress: string;
+  tokenSymbol?: string;
+  tokenDecimals?: number;
+};
 
 function formatTokenAmount(rawAmount: string | undefined, decimals: number | undefined): string {
   const amount = Number(rawAmount ?? 0);
@@ -41,6 +47,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
   const [activeModalContent, setActiveModalContent] = useState<ActiveModalContent>('topUp');
   const [modalVisible, setModalVisible] = useState(false);
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
+  const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -154,8 +161,29 @@ export function WalletScreen({ auth }: WalletScreenProps) {
   }
 
   function openTransferModal() {
+    setPresetTransferAsset(null);
     setActiveModalContent('transfer');
     showModal(snapshotRect(transferButtonRef.current));
+  }
+
+  function openTransferModalFromAsset(asset: SimEvmBalance) {
+    const tokenAddress = asset.address?.trim();
+    const isValidTokenAddress = /^0x[a-fA-F0-9]{40}$/.test(tokenAddress ?? '');
+    const isZeroAddress = (tokenAddress ?? '').toLowerCase() === '0x0000000000000000000000000000000000000000';
+    const shouldPresetToken = isValidTokenAddress && !isZeroAddress;
+
+    setPresetTransferAsset(
+      shouldPresetToken
+        ? {
+            chainId: asset.chain_id,
+            tokenAddress: tokenAddress!,
+            tokenSymbol: asset.symbol,
+            tokenDecimals: asset.decimals,
+          }
+        : null,
+    );
+    setActiveModalContent('transfer');
+    showModal(null);
   }
 
   function openReceiveModal() {
@@ -247,6 +275,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
         {holdings.map((asset) => (
           <AssetListItem
             key={`${asset.chain_id}-${asset.address}`}
+            onClick={() => openTransferModalFromAsset(asset)}
             leftIcon={
               asset.logo ? (
                 <img
@@ -311,6 +340,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
             >
               <TransferContent
                 active={activeModalContent === 'transfer'}
+                presetAsset={presetTransferAsset}
                 supportedChains={supportedChains}
                 onBack={closeActiveModal}
                 onClose={closeActiveModal}

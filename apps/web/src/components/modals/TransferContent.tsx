@@ -6,6 +6,12 @@ import { useToast } from '../../contexts/ToastContext';
 
 type TransferContentProps = {
   active: boolean;
+  presetAsset?: {
+    chainId: number;
+    tokenAddress: string;
+    tokenSymbol?: string;
+    tokenDecimals?: number;
+  } | null;
   supportedChains: Array<{
     chainId: number;
     name: string;
@@ -23,6 +29,7 @@ function truncateAddress(address: string): string {
 
 export function TransferContent({
   active,
+  presetAsset = null,
   supportedChains,
   onClose,
   onBack,
@@ -36,16 +43,17 @@ export function TransferContent({
   const [quote, setQuote] = useState<TransferQuoteResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [quoting, setQuoting] = useState(false);
+  const isTokenTransfer = Boolean(presetAsset?.tokenAddress);
 
   useEffect(() => {
     if (!active) return;
-    setChainId(supportedChains[0]?.chainId ?? 1);
+    setChainId(presetAsset?.chainId ?? supportedChains[0]?.chainId ?? 1);
     setToAddress('');
     setAmount('');
     setQuote(null);
     setSubmitting(false);
     setQuoting(false);
-  }, [active, supportedChains]);
+  }, [active, supportedChains, presetAsset]);
 
   const selectedChain = useMemo(
     () => supportedChains.find((item) => item.chainId === chainId) ?? supportedChains[0] ?? null,
@@ -71,6 +79,9 @@ export function TransferContent({
         chainId,
         toAddress: toAddress.trim(),
         amount: amount.trim(),
+        tokenAddress: presetAsset?.tokenAddress,
+        tokenSymbol: presetAsset?.tokenSymbol,
+        tokenDecimals: presetAsset?.tokenDecimals,
       });
       setQuote(nextQuote);
     } catch (error) {
@@ -93,6 +104,9 @@ export function TransferContent({
         chainId: quote.chainId,
         toAddress: quote.toAddress,
         amount: quote.amountInput,
+        tokenAddress: quote.tokenAddress ?? undefined,
+        tokenSymbol: quote.tokenSymbol ?? undefined,
+        tokenDecimals: quote.tokenDecimals,
       });
 
       onSubmitted(result.transfer);
@@ -123,7 +137,7 @@ export function TransferContent({
                 setChainId(next);
                 setQuote(null);
               }}
-              disabled={submitting || quoting}
+              disabled={submitting || quoting || isTokenTransfer}
             >
               {supportedChains.map((chain) => (
                 <option key={chain.chainId} value={chain.chainId}>
@@ -132,6 +146,14 @@ export function TransferContent({
               ))}
             </select>
           </label>
+
+          {isTokenTransfer ? (
+            <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
+              <p className="m-0 text-base-content/70">{t('wallet.token')}</p>
+              <p className="m-0 mt-1 font-semibold">{presetAsset?.tokenSymbol ?? t('wallet.token')}</p>
+              <p className="m-0 mt-1 break-all text-base-content/60">{presetAsset?.tokenAddress}</p>
+            </div>
+          ) : null}
 
           <label className="flex flex-col gap-2">
             <span className="text-sm text-base-content/70">{t('wallet.transferToAddress')}</span>

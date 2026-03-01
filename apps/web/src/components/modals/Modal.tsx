@@ -21,6 +21,9 @@ export function Modal({ visible, originRect, onClose, children }: ModalProps) {
         className={`mx-auto flex min-h-screen w-full max-w-[420px] flex-col bg-base-200 p-6 transition-opacity duration-200 ${
           visible ? 'opacity-100' : 'opacity-0'
         }`}
+        onClick={(event) => {
+          event.stopPropagation();
+        }}
       >
         {children}
       </section>
