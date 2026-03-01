@@ -45,6 +45,7 @@ cp apps/web/.env.example apps/web/.env
   - `BGW_API_KEY` / `BGW_API_SECRET` (optional, defaults to Bitget Wallet public demo credentials)
   - `COINGECKO_API_KEY` (optional, public free tier works without key)
   - `COINGECKO_API_BASE_URL` (optional, use `https://pro-api.coingecko.com/api/v3` for pro key)
+  - `COINGECKO_USER_AGENT` (recommended, e.g. `AgenticWallet-MVP/0.1 (...)`)
   - `PORTFOLIO_CHAIN_IDS` (optional: `mainnet`, `testnet`, or chain id list like `1,8453,137`)
   - `ETHEREUM_RPC_URL`
   - `BASE_RPC_URL`
@@ -93,3 +94,12 @@ Notes:
 - Passkey requires HTTPS in production.
 - WebAuthn `origin` and `rpId` are derived from each incoming request (`origin` + `hostname`), so frontend and API should be served on the same host for passkey flows.
 - Wallet creation currently uses backend-generated EOA and keeps a placeholder for Biconomy Abstract integration.
+
+## Market Shelves (Phase 1)
+- `GET /v1/market/shelves` returns multiple market shelves (default: meme + defi + market-cap shelves).
+- `GET /v1/market/top-assets` supports `name` (`topGainers|topLosers|topVolume|marketCap|trending`), `source` (`auto|coingecko|bitget`), and optional `category`.
+- `POST /v1/market/coingecko/platforms/sync` syncs CoinGecko `coins/list?include_platform=true` into local D1 (incremental write: changed rows only).
+- `GET /v1/market/coingecko/platforms/sync-status` returns last sync metadata.
+- Strategy:
+  - Top assets/shelves: CoinGecko first, Bitget fallback (only for list types Bitget supports).
+  - Token detail and kline: Bitget.

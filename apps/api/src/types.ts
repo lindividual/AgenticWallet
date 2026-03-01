@@ -24,6 +24,7 @@ export type Bindings = {
   BGW_API_SECRET?: string;
   COINGECKO_API_KEY?: string;
   COINGECKO_API_BASE_URL?: string;
+  COINGECKO_USER_AGENT?: string;
   OPENNEWS_TOKEN?: string;
   TWITTER_TOKEN?: string;
 };

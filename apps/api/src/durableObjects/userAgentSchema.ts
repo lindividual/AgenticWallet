@@ -80,12 +80,48 @@ export function initializeAgentSchema(sql: SqlStorage): void {
       id TEXT PRIMARY KEY,
       category TEXT NOT NULL,
       asset_name TEXT NOT NULL,
+      asset_symbol TEXT,
+      asset_chain TEXT,
+      asset_contract TEXT,
+      asset_display_name TEXT,
+      asset_image TEXT,
+      asset_price_change_24h REAL,
       reason TEXT NOT NULL,
       score REAL NOT NULL,
       generated_at TEXT NOT NULL,
       valid_until TEXT
     )`,
   );
+  try {
+    sql.exec('ALTER TABLE recommendations ADD COLUMN asset_symbol TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE recommendations ADD COLUMN asset_chain TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE recommendations ADD COLUMN asset_contract TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE recommendations ADD COLUMN asset_display_name TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE recommendations ADD COLUMN asset_image TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE recommendations ADD COLUMN asset_price_change_24h REAL');
+  } catch {
+    // Column already exists.
+  }
 
   sql.exec(
     `CREATE TABLE IF NOT EXISTS guide_prompts (

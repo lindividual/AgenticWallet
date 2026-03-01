@@ -1,13 +1,34 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getWalletPortfolio } from '../../api';
+import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getMarketShelves, getWalletPortfolio, type TopMarketAsset } from '../../api';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { BalanceHeader } from '../BalanceHeader';
+import { AssetListItem } from '../AssetListItem';
 
 type HomeScreenProps = {
   auth: AuthState;
   onOpenArticle: (articleId: string) => void;
+};
+
+function getRecommendationInitial(label: string): string {
+  const normalized = label.trim();
+  return normalized ? normalized[0].toUpperCase() : '?';
+}
+
+function formatPct(value: number | null | undefined): string {
+  if (!Number.isFinite(Number(value))) return '--';
+  const numeric = Number(value);
+  const sign = numeric > 0 ? '+' : '';
+  return `${sign}${numeric.toFixed(2)}%`;
+}
+
+type RecommendationDisplayAsset = {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  priceChangePct: number | null;
 };
 
 export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
@@ -30,6 +51,17 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
     refetchOnWindowFocus: true,
   });
 
+  const { data: shelfData } = useQuery({
+    queryKey: ['home-market-shelves'],
+    queryFn: () =>
+      getMarketShelves({
+        limitPerShelf: 10,
+      }),
+    staleTime: 60_000,
+    refetchInterval: 90_000,
+    refetchOnWindowFocus: true,
+  });
+
   const { data: dailyToday } = useQuery({
     queryKey: ['home-agent-daily-today'],
     queryFn: getAgentTodayDaily,
@@ -45,10 +77,40 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
     refetchOnWindowFocus: true,
   });
 
-  const recommendations = useMemo(
-    () => (recommendationsData?.recommendations ?? []).slice(0, 5),
-    [recommendationsData],
-  );
+  const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
+    const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
+    const marketAssets = (shelfData ?? []).flatMap((shelf) => shelf.assets);
+    const byChainContract = new Map<string, TopMarketAsset>();
+    const bySymbol = new Map<string, TopMarketAsset>();
+
+    for (const asset of marketAssets) {
+      const key = `${asset.chain.toLowerCase()}:${(asset.contract ?? '').toLowerCase()}`;
+      if (!byChainContract.has(key)) byChainContract.set(key, asset);
+      const symbol = (asset.symbol ?? '').trim().toUpperCase();
+      if (symbol && !bySymbol.has(symbol)) bySymbol.set(symbol, asset);
+    }
+
+    return recommended
+      .map((item) => {
+        const assetMeta = item.asset;
+        const symbol = (assetMeta?.symbol ?? item.title ?? '').trim().toUpperCase();
+        const chain = (assetMeta?.chain ?? '').trim().toLowerCase();
+        const contract = (assetMeta?.contract ?? '').trim().toLowerCase();
+        const exactKey = chain ? `${chain}:${contract}` : '';
+        const matched = (exactKey ? byChainContract.get(exactKey) : undefined) ?? (symbol ? bySymbol.get(symbol) : undefined);
+
+        const displaySymbol = (matched?.symbol ?? symbol ?? '').toUpperCase();
+        const displayName = matched?.name ?? assetMeta?.name ?? item.title ?? displaySymbol;
+        return {
+          id: item.id,
+          symbol: displaySymbol,
+          name: displayName,
+          image: matched?.image ?? assetMeta?.image ?? null,
+          priceChangePct: matched?.price_change_percentage_24h ?? assetMeta?.price_change_percentage_24h ?? null,
+        };
+      })
+      .filter((item) => Boolean(item.symbol || item.name));
+  }, [recommendationsData, shelfData]);
   const daily = dailyToday?.article ?? null;
   const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
   const topics = topicData?.articles ?? [];
@@ -117,18 +179,32 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
 
       <section className="bg-base-100">
         <h2 className="m-0 text-lg font-bold">{t('home.assetRecommendationsTitle')}</h2>
-        <div className="mt-3 flex flex-col gap-3">
+        <div className="mt-3 flex flex-col gap-1">
           {recommendations.length === 0 && (
             <p className="m-0 text-base text-base-content/70">{t('home.emptyRecommendations')}</p>
           )}
           {recommendations.map((item) => (
-            <article key={item.id} className="border border-base-300 bg-base-200 p-3">
-              <div className="flex items-center gap-2">
-                <span className="badge badge-sm badge-outline opacity-70">{item.kind}</span>
-                <p className="m-0 text-base font-semibold">{item.title}</p>
-              </div>
-              <p className="m-0 mt-1 text-sm text-base-content/70">{item.content}</p>
-            </article>
+            <AssetListItem
+              key={item.id}
+              className="bg-base-100 py-3"
+              leftIcon={
+                item.image ? (
+                  <img
+                    src={item.image}
+                    alt={item.symbol}
+                    className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                    {getRecommendationInitial(item.symbol || item.name)}
+                  </div>
+                )
+              }
+              leftPrimary={(item.symbol ?? '').toUpperCase()}
+              leftSecondary={item.name}
+              rightSecondary={formatPct(item.priceChangePct)}
+            />
           ))}
         </div>
       </section>

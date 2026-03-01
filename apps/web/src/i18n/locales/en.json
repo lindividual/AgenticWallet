@@ -121,6 +121,7 @@
     "subtitle": "Top gainers from Bitget Wallet",
     "refresh": "Refresh",
     "refreshing": "Refreshing...",
+    "pullToRefresh": "Pull to refresh",
     "syncTokens": "Sync token list",
     "ingestSuccess": "Token ingest completed: {{count}} imported",
     "ingestFailed": "Token ingest failed: {{message}}",

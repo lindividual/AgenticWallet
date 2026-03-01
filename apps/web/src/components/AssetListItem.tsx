@@ -45,14 +45,14 @@ export function AssetListItem({
         ) : null}
 
         {hasRightText ? (
-          <div className="min-w-0 text-right">
+          <div className="shrink-0 text-right">
             {rightPrimary ? (
-              <p className="m-0 break-words text-base font-semibold">
+              <p className="m-0 whitespace-nowrap text-base font-semibold tabular-nums">
                 {rightPrimary}
               </p>
             ) : null}
             {rightSecondary ? (
-              <p className="m-0 break-words text-sm text-base-content/60">
+              <p className="m-0 whitespace-nowrap text-sm text-base-content/60 tabular-nums">
                 {rightSecondary}
               </p>
             ) : null}

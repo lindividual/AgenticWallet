@@ -10,21 +10,13 @@ import { useToast } from '../../contexts/ToastContext';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { AssetListItem } from '../AssetListItem';
 import { BalanceHeader } from '../BalanceHeader';
+import { formatUsdAdaptive } from '../../utils/currency';
 
 type WalletScreenProps = {
   auth: AuthState;
 };
 
 type ActiveModalContent = 'topUp' | 'receive';
-
-function formatUsd(value: number, locale: string): string {
-  return new Intl.NumberFormat(locale, {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-}
 
 function formatTokenAmount(rawAmount: string | undefined, decimals: number | undefined): string {
   const amount = Number(rawAmount ?? 0);
@@ -264,7 +256,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
             }
             leftPrimary={asset.symbol ?? asset.name ?? t('wallet.unknownAsset')}
             leftSecondary={asset.name ?? t('wallet.token')}
-            rightPrimary={formatUsd(Number(asset.value_usd ?? 0), i18n.language)}
+            rightPrimary={formatUsdAdaptive(Number(asset.value_usd ?? 0), i18n.language)}
             rightSecondary={formatTokenAmount(asset.amount, asset.decimals)}
           />
         ))}

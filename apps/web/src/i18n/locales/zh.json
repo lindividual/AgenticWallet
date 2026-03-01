@@ -121,6 +121,7 @@
     "subtitle": "来自 Bitget Wallet 的涨幅榜",
     "refresh": "刷新",
     "refreshing": "刷新中...",
+    "pullToRefresh": "下拉刷新",
     "syncTokens": "同步 Token 列表",
     "ingestSuccess": "Token 收录完成：导入 {{count}} 条",
     "ingestFailed": "Token 收录失败：{{message}}",

@@ -121,6 +121,7 @@
     "subtitle": "أفضل العملات صعودًا من Bitget Wallet",
     "refresh": "تحديث",
     "refreshing": "جارٍ التحديث...",
+    "pullToRefresh": "اسحب للتحديث",
     "syncTokens": "مزامنة قائمة التوكنات",
     "ingestSuccess": "اكتمل إدخال التوكنات: {{count}}",
     "ingestFailed": "فشل إدخال التوكنات: {{message}}",

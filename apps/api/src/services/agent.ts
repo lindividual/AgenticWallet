@@ -14,6 +14,12 @@ export type AgentRecommendation = {
   id: string;
   category: string;
   asset_name: string;
+  asset_symbol: string | null;
+  asset_chain: string | null;
+  asset_contract: string | null;
+  asset_display_name: string | null;
+  asset_image: string | null;
+  asset_price_change_24h: number | null;
   reason: string;
   score: number;
   generated_at: string;

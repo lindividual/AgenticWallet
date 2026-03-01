@@ -124,6 +124,16 @@ export type TopMarketAsset = {
 
 export type TopAssetListName = 'topGainers' | 'topLosers' | 'topVolume' | 'marketCap' | 'trending';
 export type TopAssetSource = 'auto' | 'coingecko' | 'bitget';
+export type MarketShelf = {
+  id: string;
+  title: string;
+  description: string | null;
+  source: TopAssetSource;
+  name: TopAssetListName;
+  chains: string[];
+  category: string | null;
+  assets: TopMarketAsset[];
+};
 
 export type CoinDetail = {
   chain: string;
@@ -155,6 +165,14 @@ export type AgentRecommendation = {
   kind: string;
   title: string;
   content: string;
+  asset?: {
+    symbol: string;
+    chain: string | null;
+    contract: string | null;
+    name: string;
+    image: string | null;
+    price_change_percentage_24h: number | null;
+  };
   score?: number;
   created_at: string;
   valid_until?: string;
@@ -273,18 +291,35 @@ export async function getTopMarketAssets(params?: {
   name?: TopAssetListName;
   source?: TopAssetSource;
   chains?: string[];
+  category?: string;
 }): Promise<TopMarketAsset[]> {
   const query = new URLSearchParams();
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.name) query.set('name', params.name);
   if (params?.source) query.set('source', params.source);
   if (params?.chains?.length) query.set('chains', params.chains.join(','));
+  if (params?.category) query.set('category', params.category);
   const suffix = query.toString();
   const response = await getJson<{ assets: TopMarketAsset[] }>(
     `/v1/market/top-assets${suffix ? `?${suffix}` : ''}`,
     true,
   );
   return response.assets;
+}
+
+export async function getMarketShelves(params?: {
+  ids?: string[];
+  limitPerShelf?: number;
+}): Promise<MarketShelf[]> {
+  const query = new URLSearchParams();
+  if (params?.ids?.length) query.set('ids', params.ids.join(','));
+  if (params?.limitPerShelf) query.set('limitPerShelf', String(params.limitPerShelf));
+  const suffix = query.toString();
+  const response = await getJson<{ generatedAt: string; shelves: MarketShelf[] }>(
+    `/v1/market/shelves${suffix ? `?${suffix}` : ''}`,
+    true,
+  );
+  return response.shelves;
 }
 
 export async function getCoinDetail(chain: string, contract: string): Promise<CoinDetail> {

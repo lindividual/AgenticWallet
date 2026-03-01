@@ -2,11 +2,13 @@ import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { ingestTokenLists, listTokenCatalog } from '../services/market';
 import { fetchBitgetTokenDetail, fetchBitgetTokenKline } from '../services/bitgetWallet';
+import { getCoinGeckoCoinListSyncStatus, syncCoinGeckoCoinListPlatforms } from '../services/coingecko';
 import {
   fetchTopMarketAssets,
   normalizeTopAssetListName,
   normalizeTopAssetSource,
 } from '../services/marketTopAssets';
+import { fetchMarketShelves } from '../services/marketShelves';
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/market/tokens/ingest/run', async (c) => {
@@ -33,6 +35,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     const limit = Number.isFinite(limitRaw) ? limitRaw : 30;
     const name = normalizeTopAssetListName(c.req.query('name'));
     const source = normalizeTopAssetSource(c.req.query('source'));
+    const category = (c.req.query('category') ?? '').trim() || undefined;
     const chainsRaw = c.req.query('chains') ?? '';
     const chains = chainsRaw
       .split(',')
@@ -45,6 +48,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         name,
         limit,
         chains,
+        category,
       });
       return c.json({ assets });
     } catch (error) {
@@ -56,6 +60,56 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         502,
       );
     }
+  });
+
+  app.get('/v1/market/shelves', async (c) => {
+    const idsRaw = c.req.query('ids') ?? '';
+    const shelfIds = idsRaw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const limitRaw = Number(c.req.query('limitPerShelf'));
+    const limitPerShelf = Number.isFinite(limitRaw) ? limitRaw : undefined;
+
+    try {
+      const shelves = await fetchMarketShelves(c.env, {
+        shelfIds,
+        limitPerShelf,
+      });
+      return c.json({
+        generatedAt: new Date().toISOString(),
+        shelves,
+      });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'market_shelves_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.post('/v1/market/coingecko/platforms/sync', async (c) => {
+    const force = (c.req.query('force') ?? '').trim().toLowerCase() === 'true';
+    try {
+      const result = await syncCoinGeckoCoinListPlatforms(c.env, { force });
+      return c.json(result);
+    } catch (error) {
+      return c.json(
+        {
+          error: 'coingecko_platform_sync_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/market/coingecko/platforms/sync-status', async (c) => {
+    const status = await getCoinGeckoCoinListSyncStatus(c.env);
+    return c.json(status);
   });
 
   app.get('/v1/market/token-detail', async (c) => {
@@ -148,6 +202,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       },
       strategy: {
         topAssets: 'coingecko_first_with_bitget_fallback',
+        shelves: 'configured_multi_shelf_with_coingecko_priority',
         tokenDetail: 'bitget_wallet_tob',
         klines: 'bitget_wallet_tob',
       },

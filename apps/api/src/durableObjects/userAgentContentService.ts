@@ -34,6 +34,15 @@ type PortfolioSnapshotRow = {
   holdings_json?: string;
 };
 
+type RecommendationAssetSnapshot = {
+  symbol: string;
+  chain: string | null;
+  contract: string | null;
+  name: string | null;
+  image: string | null;
+  priceChange24h: number | null;
+};
+
 const DEFAULT_NEWS_FEEDS = [
   'https://www.coindesk.com/arc/outboundfeeds/rss/',
   'https://cointelegraph.com/rss',
@@ -108,6 +117,23 @@ function buildPortfolioContext(sql: SqlStorage): string {
     holdingsSummary ? `Top holdings: ${holdingsSummary}` : 'Top holdings: N/A',
     changeLine,
   ].join('\n');
+}
+
+function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): Map<string, RecommendationAssetSnapshot> {
+  const lookup = new Map<string, RecommendationAssetSnapshot>();
+  for (const asset of marketAssets) {
+    const symbol = (asset.symbol ?? '').trim().toUpperCase();
+    if (!symbol || lookup.has(symbol)) continue;
+    lookup.set(symbol, {
+      symbol,
+      chain: asset.chain ?? null,
+      contract: asset.contract ?? null,
+      name: asset.name ?? symbol,
+      image: asset.image ?? null,
+      priceChange24h: asset.price_change_percentage_24h ?? null,
+    });
+  }
+  return lookup;
 }
 
 export async function generateDailyDigestContent(_payload: Record<string, unknown>, deps: ContentDeps): Promise<void> {
@@ -254,6 +280,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
   const portfolioHoldings = getPortfolioHoldings(deps.sql);
 
   let rows = buildFallbackRecommendations(userTopAssets, portfolioHoldings, marketAssets);
+  const marketAssetLookup = buildRecommendationAssetLookup(marketAssets);
 
   const preferredLocale = deps.getPreferredLocale?.() ?? null;
   const language = resolveRecommendationLanguage(preferredLocale);
@@ -298,19 +325,33 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
   }
 
   for (const row of rows) {
+    const symbol = row.asset.trim().toUpperCase();
+    const snapshot = marketAssetLookup.get(symbol);
     deps.sql.exec(
       `INSERT INTO recommendations (
         id,
         category,
         asset_name,
+        asset_symbol,
+        asset_chain,
+        asset_contract,
+        asset_display_name,
+        asset_image,
+        asset_price_change_24h,
         reason,
         score,
         generated_at,
         valid_until
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       crypto.randomUUID(),
       row.category,
       row.asset,
+      symbol || null,
+      snapshot?.chain ?? null,
+      snapshot?.contract ?? null,
+      snapshot?.name ?? symbol ?? null,
+      snapshot?.image ?? null,
+      snapshot?.priceChange24h ?? null,
       row.reason,
       row.score,
       generatedAt,

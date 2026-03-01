@@ -5,24 +5,34 @@ import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
 import { HomeScreen } from './components/screens/HomeScreen';
+import { TokenDetailScreen } from './components/screens/TokenDetailScreen';
 import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
-import { setAgentPreferredLocale } from './api';
+import { setAgentPreferredLocale, type TopMarketAsset } from './api';
 import { useWalletApp } from './hooks/useWalletApp';
 
 const ARTICLE_EXIT_MS = 220;
+const TOKEN_EXIT_MS = 220;
 
 export function App() {
   const { i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const articleMatch = useMatch({ from: '/article/$articleId', shouldThrow: false });
+  const tokenMatch = useMatch({ from: '/token/$chain/$contract', shouldThrow: false });
   const routeArticleId = articleMatch?.params.articleId ?? null;
   const isArticleRoute = Boolean(routeArticleId);
+  const routeToken = tokenMatch?.params
+    ? { chain: tokenMatch.params.chain, contract: tokenMatch.params.contract }
+    : null;
+  const isTokenRoute = Boolean(routeToken);
 
   const [activeArticleId, setActiveArticleId] = useState<string | null>(routeArticleId);
   const [isArticleExiting, setIsArticleExiting] = useState(false);
   const articleExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [activeTokenRoute, setActiveTokenRoute] = useState(routeToken);
+  const [isTokenExiting, setIsTokenExiting] = useState(false);
+  const tokenExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     auth,
     authMode,
@@ -36,6 +46,9 @@ export function App() {
     () => () => {
       if (articleExitTimerRef.current) {
         clearTimeout(articleExitTimerRef.current);
+      }
+      if (tokenExitTimerRef.current) {
+        clearTimeout(tokenExitTimerRef.current);
       }
     },
     [],
@@ -57,6 +70,15 @@ export function App() {
 
     setActiveArticleId(null);
   }, [routeArticleId]);
+
+  useEffect(() => {
+    if (routeToken) {
+      setActiveTokenRoute(routeToken);
+      setIsTokenExiting(false);
+      return;
+    }
+    setActiveTokenRoute(null);
+  }, [routeToken?.chain, routeToken?.contract]);
 
   if (!auth) {
     return (
@@ -102,6 +124,33 @@ export function App() {
     }, ARTICLE_EXIT_MS);
   }
 
+  function handleOpenToken(token: TopMarketAsset) {
+    if (tokenExitTimerRef.current) {
+      clearTimeout(tokenExitTimerRef.current);
+      tokenExitTimerRef.current = null;
+    }
+    setIsTokenExiting(false);
+    setActiveTokenRoute({ chain: token.chain, contract: token.contract });
+    void navigate({
+      to: '/token/$chain/$contract',
+      params: { chain: token.chain, contract: token.contract },
+    });
+  }
+
+  function handleCloseToken() {
+    if (!activeTokenRoute || isTokenExiting) return;
+    setIsTokenExiting(true);
+    if (tokenExitTimerRef.current) {
+      clearTimeout(tokenExitTimerRef.current);
+    }
+    tokenExitTimerRef.current = setTimeout(() => {
+      void navigate({ to: '/trade' });
+      setIsTokenExiting(false);
+      setActiveTokenRoute(null);
+      tokenExitTimerRef.current = null;
+    }, TOKEN_EXIT_MS);
+  }
+
   function handleTabChange(tab: AppTab) {
     if (tab === 'home') {
       void navigate({ to: '/' });
@@ -118,7 +167,7 @@ export function App() {
     if (activeTab === 'home') {
       return <HomeScreen auth={authenticatedState} onOpenArticle={handleOpenArticle} />;
     }
-    if (activeTab === 'trade') return <TradeScreen />;
+    if (activeTab === 'trade') return <TradeScreen onOpenToken={handleOpenToken} />;
     return <WalletScreen auth={authenticatedState} />;
   }
 
@@ -129,11 +178,19 @@ export function App() {
           <div className={isArticleExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
             <ArticleReaderScreen articleId={activeArticleId} onBack={handleCloseArticle} />
           </div>
+        ) : activeTokenRoute ? (
+          <div className={isTokenExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
+            <TokenDetailScreen
+              chain={activeTokenRoute.chain}
+              contract={activeTokenRoute.contract}
+              onBack={handleCloseToken}
+            />
+          </div>
         ) : (
           renderBaseScreen()
         )}
       </div>
-      {!activeArticleId && <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />}
+      {!activeArticleId && !isTokenRoute && <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />}
     </>
   );
 }

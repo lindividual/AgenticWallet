@@ -24,6 +24,8 @@ BGW_API_SECRET=
 COINGECKO_API_KEY=
 # Optional: for pro key, you can set https://pro-api.coingecko.com/api/v3
 COINGECKO_API_BASE_URL=
+# Recommended when CoinGecko requires descriptive client identity
+COINGECKO_USER_AGENT=AgenticWallet-MVP/0.1 (market-shelves; +https://agentic-wallet.local)
 
 # Optional OpenNews / OpenTwitter data sources (from https://6551.io/mcp)
 OPENNEWS_TOKEN=

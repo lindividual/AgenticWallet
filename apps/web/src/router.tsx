@@ -29,7 +29,13 @@ const articleRoute = createRoute({
   component: App,
 });
 
-const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, articleRoute]);
+const tokenRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/token/$chain/$contract',
+  component: App,
+});
+
+const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, articleRoute, tokenRoute]);
 
 export const router = createRouter({ routeTree });
 
