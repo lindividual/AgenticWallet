@@ -108,6 +108,7 @@
     "assetRecommendationsTitle": "Asset Recommendations",
     "emptyRecommendations": "No recommendations yet. They will refresh from your activity.",
     "topicRecommendationsTitle": "Topic Recommendations",
+    "related": "Related",
     "emptyTopics": "No topic updates yet. New topics appear when trends are detected.",
     "readArticle": "Read article",
     "backToFeed": "Back to feed",
