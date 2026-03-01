@@ -423,7 +423,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
       {hasRelatedPanel && (
         <div className="fixed inset-x-0 bottom-0 z-30 flex justify-center px-3 pb-3">
           <section className="w-full max-w-105 rounded-2xl border border-base-300 bg-base-100/98 px-3 py-2 shadow-lg backdrop-blur">
-            <p className="m-0 text-xs font-semibold uppercase tracking-wide text-base-content/60">Related</p>
+            <p className="m-0 text-xs font-semibold uppercase tracking-wide text-base-content/60">{t('home.related')}</p>
             <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
               {relatedPills.map((asset) => {
                 const isUp = Number(asset.priceChangePct ?? 0) > 0;

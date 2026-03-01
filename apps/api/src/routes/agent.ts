@@ -32,6 +32,16 @@ function normalizePreferredLocale(raw: string | undefined): string | null {
   return first.toLowerCase();
 }
 
+function hasTopicSpecialAdminAccess(c: {
+  env: AppEnv['Bindings'];
+  req: { header: (name: string) => string | undefined };
+}): boolean {
+  const expected = c.env.TOPIC_SPECIAL_ADMIN_TOKEN?.trim();
+  if (!expected) return false;
+  const provided = (c.req.header('x-topic-special-admin-token') ?? '').trim();
+  return provided.length > 0 && provided === expected;
+}
+
 function toApiArticle(row: {
   id: string;
   article_type: string;
@@ -206,6 +216,29 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/agent/jobs/topic/run', async (c) => {
     const userId = c.get('userId');
     await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
+    const body = await c.req.json<{ topic?: string }>().catch(
+      () =>
+        ({
+          topic: undefined,
+        }) satisfies { topic?: string },
+    );
+    const normalizedTopic = typeof body.topic === 'string' ? body.topic.trim() : '';
+    const result = await enqueueUserAgentJob(c.env, userId, {
+      jobType: 'topic_generation',
+      runAt: new Date().toISOString(),
+      jobKey: `manual_topic_generation:${new Date().toISOString().slice(0, 16)}:${normalizedTopic || 'default'}`,
+      payload: normalizedTopic ? { topic: normalizedTopic } : { trigger: 'manual' },
+    });
+    await runUserAgentJobsNow(c.env, userId);
+    return c.json(result);
+  });
+
+  app.post('/v1/admin/topic-specials/run', async (c) => {
+    const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
+    if (!hasTopicSpecialAdminAccess(c)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const body = await c.req.json<{ force?: boolean }>().catch(
       () =>
         ({

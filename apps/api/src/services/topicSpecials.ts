@@ -115,6 +115,15 @@ export async function generateTopicSpecialBatch(
   const existingRows = await listTopicRowsInSlot(env.DB, slotKey);
   const existingCount = existingRows.length;
 
+  if (existingCount >= MAX_TOPIC_COUNT) {
+    return {
+      slotKey,
+      generated: 0,
+      skipped: true,
+      totalInSlot: existingCount,
+    };
+  }
+
   if (!options?.force && existingCount >= MIN_TOPIC_COUNT) {
     return {
       slotKey,
@@ -189,9 +198,23 @@ export async function generateTopicSpecialBatch(
     })
     .slice(0, MAX_TOPIC_COUNT);
 
+  const remainingCapacity = Math.max(MAX_TOPIC_COUNT - existingCount, 0);
+  if (remainingCapacity === 0) {
+    return {
+      slotKey,
+      generated: 0,
+      skipped: true,
+      totalInSlot: existingCount,
+    };
+  }
+
   const requiredNewCount = Math.max(MIN_TOPIC_COUNT - existingCount, 0);
-  const targetNewCount = Math.max(requiredNewCount, TARGET_TOPIC_COUNT - existingCount, 1);
-  const selectedDrafts = candidateDrafts.slice(0, Math.min(MAX_TOPIC_COUNT, targetNewCount));
+  const minWhenForced = options?.force === true ? 1 : 0;
+  const targetNewCount = Math.min(
+    remainingCapacity,
+    Math.max(requiredNewCount, TARGET_TOPIC_COUNT - existingCount, minWhenForced),
+  );
+  const selectedDrafts = candidateDrafts.slice(0, targetNewCount);
 
   let generated = 0;
   for (const draft of selectedDrafts) {
@@ -259,6 +282,15 @@ export async function generateTopicSpecialBatch(
         topicSlug,
         message: error instanceof Error ? error.message : String(error),
       });
+      try {
+        await env.AGENT_ARTICLES.delete(r2Key);
+      } catch (cleanupError) {
+        console.error('topic_special_r2_cleanup_failed', {
+          slotKey,
+          topicSlug,
+          message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      }
     }
   }
 
