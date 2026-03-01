@@ -22,7 +22,6 @@ import {
   normalizeOccurredAt,
   normalizeSqlNumber,
   normalizeSqlString,
-  retryBackoffMs,
   sanitizeLimit,
   tomorrowDate,
 } from './userAgentHelpers';
@@ -40,9 +39,20 @@ import { safeJsonParse } from '../utils/json';
 const OWNER_KEY = 'owner_user_id';
 const USER_LOCALE_KEY = 'user_locale';
 const REQUEST_LOCALE_KEY = 'request_locale';
-const MAX_JOB_RETRIES = 3;
 const HOURLY_SNAPSHOT_RETENTION_HOURS = 72;
 const DAILY_SNAPSHOT_RETENTION_DAYS = 180;
+const TOPIC_SPECIAL_FETCH_MULTIPLIER = 3;
+const TOPIC_SPECIAL_MIN_FETCH = 24;
+
+type TopicSpecialArticleIndexRow = {
+  id: string;
+  title: string;
+  summary: string;
+  r2_key: string;
+  related_assets_json: string;
+  generated_at: string;
+  status: string;
+};
 
 export class UserAgentDO extends DurableObject<Bindings> {
   constructor(ctx: DurableObjectState, env: Bindings) {
@@ -95,7 +105,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     await this.ensureTodayDailyReady();
     const limit = options?.limit ?? 20;
     const articleType = options?.articleType ?? null;
-    return { articles: this.getArticles(limit, articleType) };
+    return { articles: await this.getArticles(limit, articleType) };
   }
 
   async getArticleDetailRpc(
@@ -382,7 +392,38 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .toArray() as RecommendationRow[];
   }
 
-  private getArticles(limit = 20, articleType: string | null = null): ArticleRow[] {
+  private async getArticles(limit = 20, articleType: string | null = null): Promise<ArticleRow[]> {
+    const safeLimit = sanitizeLimit(limit, 1, 100);
+    const normalizedType = articleType?.trim().toLowerCase() ?? null;
+
+    if (normalizedType === 'topic') {
+      return this.getPersonalizedTopicArticles(safeLimit);
+    }
+
+    if (normalizedType) {
+      return this.getLocalArticles(safeLimit, normalizedType);
+    }
+
+    const mergeLimit = Math.min(100, Math.max(safeLimit * 2, 20));
+    const [localArticles, topicArticles] = await Promise.all([
+      Promise.resolve(this.getLocalArticles(mergeLimit, null)),
+      this.getPersonalizedTopicArticles(mergeLimit),
+    ]);
+
+    const deduped = new Map<string, ArticleRow>();
+    for (const article of [...localArticles, ...topicArticles]) {
+      if (!deduped.has(article.id)) {
+        deduped.set(article.id, article);
+      }
+    }
+
+    return Array.from(deduped.values())
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+      .slice(0, safeLimit);
+  }
+
+  private getLocalArticles(limit = 20, articleType: string | null = null): ArticleRow[] {
+    const safeLimit = sanitizeLimit(limit, 1, 100);
     const normalizedType = articleType?.trim();
     if (normalizedType) {
       return this.ctx.storage.sql
@@ -401,7 +442,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
            ORDER BY created_at DESC
            LIMIT ?`,
           normalizedType,
-          sanitizeLimit(limit, 1, 100),
+          safeLimit,
         )
         .toArray() as ArticleRow[];
     }
@@ -420,9 +461,162 @@ export class UserAgentDO extends DurableObject<Bindings> {
          FROM article_index
          ORDER BY created_at DESC
          LIMIT ?`,
-        sanitizeLimit(limit, 1, 100),
+        safeLimit,
       )
       .toArray() as ArticleRow[];
+  }
+
+  private async getPersonalizedTopicArticles(limit = 20): Promise<ArticleRow[]> {
+    const safeLimit = sanitizeLimit(limit, 1, 100);
+    const fetchLimit = Math.min(100, Math.max(safeLimit * TOPIC_SPECIAL_FETCH_MULTIPLIER, TOPIC_SPECIAL_MIN_FETCH));
+    let rows: { results?: TopicSpecialArticleIndexRow[] };
+    try {
+      rows = await this.env.DB.prepare(
+        `SELECT
+           id,
+           title,
+           summary,
+           r2_key,
+           related_assets_json,
+           generated_at,
+           status
+         FROM topic_special_articles
+         WHERE status = 'ready'
+         ORDER BY generated_at DESC
+         LIMIT ?`,
+      )
+        .bind(fetchLimit)
+        .all<TopicSpecialArticleIndexRow>();
+    } catch (error) {
+      console.error('topic_special_query_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+
+    const topicRows = rows.results ?? [];
+    if (topicRows.length === 0) return [];
+
+    const eventAssets = this.getUserTopEventAssets(12);
+    const eventWeight = new Map<string, number>();
+    for (let index = 0; index < eventAssets.length; index += 1) {
+      eventWeight.set(eventAssets[index], Math.max(1, 12 - index));
+    }
+    const holdingAssets = new Set(this.getUserTopHoldingAssets(12));
+
+    const scored = topicRows.map((row, index) => {
+      const relatedAssets = this.parseRelatedAssets(row.related_assets_json);
+      const affinityScore = relatedAssets.reduce((score, asset) => {
+        const eventScore = (eventWeight.get(asset) ?? 0) * 2;
+        const holdingScore = holdingAssets.has(asset) ? 3 : 0;
+        return score + eventScore + holdingScore;
+      }, 0);
+      const ageMs = Date.now() - Date.parse(row.generated_at);
+      const ageHours = Number.isFinite(ageMs) ? ageMs / (60 * 60 * 1000) : 999;
+      const recencyScore = Math.max(0, 8 - ageHours / 12);
+      return {
+        row,
+        relatedAssets,
+        rankScore: affinityScore * 10 + recencyScore + Math.max(0, 2 - index * 0.1),
+      };
+    });
+
+    scored.sort((a, b) => {
+      if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
+      return Date.parse(b.row.generated_at) - Date.parse(a.row.generated_at);
+    });
+
+    return scored.slice(0, safeLimit).map((item) => this.toTopicArticleRow(item.row, item.relatedAssets));
+  }
+
+  private getUserTopEventAssets(limit = 12): string[] {
+    const events = this.getLatestEvents(200);
+    const counts = new Map<string, number>();
+    for (const event of events) {
+      const payload = safeJsonParse<Record<string, unknown>>(event.payload_json) ?? {};
+      const candidates = [payload.asset, payload.symbol, payload.token]
+        .map((value) => this.normalizeAssetSymbol(value))
+        .filter((value): value is string => Boolean(value));
+      const weight = event.event_type === 'trade_buy' || event.event_type === 'trade_sell'
+        ? 3
+        : event.event_type === 'asset_holding_snapshot'
+          ? 2
+          : 1;
+      for (const symbol of candidates) {
+        counts.set(symbol, (counts.get(symbol) ?? 0) + weight);
+      }
+    }
+
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([symbol]) => symbol);
+  }
+
+  private getUserTopHoldingAssets(limit = 12): string[] {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT holdings_json
+         FROM portfolio_snapshots_hourly
+         ORDER BY bucket_hour_utc DESC
+         LIMIT 1`,
+      )
+      .toArray()[0] as { holdings_json?: string } | undefined;
+    const holdings = safeJsonParse<Array<{ symbol?: string; value_usd?: number }>>(normalizeSqlString(row?.holdings_json) ?? '[]');
+    if (!holdings || !Array.isArray(holdings)) return [];
+
+    const sorted = holdings
+      .filter((item) => Number(item.value_usd ?? 0) > 0)
+      .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0))
+      .map((item) => this.normalizeAssetSymbol(item.symbol))
+      .filter((value): value is string => Boolean(value));
+
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const symbol of sorted) {
+      if (seen.has(symbol)) continue;
+      seen.add(symbol);
+      deduped.push(symbol);
+      if (deduped.length >= limit) break;
+    }
+    return deduped;
+  }
+
+  private normalizeAssetSymbol(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!normalized) return null;
+    if (normalized.length < 2 || normalized.length > 16) return null;
+    return normalized;
+  }
+
+  private parseRelatedAssets(raw: string): string[] {
+    const parsed = safeJsonParse<unknown[]>(raw) ?? [];
+    if (!Array.isArray(parsed)) return [];
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const item of parsed) {
+      const symbol = this.normalizeAssetSymbol(item);
+      if (!symbol || seen.has(symbol)) continue;
+      seen.add(symbol);
+      deduped.push(symbol);
+      if (deduped.length >= 8) break;
+    }
+    return deduped;
+  }
+
+  private toTopicArticleRow(row: TopicSpecialArticleIndexRow, relatedAssets: string[]): ArticleRow {
+    const tags = ['topic', 'special', ...relatedAssets.map((asset) => `asset:${asset}`)];
+    return {
+      id: row.id,
+      article_type: 'topic',
+      title: row.title,
+      summary: row.summary,
+      r2_key: row.r2_key,
+      tags_json: JSON.stringify(tags),
+      created_at: row.generated_at,
+      status: row.status || 'ready',
+    };
   }
 
   private async getArticleDetail(articleId: string): Promise<{ article: ArticleRow; markdown: string } | null> {
@@ -444,14 +638,46 @@ export class UserAgentDO extends DurableObject<Bindings> {
       )
       .toArray()[0] as ArticleRow | undefined;
 
-    if (!article) {
-      return null;
+    if (article) {
+      const markdown = await this.getArticleMarkdown(article.id, article.r2_key);
+      return {
+        article,
+        markdown,
+      };
     }
 
-    const markdown = await this.getArticleMarkdown(article.id, article.r2_key);
+    let topicRow: TopicSpecialArticleIndexRow | null = null;
+    try {
+      topicRow = await this.env.DB.prepare(
+        `SELECT
+           id,
+           title,
+           summary,
+           r2_key,
+           related_assets_json,
+           generated_at,
+           status
+         FROM topic_special_articles
+         WHERE id = ?
+         LIMIT 1`,
+      )
+        .bind(articleId)
+        .first<TopicSpecialArticleIndexRow>();
+    } catch (error) {
+      console.error('topic_special_detail_query_failed', {
+        articleId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+    if (!topicRow) return null;
 
+    const relatedAssets = this.parseRelatedAssets(topicRow.related_assets_json);
+    const topicArticle = this.toTopicArticleRow(topicRow, relatedAssets);
+    const object = await this.env.AGENT_ARTICLES.get(topicRow.r2_key);
+    const markdown = object ? await object.text() : '';
     return {
-      article,
+      article: topicArticle,
       markdown,
     };
   }

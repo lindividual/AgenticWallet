@@ -4,6 +4,7 @@ import { registerProtectedRoutes } from './routes/protected';
 import { registerPublicRoutes } from './routes/public';
 import type { AppEnv } from './types';
 import { ingestTokenLists } from './services/market';
+import { generateTopicSpecialBatch } from './services/topicSpecials';
 export { UserAgentDO } from './durableObjects/userAgentDO';
 
 const app = new Hono<AppEnv>();
@@ -28,6 +29,10 @@ export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: AppEnv['Bindings'], _ctx: ExecutionContext): Promise<void> {
     const cron = event.cron ?? '';
+    if (matchesCron(cron, '0 */12 * * *')) {
+      await generateTopicSpecialBatch(env);
+      return;
+    }
     if (matchesCron(cron, '0 0 * * *')) {
       await ingestTokenLists(env);
       return;

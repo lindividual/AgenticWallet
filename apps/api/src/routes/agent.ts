@@ -12,6 +12,7 @@ import {
   syncUserAgentRequestLocale,
 } from '../services/agent';
 import { getLlmStatus } from '../services/llm';
+import { generateTopicSpecialBatch } from '../services/topicSpecials';
 import type { AppEnv } from '../types';
 import { safeJsonParse } from '../utils/json';
 import { nowIso } from '../utils/time';
@@ -205,21 +206,23 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/agent/jobs/topic/run', async (c) => {
     const userId = c.get('userId');
     await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    const body = await c.req.json<{ topic?: string }>().catch(
+    const body = await c.req.json<{ force?: boolean }>().catch(
       () =>
         ({
-          topic: undefined,
-        }) satisfies { topic?: string },
+          force: undefined,
+        }) satisfies { force?: boolean },
     );
-    const normalizedTopic = typeof body.topic === 'string' ? body.topic.trim() : '';
-    const result = await enqueueUserAgentJob(c.env, userId, {
-      jobType: 'topic_generation',
-      runAt: new Date().toISOString(),
-      jobKey: `manual_topic_generation:${new Date().toISOString().slice(0, 16)}:${normalizedTopic || 'default'}`,
-      payload: normalizedTopic ? { topic: normalizedTopic } : { trigger: 'manual' },
+    const result = await generateTopicSpecialBatch(c.env, {
+      force: body.force === true,
     });
-    await runUserAgentJobsNow(c.env, userId);
-    return c.json(result);
+    return c.json({
+      ok: true,
+      jobId: `topic_special:${result.slotKey}`,
+      deduped: result.skipped,
+      slotKey: result.slotKey,
+      generated: result.generated,
+      totalInSlot: result.totalInSlot,
+    });
   });
 
   app.post('/v1/agent/recommendations/mock', async (c) => {
