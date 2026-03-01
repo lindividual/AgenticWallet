@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   getCoinDetail,
+  ingestAgentEvent,
   getTokenKline,
   getTopMarketAssets,
   type KlinePeriod,
@@ -96,6 +97,7 @@ export function TradeScreen() {
       getTopMarketAssets({
         limit: 30,
         name: 'topGainers',
+        source: 'auto',
         chains: ['eth', 'bnb', 'base'],
       }),
     staleTime: 60_000,
@@ -154,6 +156,16 @@ export function TradeScreen() {
     chartLine.length > 0
       ? chartLine[chartLine.length - 1].value
       : detail?.currentPriceUsd ?? selected?.current_price ?? 0;
+
+  useEffect(() => {
+    if (!selected) return;
+    ingestAgentEvent('asset_viewed', {
+      asset: selected.symbol?.toUpperCase(),
+      chain: selected.chain,
+      contract: selected.contract,
+      source: 'trade_detail',
+    }).catch(() => undefined);
+  }, [selected?.chain, selected?.contract, selected?.symbol]);
 
   async function switchKlinePeriod(nextPeriod: KlinePeriod): Promise<void> {
     if (!selected || nextPeriod === klinePeriod || pendingKlinePeriod) return;

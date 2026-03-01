@@ -20,6 +20,11 @@ LLM_API_KEY=replace-with-llm-api-key
 BGW_API_KEY=
 BGW_API_SECRET=
 
+# Optional CoinGecko API override (without key uses public free tier)
+COINGECKO_API_KEY=
+# Optional: for pro key, you can set https://pro-api.coingecko.com/api/v3
+COINGECKO_API_BASE_URL=
+
 # Optional OpenNews / OpenTwitter data sources (from https://6551.io/mcp)
 OPENNEWS_TOKEN=
 TWITTER_TOKEN=

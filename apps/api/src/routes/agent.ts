@@ -92,39 +92,17 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     const userId = c.get('userId');
     await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const doRecommendations = await listUserAgentRecommendations(c.env, userId, 10);
-    if (doRecommendations.length > 0) {
-      return c.json({
-        recommendations: doRecommendations.map((row) => ({
-          id: row.id,
-          kind: row.category,
-          title: row.asset_name,
-          content: row.reason,
-          score: row.score,
-          created_at: row.generated_at,
-          valid_until: row.valid_until,
-          source: 'do',
-        })),
-      });
-    }
-
-    const rows = await c.env.DB.prepare(
-      `SELECT id, kind, title, content, created_at
-       FROM recommendations
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 10`,
-    )
-      .bind(userId)
-      .all<{
-        id: string;
-        kind: string;
-        title: string;
-        content: string;
-        created_at: string;
-      }>();
-
     return c.json({
-      recommendations: rows.results.map((row) => ({ ...row, source: 'd1' })),
+      recommendations: doRecommendations.map((row) => ({
+        id: row.id,
+        kind: row.category,
+        title: row.asset_name,
+        content: row.reason,
+        score: row.score,
+        created_at: row.generated_at,
+        valid_until: row.valid_until,
+        source: 'do',
+      })),
     });
   });
 

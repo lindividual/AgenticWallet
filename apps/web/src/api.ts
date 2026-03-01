@@ -122,6 +122,9 @@ export type TopMarketAsset = {
   risk_level: string | null;
 };
 
+export type TopAssetListName = 'topGainers' | 'topLosers' | 'topVolume' | 'marketCap' | 'trending';
+export type TopAssetSource = 'auto' | 'coingecko' | 'bitget';
+
 export type CoinDetail = {
   chain: string;
   contract: string;
@@ -267,12 +270,14 @@ export async function runMarketTokenIngest(): Promise<{ ok: true; imported: numb
 
 export async function getTopMarketAssets(params?: {
   limit?: number;
-  name?: 'topGainers' | 'topLosers';
+  name?: TopAssetListName;
+  source?: TopAssetSource;
   chains?: string[];
 }): Promise<TopMarketAsset[]> {
   const query = new URLSearchParams();
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.name) query.set('name', params.name);
+  if (params?.source) query.set('source', params.source);
   if (params?.chains?.length) query.set('chains', params.chains.join(','));
   const suffix = query.toString();
   const response = await getJson<{ assets: TopMarketAsset[] }>(

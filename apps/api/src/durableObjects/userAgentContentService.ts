@@ -1,5 +1,6 @@
 import { generateWithLlm, getLlmErrorInfo, getLlmStatus } from '../services/llm';
-import { fetchBitgetTopMarketAssets, type BitgetTopMarketAsset } from '../services/bitgetWallet';
+import type { MarketTopAsset } from '../services/bitgetWallet';
+import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { fetchOpenNewsCryptoNews, fetchOpenTwitterCryptoTweets, type NewsItem, type TweetItem } from '../services/openNews';
 import type { Bindings } from '../types';
 import {
@@ -146,7 +147,7 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     fetchNewsHeadlines(deps.env),
     fetchOpenNewsCryptoNews(deps.env, { keywords: searchKeywords, limit: 8 }),
     fetchOpenTwitterCryptoTweets(deps.env, { keywords: searchKeywords, limit: 6 }),
-    fetchBitgetTopMarketAssets(deps.env, { name: 'topGainers', limit: 10 }).catch(() => [] as BitgetTopMarketAsset[]),
+    fetchTopMarketAssets(deps.env, { name: 'topGainers', limit: 10, source: 'auto' }).catch(() => [] as MarketTopAsset[]),
   ]);
 
   let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary, language.localeCode);
@@ -242,11 +243,11 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
 
   deps.sql.exec('DELETE FROM recommendations WHERE generated_at < ?', dayStart);
 
-  let marketAssets: BitgetTopMarketAsset[] = [];
+  let marketAssets: MarketTopAsset[] = [];
   try {
-    marketAssets = await fetchBitgetTopMarketAssets(deps.env, { name: 'topGainers', limit: 20 });
+    marketAssets = await fetchTopMarketAssets(deps.env, { name: 'topGainers', limit: 20, source: 'auto' });
   } catch {
-    // Bitget API may be unavailable; continue with empty market data.
+    // Market APIs may be unavailable; continue with empty market data.
   }
 
   const userTopAssets = eventSummary.topAssets.slice(0, 5);
@@ -430,7 +431,7 @@ function buildDailyDigestUserPrompt(
   language: DailyLanguage,
   openNewsItems: NewsItem[] = [],
   twitterItems: TweetItem[] = [],
-  marketAssets: BitgetTopMarketAsset[] = [],
+  marketAssets: MarketTopAsset[] = [],
 ): string {
   const eventLines = Object.entries(eventSummary.counts)
     .sort((a, b) => b[1] - a[1])
@@ -488,7 +489,7 @@ function buildDailyDigestUserPrompt(
   ];
 
   if (marketSection) {
-    sections.push('', '--- Market Trending (Bitget) ---', marketSection);
+    sections.push('', '--- Market Trending (CoinGecko + Bitget) ---', marketSection);
   }
 
   sections.push(
@@ -535,7 +536,7 @@ function buildRecommendationSystemPrompt(language: {
 function buildRecommendationUserPrompt(
   eventSummary: { counts: Record<string, number>; topAssets: string[] },
   portfolioContext: string,
-  marketAssets: BitgetTopMarketAsset[],
+  marketAssets: MarketTopAsset[],
   userTopAssets: string[],
   language: { reasonLengthHint: string },
 ): string {
@@ -559,7 +560,7 @@ function buildRecommendationUserPrompt(
     `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
     `Top interacted assets: ${userTopAssets.join(', ') || 'N/A'}`,
     ``,
-    `--- Market Trending (Bitget) ---`,
+    `--- Market Trending (CoinGecko + Bitget) ---`,
     marketLines || '  No market data available.',
     ``,
     `Return a JSON array with exactly 5 objects. Each object must have:`,

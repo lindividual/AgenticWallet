@@ -1,7 +1,12 @@
 import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { ingestTokenLists, listTokenCatalog } from '../services/market';
-import { fetchBitgetTokenDetail, fetchBitgetTokenKline, fetchBitgetTopMarketAssets } from '../services/bitgetWallet';
+import { fetchBitgetTokenDetail, fetchBitgetTokenKline } from '../services/bitgetWallet';
+import {
+  fetchTopMarketAssets,
+  normalizeTopAssetListName,
+  normalizeTopAssetSource,
+} from '../services/marketTopAssets';
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/market/tokens/ingest/run', async (c) => {
@@ -26,7 +31,8 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/market/top-assets', async (c) => {
     const limitRaw = Number(c.req.query('limit'));
     const limit = Number.isFinite(limitRaw) ? limitRaw : 30;
-    const name = c.req.query('name') ?? 'topGainers';
+    const name = normalizeTopAssetListName(c.req.query('name'));
+    const source = normalizeTopAssetSource(c.req.query('source'));
     const chainsRaw = c.req.query('chains') ?? '';
     const chains = chainsRaw
       .split(',')
@@ -34,7 +40,8 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       .filter(Boolean);
 
     try {
-      const assets = await fetchBitgetTopMarketAssets(c.env, {
+      const assets = await fetchTopMarketAssets(c.env, {
+        source,
         name,
         limit,
         chains,
@@ -43,7 +50,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     } catch (error) {
       return c.json(
         {
-          error: 'bitget_top_assets_failed',
+          error: 'market_top_assets_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,
@@ -107,11 +114,17 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/market/sources', (c) => {
     return c.json({
       realtime: {
-        mode: 'signed_rest',
+        mode: 'mixed_proxy',
         providers: [
+          {
+            name: 'coingecko',
+            rest: 'https://api.coingecko.com/api/v3/coins/markets',
+            use_for: ['topGainers', 'topLosers', 'topVolume', 'marketCap', 'trending'],
+          },
           {
             name: 'bitget_wallet_tob',
             rest: 'https://bopenapi.bgwapi.io/bgw-pro/market/v3/topRank/detail',
+            use_for: ['fallback_top_assets'],
           },
         ],
       },
@@ -133,7 +146,12 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
           },
         ],
       },
-      note: 'Backend proxies Bitget Wallet ToB market/token/kline APIs.',
+      strategy: {
+        topAssets: 'coingecko_first_with_bitget_fallback',
+        tokenDetail: 'bitget_wallet_tob',
+        klines: 'bitget_wallet_tob',
+      },
+      note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Kline and token detail remain from Bitget.',
     });
   });
 }

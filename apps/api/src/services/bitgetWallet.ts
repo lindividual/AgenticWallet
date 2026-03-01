@@ -13,6 +13,8 @@ type BitgetEnvelope<T> = {
   data?: T;
 };
 
+export type TopAssetListName = 'topGainers' | 'topLosers' | 'topVolume' | 'marketCap' | 'trending';
+
 type BitgetTopRankRow = {
   chain?: string;
   contract?: string;
@@ -150,7 +152,7 @@ async function bitgetPost<TData>(
   return (await response.json()) as BitgetEnvelope<TData>;
 }
 
-export type BitgetTopMarketAsset = {
+export type MarketTopAsset = {
   id: string;
   chain: string;
   contract: string;
@@ -165,14 +167,16 @@ export type BitgetTopMarketAsset = {
   risk_level: string | null;
 };
 
+export type BitgetTopMarketAsset = MarketTopAsset;
+
 export async function fetchBitgetTopMarketAssets(
   env: Bindings,
   options?: {
-    name?: string;
+    name?: TopAssetListName;
     limit?: number;
     chains?: string[];
   },
-): Promise<BitgetTopMarketAsset[]> {
+): Promise<MarketTopAsset[]> {
   const listName = options?.name === 'topLosers' ? 'topLosers' : 'topGainers';
   const limit = clampInt(options?.limit ?? 30, 1, 100);
   const chainFilter = new Set(
