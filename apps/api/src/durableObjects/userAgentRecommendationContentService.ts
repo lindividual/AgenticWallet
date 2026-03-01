@@ -1,7 +1,7 @@
 import { generateWithLlm, getLlmErrorInfo, getLlmStatus } from '../services/llm';
 import type { MarketTopAsset } from '../services/bitgetWallet';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
-import { getSupportedMarketChains } from '../services/supportedChains';
+import { getSupportedMarketChains } from '../config/appConfig';
 import {
   buildFallbackRecommendations,
   isoDate,

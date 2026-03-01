@@ -2,6 +2,7 @@ export type ChainConfig = {
   chainId: number;
   name: string;
   symbol: string;
+  marketChain: 'eth' | 'base' | 'bnb';
 };
 
 export type AppConfig = {
@@ -11,8 +12,17 @@ export type AppConfig = {
 
 export const APP_CONFIG: AppConfig = {
   supportedChains: [
-    { chainId: 11155111, name: 'Sepolia', symbol: 'ETH' },
-    { chainId: 84532, name: 'Base Sepolia', symbol: 'ETH' },
+    { chainId: 1, name: 'Ethereum', symbol: 'ETH', marketChain: 'eth' },
+    { chainId: 8453, name: 'Base', symbol: 'ETH', marketChain: 'base' },
+    { chainId: 56, name: 'BNB Chain', symbol: 'BNB', marketChain: 'bnb' },
   ],
-  defaultReceiveTokens: ['ETH', 'USDC', 'USDT'],
+  defaultReceiveTokens: ['ETH', 'USDC', 'USDT', 'BNB'],
 };
+
+export function getSupportedChainIds(): number[] {
+  return APP_CONFIG.supportedChains.map((item) => item.chainId);
+}
+
+export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb'> {
+  return [...new Set(APP_CONFIG.supportedChains.map((item) => item.marketChain))];
+}

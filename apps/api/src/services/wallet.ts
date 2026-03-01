@@ -1,7 +1,7 @@
 import { getMEEVersion, toMultichainNexusAccount } from '@biconomy/abstractjs';
 import { http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { baseSepolia, sepolia } from 'viem/chains';
+import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, WalletSummary } from '../types';
 import { generatePrivateKeyHex, encryptString } from '../utils/crypto';
 import { requiredEnv, resolveMeeVersion } from '../utils/env';
@@ -46,11 +46,12 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
   const privateKey = generatePrivateKeyHex();
   const smartAccount = await createBiconomyMultichainAccount(env, privateKey);
   const chainAccounts = [
-    { chainId: sepolia.id, address: smartAccount.addressOn(sepolia.id, true) },
-    { chainId: baseSepolia.id, address: smartAccount.addressOn(baseSepolia.id, true) },
+    { chainId: mainnet.id, address: smartAccount.addressOn(mainnet.id, true) },
+    { chainId: base.id, address: smartAccount.addressOn(base.id, true) },
+    { chainId: bsc.id, address: smartAccount.addressOn(bsc.id, true) },
   ];
   const primaryAddress =
-    chainAccounts.find((x) => x.chainId === sepolia.id)?.address ?? chainAccounts[0].address;
+    chainAccounts.find((x) => x.chainId === mainnet.id)?.address ?? chainAccounts[0].address;
   const encryptedPrivateKey = await encryptString(privateKey, env.APP_SECRET);
 
   const now = nowIso();
@@ -108,6 +109,7 @@ export async function getWalletWithPrivateKey(
 export async function createBiconomyMultichainAccount(env: Bindings, privateKey: `0x${string}`) {
   const ethereumRpcUrl = requiredEnv(env.ETHEREUM_RPC_URL, 'ETHEREUM_RPC_URL');
   const baseRpcUrl = requiredEnv(env.BASE_RPC_URL, 'BASE_RPC_URL');
+  const bnbRpcUrl = requiredEnv(env.BNB_RPC_URL, 'BNB_RPC_URL');
   const version = resolveMeeVersion(env.BICONOMY_MEE_VERSION);
   const signer = privateKeyToAccount(privateKey);
 
@@ -115,13 +117,18 @@ export async function createBiconomyMultichainAccount(env: Bindings, privateKey:
     signer,
     chainConfigurations: [
       {
-        chain: sepolia,
+        chain: mainnet,
         transport: http(ethereumRpcUrl),
         version: getMEEVersion(version),
       },
       {
-        chain: baseSepolia,
+        chain: base,
         transport: http(baseRpcUrl),
+        version: getMEEVersion(version),
+      },
+      {
+        chain: bsc,
+        transport: http(bnbRpcUrl),
         version: getMEEVersion(version),
       },
     ],

@@ -1,7 +1,7 @@
 import type { Bindings } from '../types';
 import type { MarketTopAsset, TopAssetListName } from './bitgetWallet';
 import { fetchTopMarketAssets, type TopAssetSource } from './marketTopAssets';
-import { getSupportedMarketChains } from './supportedChains';
+import { getSupportedMarketChains } from '../config/appConfig';
 
 type MarketShelfRow = {
   id: string;

@@ -9,7 +9,7 @@ import {
   type Chain,
   type Hash,
 } from 'viem';
-import { baseSepolia, sepolia } from 'viem/chains';
+import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, TransferQuoteRequest, TransferQuoteResponse } from '../types';
 import { requiredEnv } from '../utils/env';
 import { decryptString } from '../utils/crypto';
@@ -60,16 +60,22 @@ export type PreparedTransfer = {
 };
 
 function resolveChainConfig(env: Bindings, chainId: number): ChainRuntimeConfig {
-  if (chainId === sepolia.id) {
+  if (chainId === mainnet.id) {
     return {
-      chain: sepolia,
+      chain: mainnet,
       rpcUrl: requiredEnv(env.ETHEREUM_RPC_URL, 'ETHEREUM_RPC_URL'),
     };
   }
-  if (chainId === baseSepolia.id) {
+  if (chainId === base.id) {
     return {
-      chain: baseSepolia,
+      chain: base,
       rpcUrl: requiredEnv(env.BASE_RPC_URL, 'BASE_RPC_URL'),
+    };
+  }
+  if (chainId === bsc.id) {
+    return {
+      chain: bsc,
+      rpcUrl: requiredEnv(env.BNB_RPC_URL, 'BNB_RPC_URL'),
     };
   }
   throw new Error('unsupported_chain');

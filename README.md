@@ -46,7 +46,6 @@ cp apps/web/.env.example apps/web/.env
   - `COINGECKO_API_KEY` (optional, public free tier works without key)
   - `COINGECKO_API_BASE_URL` (optional, use `https://pro-api.coingecko.com/api/v3` for pro key)
   - `COINGECKO_USER_AGENT` (recommended, e.g. `AgenticWallet-MVP/0.1 (...)`)
-  - `PORTFOLIO_CHAIN_IDS` (optional: `mainnet`, `testnet`, or chain id list like `1,8453,137`)
   - `ETHEREUM_RPC_URL`
   - `BASE_RPC_URL`
   - `BNB_RPC_URL`

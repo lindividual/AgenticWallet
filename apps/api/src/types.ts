@@ -7,7 +7,6 @@ export type Bindings = {
   APP_SECRET: string;
   WEBAUTHN_RP_NAME: string;
   SIM_API_KEY?: string;
-  PORTFOLIO_CHAIN_IDS?: string;
   WEBAUTHN_REQUIRE_UV?: string;
   ETHEREUM_RPC_URL?: string;
   BASE_RPC_URL?: string;

@@ -1,5 +1,6 @@
 import type { Bindings } from '../types';
 import { nowIso } from '../utils/time';
+import { getSupportedChainIds } from '../config/appConfig';
 
 type SimBalanceRow = {
   chain: string;
@@ -69,19 +70,6 @@ function hasPositiveAmount(rawAmount: string | undefined): boolean {
   return Number.isFinite(asNumber) && asNumber > 0;
 }
 
-function resolvePortfolioChainIds(raw: string | undefined): string {
-  const normalized = raw?.trim();
-  if (!normalized) return 'mainnet';
-  if (normalized === 'mainnet' || normalized === 'testnet') return normalized;
-  const isValidList = /^[0-9,\s]+$/.test(normalized);
-  if (!isValidList) return 'mainnet';
-  return normalized
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .join(',');
-}
-
 export async function fetchWalletPortfolio(
   env: Bindings,
   walletAddress: string,
@@ -91,7 +79,7 @@ export async function fetchWalletPortfolio(
     throw new Error('sim_api_key_not_configured');
   }
 
-  const chainIds = resolvePortfolioChainIds(env.PORTFOLIO_CHAIN_IDS);
+  const chainIds = getSupportedChainIds().join(',');
   const simResponse = await fetch(
     `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=${encodeURIComponent(chainIds)}`,
     {

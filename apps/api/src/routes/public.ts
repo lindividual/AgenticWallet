@@ -6,7 +6,7 @@ import {
 } from '@simplewebauthn/server';
 import { isoBase64URL, isoUint8Array } from '@simplewebauthn/server/helpers';
 import type { Hono } from 'hono';
-import { DEFAULT_RECEIVE_TOKENS, SUPPORTED_CHAINS } from '../constants';
+import { APP_CONFIG } from '../config/appConfig';
 import { getWebAuthnConfig, sanitizeDisplayName } from '../config/webauthn';
 import { saveChallenge, getChallenge } from '../services/challenge';
 import { createSession } from '../services/session';
@@ -316,14 +316,14 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/chains', (c) => {
     return c.json({
-      chains: SUPPORTED_CHAINS,
+      chains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol }) => ({ chainId, name, symbol })),
     });
   });
 
   app.get('/v1/app-config', (c) => {
     return c.json({
-      supportedChains: SUPPORTED_CHAINS,
-      defaultReceiveTokens: DEFAULT_RECEIVE_TOKENS,
+      supportedChains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol }) => ({ chainId, name, symbol })),
+      defaultReceiveTokens: APP_CONFIG.defaultReceiveTokens,
     });
   });
 }
