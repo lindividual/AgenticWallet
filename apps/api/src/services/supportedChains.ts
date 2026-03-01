@@ -1,9 +1,8 @@
 import { SUPPORTED_CHAINS } from '../constants';
 
 const CHAIN_ID_TO_MARKET_CHAIN: Record<number, 'eth' | 'base' | 'bnb'> = {
-  1: 'eth',
-  8453: 'base',
-  56: 'bnb',
+  11155111: 'eth',
+  84532: 'base',
 };
 
 export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb'> {

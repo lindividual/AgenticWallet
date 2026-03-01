@@ -57,3 +57,28 @@ export type PortfolioSnapshotPoint = {
   ts: string;
   total_usd: number;
 };
+
+export type TransferStatus = 'created' | 'submitted' | 'confirmed' | 'failed';
+
+export type TransferRow = {
+  id: string;
+  user_id: string;
+  chain_id: number;
+  from_address: string;
+  to_address: string;
+  token_address: string | null;
+  token_symbol: string | null;
+  token_decimals: number;
+  amount_input: string;
+  amount_raw: string;
+  tx_value: string;
+  tx_hash: string | null;
+  status: TransferStatus;
+  error_code: string | null;
+  error_message: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+  updated_at: string;
+  submitted_at: string | null;
+  confirmed_at: string | null;
+};

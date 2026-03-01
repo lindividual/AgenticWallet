@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getAppConfig, getWalletPortfolio, type SimEvmBalance } from '../../api';
+import { getAppConfig, getWalletPortfolio, type SimEvmBalance, type TransferRecord } from '../../api';
 import { Modal } from '../modals/Modal';
 import { ReceiveCryptoContent } from '../modals/ReceiveCryptoContent';
 import { TopUpContent } from '../modals/TopUpContent';
+import { TransferContent } from '../modals/TransferContent';
 import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { useToast } from '../../contexts/ToastContext';
 import type { AuthState } from '../../hooks/useWalletApp';
@@ -16,7 +17,7 @@ type WalletScreenProps = {
   auth: AuthState;
 };
 
-type ActiveModalContent = 'topUp' | 'receive';
+type ActiveModalContent = 'topUp' | 'receive' | 'transfer';
 
 function formatTokenAmount(rawAmount: string | undefined, decimals: number | undefined): string {
   const amount = Number(rawAmount ?? 0);
@@ -43,8 +44,8 @@ export function WalletScreen({ auth }: WalletScreenProps) {
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
+  const transferButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
-  const dailyReport = t('wallet.dailyReportMock');
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['wallet-portfolio', walletAddress],
@@ -152,6 +153,11 @@ export function WalletScreen({ auth }: WalletScreenProps) {
     showModal(snapshotRect(topUpButtonRef.current));
   }
 
+  function openTransferModal() {
+    setActiveModalContent('transfer');
+    showModal(snapshotRect(transferButtonRef.current));
+  }
+
   function openReceiveModal() {
     setActiveModalContent('receive');
   }
@@ -173,6 +179,16 @@ export function WalletScreen({ auth }: WalletScreenProps) {
     }, 300);
   }
 
+  function handleTransferSubmitted(transfer: TransferRecord) {
+    console.log('[wallet-ui] transfer_submitted', {
+      id: transfer.id,
+      status: transfer.status,
+      txHash: transfer.txHash,
+      chainId: transfer.chainId,
+    });
+    void refetch();
+  }
+
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-28">
       <BalanceHeader
@@ -191,27 +207,18 @@ export function WalletScreen({ auth }: WalletScreenProps) {
         >
           {t('wallet.topUp')}
         </button>
-        <button type="button" className="btn btn-primary h-16 text-base font-semibold">
+        <button
+          ref={transferButtonRef}
+          type="button"
+          className="btn btn-primary h-16 text-base font-semibold"
+          onClick={openTransferModal}
+        >
           {t('wallet.transfer')}
         </button>
         <button type="button" className="btn btn-primary h-16 text-base font-semibold">
           {t('wallet.trade')}
         </button>
       </section>
-
-      {/* <section className="border border-base-400 bg-base-100 p-4">
-        <h2 className="m-0 text-lg font-bold">{t('wallet.today')}</h2>
-        <p className="m-0 mt-2 text-base leading-snug">{dailyReport}</p>
-        <p className="m-0 mt-2 text-sm text-base-content/50">{t('wallet.generatedByAgent')}</p>
-        <div className="mt-2 flex items-center justify-between border-t border-base-400 pt-3 text-sm">
-          <button type="button" className="link">
-            {t('wallet.moreReadings')}
-          </button>
-          <button type="button" className="link">
-            {t('wallet.saved')}
-          </button>
-        </div>
-      </section> */}
 
       <section className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-3">
@@ -263,11 +270,7 @@ export function WalletScreen({ auth }: WalletScreenProps) {
       </section>
 
       {isModalOpen && (
-        <Modal
-          visible={modalVisible}
-          originRect={modalOriginRect}
-          onClose={closeActiveModal}
-        >
+        <Modal visible={modalVisible} originRect={modalOriginRect} onClose={closeActiveModal}>
           <div className="relative flex-1 overflow-hidden">
             <div
               className={`absolute inset-0 transition-all duration-300 ${
@@ -297,6 +300,21 @@ export function WalletScreen({ auth }: WalletScreenProps) {
                   void handleCopyAddress();
                 }}
                 onClose={closeActiveModal}
+              />
+            </div>
+            <div
+              className={`absolute inset-0 transition-all duration-300 ${
+                activeModalContent === 'transfer'
+                  ? 'translate-x-0 opacity-100'
+                  : 'pointer-events-none translate-x-4 opacity-0'
+              }`}
+            >
+              <TransferContent
+                active={activeModalContent === 'transfer'}
+                supportedChains={supportedChains}
+                onBack={closeActiveModal}
+                onClose={closeActiveModal}
+                onSubmitted={handleTransferSubmitted}
               />
             </div>
           </div>

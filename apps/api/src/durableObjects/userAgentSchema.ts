@@ -161,4 +161,40 @@ export function initializeAgentSchema(sql: SqlStorage): void {
       created_at TEXT NOT NULL
     )`,
   );
+
+  sql.exec(
+    `CREATE TABLE IF NOT EXISTS transfers (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      chain_id INTEGER NOT NULL,
+      from_address TEXT NOT NULL,
+      to_address TEXT NOT NULL,
+      token_address TEXT,
+      token_symbol TEXT,
+      token_decimals INTEGER NOT NULL DEFAULT 18,
+      amount_input TEXT NOT NULL,
+      amount_raw TEXT NOT NULL,
+      tx_value TEXT NOT NULL,
+      tx_hash TEXT,
+      status TEXT NOT NULL,
+      error_code TEXT,
+      error_message TEXT,
+      idempotency_key TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      submitted_at TEXT,
+      confirmed_at TEXT
+    )`,
+  );
+  try {
+    sql.exec('ALTER TABLE transfers ADD COLUMN idempotency_key TEXT');
+  } catch {
+    // Column already exists.
+  }
+  sql.exec('CREATE INDEX IF NOT EXISTS idx_transfers_created_at ON transfers(created_at DESC)');
+  sql.exec('CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status, created_at DESC)');
+  sql.exec('CREATE INDEX IF NOT EXISTS idx_transfers_tx_hash ON transfers(tx_hash)');
+  sql.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_transfers_idempotency_key ON transfers(idempotency_key) WHERE idempotency_key IS NOT NULL',
+  );
 }

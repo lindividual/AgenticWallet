@@ -11,9 +11,8 @@ export type AppConfig = {
 
 export const APP_CONFIG: AppConfig = {
   supportedChains: [
-    { chainId: 1, name: 'Ethereum', symbol: 'ETH' },
-    { chainId: 8453, name: 'Base', symbol: 'ETH' },
-    { chainId: 56, name: 'BNB Chain', symbol: 'BNB' },
+    { chainId: 11155111, name: 'Sepolia', symbol: 'ETH' },
+    { chainId: 84532, name: 'Base Sepolia', symbol: 'ETH' },
   ],
-  defaultReceiveTokens: ['ETH', 'USDC', 'USDT', 'BNB'],
+  defaultReceiveTokens: ['ETH', 'USDC', 'USDT'],
 };

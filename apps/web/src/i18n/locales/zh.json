@@ -62,7 +62,19 @@
     "receiveAddressLabel": "你的地址",
     "receiveOnlyTokenNotice": "仅向此地址发送 {{token}}",
     "receiveOnlyNetworkNotice": "该地址仅支持 {{network}} 网络的 {{token}}，发送到其他网络可能导致资产丢失。",
-    "receiveProcessingTimeNotice": "到账通常需要约 {{minutes}} 分钟。"
+    "receiveProcessingTimeNotice": "到账通常需要约 {{minutes}} 分钟。",
+    "transferTitle": "发起转账",
+    "transferChain": "网络",
+    "transferToAddress": "收款地址",
+    "transferAmount": "金额",
+    "transferReviewFee": "预估手续费",
+    "transferConfirm": "发送",
+    "transferSubmitting": "提交中...",
+    "transferQuoteFee": "预估费用（wei）",
+    "transferQuoteUnavailable": "暂不可用",
+    "transferSuccess": "转账已提交。",
+    "transferFailed": "转账失败",
+    "transferFillRequired": "请填写地址和金额。"
   },
   "settings": {
     "language": "语言",

@@ -13,6 +13,8 @@ export type Bindings = {
   BASE_RPC_URL?: string;
   BNB_RPC_URL?: string;
   BICONOMY_MEE_VERSION?: string;
+  BICONOMY_BUNDLER_API_KEY?: string;
+  BICONOMY_BUNDLER_URL?: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
   LLM_API_KEY?: string;
@@ -78,4 +80,38 @@ export type WalletSummary = {
     chainId: number;
     address: string;
   }>;
+};
+
+export type TransferStatus = 'created' | 'submitted' | 'confirmed' | 'failed';
+
+export type TransferQuoteRequest = {
+  chainId: number;
+  toAddress: string;
+  amount: string;
+  tokenAddress?: string;
+  tokenSymbol?: string;
+  tokenDecimals?: number;
+};
+
+export type TransferQuoteResponse = {
+  chainId: number;
+  fromAddress: string;
+  toAddress: string;
+  tokenAddress: string | null;
+  tokenSymbol: string | null;
+  tokenDecimals: number;
+  amountInput: string;
+  amountRaw: string;
+  estimatedFeeWei: string | null;
+  estimatedGas: {
+    preVerificationGas: string | null;
+    verificationGasLimit: string | null;
+    callGasLimit: string | null;
+    maxFeePerGas: string | null;
+    maxPriorityFeePerGas: string | null;
+  };
+};
+
+export type TransferSubmitRequest = TransferQuoteRequest & {
+  idempotencyKey?: string;
 };

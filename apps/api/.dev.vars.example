@@ -4,11 +4,15 @@ SIM_API_KEY=replace-with-sim-api-key
 # Optional: testnet | comma-separated chain ids (e.g. 1,8453,137 or 11155111,84532)
 PORTFOLIO_CHAIN_IDS=11155111,84532
 WEBAUTHN_REQUIRE_UV=false
-ETHEREUM_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/replace
-BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/replace
-BNB_RPC_URL=https://bnb-mainnet.g.alchemy.com/v2/replace
+ETHEREUM_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/replace
+BASE_RPC_URL=https://base-sepolia.g.alchemy.com/v2/replace
+# Optional for future expansion (currently unused in transfer flow)
+BNB_RPC_URL=https://data-seed-prebsc-1-s1.bnbchain.org:8545
 # Optional, defaults to SDK default MEE version
 BICONOMY_MEE_VERSION=2.3.0
+# Optional, used by abstractjs Nexus client (bundler URL can also be provided directly)
+BICONOMY_BUNDLER_API_KEY=
+BICONOMY_BUNDLER_URL=
 
 # Optional LLM integration (Phase 1 content/recommendation generation)
 LLM_PROVIDER=openai

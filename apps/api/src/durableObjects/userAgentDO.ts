@@ -33,6 +33,7 @@ import type {
   JobType,
   PortfolioSnapshotPoint,
   RecommendationRow,
+  TransferRow,
   TodayDailyStatus,
 } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
@@ -180,6 +181,158 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ points: PortfolioSnapshotPoint[] }> {
     this.ensureOwner(userId);
     return { points: this.listPortfolioSnapshots(period) };
+  }
+
+  async createTransferRpc(
+    userId: string,
+    input: {
+      id: string;
+      chainId: number;
+      fromAddress: string;
+      toAddress: string;
+      tokenAddress?: string | null;
+      tokenSymbol?: string | null;
+      tokenDecimals: number;
+      amountInput: string;
+      amountRaw: string;
+      txValue: string;
+      status: TransferRow['status'];
+      idempotencyKey?: string | null;
+      txHash?: string | null;
+      errorCode?: string | null;
+      errorMessage?: string | null;
+      submittedAt?: string | null;
+      confirmedAt?: string | null;
+    },
+  ): Promise<{ transfer: TransferRow; deduped: boolean }> {
+    this.ensureOwner(userId);
+    const now = new Date().toISOString();
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+
+    if (idempotencyKey) {
+      const existing = this.ctx.storage.sql
+        .exec('SELECT id FROM transfers WHERE idempotency_key = ? LIMIT 1', idempotencyKey)
+        .toArray()[0] as Record<string, unknown> | undefined;
+      const existingId = normalizeSqlString(existing?.id);
+      if (existingId) {
+        const transfer = this.getTransfer(existingId);
+        if (transfer) return { transfer, deduped: true };
+      }
+    }
+
+    this.ctx.storage.sql.exec(
+      `INSERT INTO transfers (
+        id,
+        user_id,
+        chain_id,
+        from_address,
+        to_address,
+        token_address,
+        token_symbol,
+        token_decimals,
+        amount_input,
+        amount_raw,
+        tx_value,
+        tx_hash,
+        status,
+        error_code,
+        error_message,
+        idempotency_key,
+        created_at,
+        updated_at,
+        submitted_at,
+        confirmed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      input.id,
+      userId,
+      input.chainId,
+      input.fromAddress,
+      input.toAddress,
+      input.tokenAddress ?? null,
+      input.tokenSymbol ?? null,
+      input.tokenDecimals,
+      input.amountInput,
+      input.amountRaw,
+      input.txValue,
+      input.txHash ?? null,
+      input.status,
+      input.errorCode ?? null,
+      input.errorMessage ?? null,
+      idempotencyKey,
+      now,
+      now,
+      input.submittedAt ?? null,
+      input.confirmedAt ?? null,
+    );
+
+    const transfer = this.getTransfer(input.id);
+    if (!transfer) {
+      throw new Error('transfer_create_failed');
+    }
+    return { transfer, deduped: false };
+  }
+
+  async updateTransferRpc(
+    userId: string,
+    transferId: string,
+    input: {
+      status?: TransferRow['status'];
+      txHash?: string | null;
+      errorCode?: string | null;
+      errorMessage?: string | null;
+      submittedAt?: string | null;
+      confirmedAt?: string | null;
+    },
+  ): Promise<{ transfer: TransferRow | null }> {
+    this.ensureOwner(userId);
+    const existing = this.getTransfer(transferId);
+    if (!existing) {
+      return { transfer: null };
+    }
+
+    const now = new Date().toISOString();
+    this.ctx.storage.sql.exec(
+      `UPDATE transfers
+       SET status = ?,
+           tx_hash = ?,
+           error_code = ?,
+           error_message = ?,
+           submitted_at = ?,
+           confirmed_at = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      input.status ?? existing.status,
+      input.txHash ?? existing.tx_hash,
+      input.errorCode ?? existing.error_code,
+      input.errorMessage ?? existing.error_message,
+      input.submittedAt ?? existing.submitted_at,
+      input.confirmedAt ?? existing.confirmed_at,
+      now,
+      transferId,
+    );
+
+    return { transfer: this.getTransfer(transferId) };
+  }
+
+  async getTransferRpc(userId: string, transferId: string): Promise<{ transfer: TransferRow | null }> {
+    this.ensureOwner(userId);
+    return { transfer: this.getTransfer(transferId) };
+  }
+
+  async listTransfersRpc(
+    userId: string,
+    options?: {
+      limit?: number;
+      status?: TransferRow['status'];
+    },
+  ): Promise<{ transfers: TransferRow[] }> {
+    this.ensureOwner(userId);
+    const limit = sanitizeLimit(options?.limit ?? 20, 1, 100);
+    const normalizedStatus = options?.status?.trim() ?? '';
+    if (normalizedStatus) {
+      return { transfers: this.listTransfers(limit, normalizedStatus as TransferRow['status']) };
+    }
+    return { transfers: this.listTransfers(limit) };
   }
 
   async alarm(): Promise<void> {
@@ -746,5 +899,104 @@ export class UserAgentDO extends DurableObject<Bindings> {
         };
       })
       .filter((row) => Boolean(row.ts));
+  }
+
+  private getTransfer(transferId: string): TransferRow | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          user_id,
+          chain_id,
+          from_address,
+          to_address,
+          token_address,
+          token_symbol,
+          token_decimals,
+          amount_input,
+          amount_raw,
+          tx_value,
+          tx_hash,
+          status,
+          error_code,
+          error_message,
+          idempotency_key,
+          created_at,
+          updated_at,
+          submitted_at,
+          confirmed_at
+         FROM transfers
+         WHERE id = ?
+         LIMIT 1`,
+        transferId,
+      )
+      .toArray()[0] as TransferRow | undefined;
+    return row ?? null;
+  }
+
+  private listTransfers(limit: number, status?: TransferRow['status']): TransferRow[] {
+    if (status) {
+      return this.ctx.storage.sql
+        .exec(
+          `SELECT
+            id,
+            user_id,
+            chain_id,
+            from_address,
+            to_address,
+            token_address,
+            token_symbol,
+            token_decimals,
+            amount_input,
+            amount_raw,
+            tx_value,
+            tx_hash,
+            status,
+            error_code,
+            error_message,
+            idempotency_key,
+            created_at,
+            updated_at,
+            submitted_at,
+            confirmed_at
+           FROM transfers
+           WHERE status = ?
+           ORDER BY created_at DESC
+           LIMIT ?`,
+          status,
+          limit,
+        )
+        .toArray() as TransferRow[];
+    }
+
+    return this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          user_id,
+          chain_id,
+          from_address,
+          to_address,
+          token_address,
+          token_symbol,
+          token_decimals,
+          amount_input,
+          amount_raw,
+          tx_value,
+          tx_hash,
+          status,
+          error_code,
+          error_message,
+          idempotency_key,
+          created_at,
+          updated_at,
+          submitted_at,
+          confirmed_at
+         FROM transfers
+         ORDER BY created_at DESC
+         LIMIT ?`,
+        limit,
+      )
+      .toArray() as TransferRow[];
   }
 }

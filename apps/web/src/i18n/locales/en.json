@@ -62,7 +62,19 @@
     "receiveAddressLabel": "Your address",
     "receiveOnlyTokenNotice": "Only send {{token}} to this address.",
     "receiveOnlyNetworkNotice": "This address only supports {{token}} on {{network}}. Sending on other networks may result in loss.",
-    "receiveProcessingTimeNotice": "Processing usually takes about {{minutes}} minutes."
+    "receiveProcessingTimeNotice": "Processing usually takes about {{minutes}} minutes.",
+    "transferTitle": "Transfer Crypto",
+    "transferChain": "Network",
+    "transferToAddress": "Recipient Address",
+    "transferAmount": "Amount",
+    "transferReviewFee": "Review Fee",
+    "transferConfirm": "Send",
+    "transferSubmitting": "Submitting...",
+    "transferQuoteFee": "Estimated fee (wei)",
+    "transferQuoteUnavailable": "Unavailable",
+    "transferSuccess": "Transfer submitted.",
+    "transferFailed": "Transfer failed",
+    "transferFillRequired": "Please fill address and amount."
   },
   "settings": {
     "language": "Language",

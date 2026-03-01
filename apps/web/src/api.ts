@@ -95,6 +95,56 @@ export type WalletPortfolioResponse = {
   holdings: SimEvmBalance[];
 };
 
+export type TransferQuoteRequest = {
+  chainId: number;
+  toAddress: string;
+  amount: string;
+  tokenAddress?: string;
+  tokenSymbol?: string;
+  tokenDecimals?: number;
+};
+
+export type TransferQuoteResponse = {
+  chainId: number;
+  fromAddress: string;
+  toAddress: string;
+  tokenAddress: string | null;
+  tokenSymbol: string | null;
+  tokenDecimals: number;
+  amountInput: string;
+  amountRaw: string;
+  estimatedFeeWei: string | null;
+  estimatedGas: {
+    preVerificationGas: string | null;
+    verificationGasLimit: string | null;
+    callGasLimit: string | null;
+    maxFeePerGas: string | null;
+    maxPriorityFeePerGas: string | null;
+  };
+};
+
+export type TransferRecord = {
+  id: string;
+  chainId: number;
+  fromAddress: string;
+  toAddress: string;
+  tokenAddress: string | null;
+  tokenSymbol: string | null;
+  tokenDecimals: number;
+  amountInput: string;
+  amountRaw: string;
+  txValue: string;
+  txHash: string | null;
+  status: 'created' | 'submitted' | 'confirmed' | 'failed';
+  errorCode: string | null;
+  errorMessage: string | null;
+  idempotencyKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt: string | null;
+  confirmedAt: string | null;
+};
+
 export type MarketToken = {
   chain_id: number;
   address: string;
@@ -259,6 +309,27 @@ export async function getJson<T>(path: string, withAuth = false): Promise<T> {
 
 export async function getWalletPortfolio(): Promise<WalletPortfolioResponse> {
   return getJson<WalletPortfolioResponse>('/v1/wallet/portfolio', true);
+}
+
+export async function quoteTransfer(request: TransferQuoteRequest): Promise<TransferQuoteResponse> {
+  return postJson<TransferQuoteResponse>('/v1/transfer/quote', request, true);
+}
+
+export async function submitTransfer(
+  request: TransferQuoteRequest & { idempotencyKey?: string },
+): Promise<{ transfer: TransferRecord; deduped: boolean }> {
+  return postJson<{ transfer: TransferRecord; deduped: boolean }>('/v1/transfer/submit', request, true);
+}
+
+export async function getTransferHistory(params?: {
+  limit?: number;
+  status?: TransferRecord['status'];
+}): Promise<{ transfers: TransferRecord[] }> {
+  const query = new URLSearchParams();
+  if (params?.limit) query.set('limit', String(params.limit));
+  if (params?.status) query.set('status', params.status);
+  const suffix = query.toString();
+  return getJson<{ transfers: TransferRecord[] }>(`/v1/transfer/history${suffix ? `?${suffix}` : ''}`, true);
 }
 
 export async function getAppConfig(): Promise<AppConfigResponse> {

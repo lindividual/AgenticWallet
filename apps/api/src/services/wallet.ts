@@ -1,11 +1,15 @@
 import { getMEEVersion, toMultichainNexusAccount } from '@biconomy/abstractjs';
 import { http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { base, bsc, mainnet } from 'viem/chains';
+import { baseSepolia, sepolia } from 'viem/chains';
 import type { Bindings, WalletSummary } from '../types';
 import { generatePrivateKeyHex, encryptString } from '../utils/crypto';
 import { requiredEnv, resolveMeeVersion } from '../utils/env';
 import { nowIso } from '../utils/time';
+
+export type WalletWithPrivateKey = WalletSummary & {
+  encryptedPrivateKey: string;
+};
 
 export async function getWallet(db: D1Database, userId: string): Promise<WalletSummary | null> {
   const wallet = await db
@@ -42,12 +46,11 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
   const privateKey = generatePrivateKeyHex();
   const smartAccount = await createBiconomyMultichainAccount(env, privateKey);
   const chainAccounts = [
-    { chainId: mainnet.id, address: smartAccount.addressOn(mainnet.id, true) },
-    { chainId: base.id, address: smartAccount.addressOn(base.id, true) },
-    { chainId: bsc.id, address: smartAccount.addressOn(bsc.id, true) },
+    { chainId: sepolia.id, address: smartAccount.addressOn(sepolia.id, true) },
+    { chainId: baseSepolia.id, address: smartAccount.addressOn(baseSepolia.id, true) },
   ];
   const primaryAddress =
-    chainAccounts.find((x) => x.chainId === mainnet.id)?.address ?? chainAccounts[0].address;
+    chainAccounts.find((x) => x.chainId === sepolia.id)?.address ?? chainAccounts[0].address;
   const encryptedPrivateKey = await encryptString(privateKey, env.APP_SECRET);
 
   const now = nowIso();
@@ -70,10 +73,41 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
   };
 }
 
-async function createBiconomyMultichainAccount(env: Bindings, privateKey: `0x${string}`) {
+export async function getWalletWithPrivateKey(
+  db: D1Database,
+  userId: string,
+): Promise<WalletWithPrivateKey | null> {
+  const wallet = await db
+    .prepare('SELECT address, provider, encrypted_private_key FROM wallets WHERE user_id = ? LIMIT 1')
+    .bind(userId)
+    .first<{ address: string; provider: string; encrypted_private_key: string }>();
+
+  if (!wallet) return null;
+
+  const chains = await db
+    .prepare(
+      `SELECT chain_id, address
+       FROM wallet_chain_accounts
+       WHERE user_id = ?
+       ORDER BY chain_id ASC`,
+    )
+    .bind(userId)
+    .all<{ chain_id: number; address: string }>();
+
+  return {
+    address: wallet.address,
+    provider: wallet.provider,
+    encryptedPrivateKey: wallet.encrypted_private_key,
+    chainAccounts: chains.results.map((row) => ({
+      chainId: row.chain_id,
+      address: row.address,
+    })),
+  };
+}
+
+export async function createBiconomyMultichainAccount(env: Bindings, privateKey: `0x${string}`) {
   const ethereumRpcUrl = requiredEnv(env.ETHEREUM_RPC_URL, 'ETHEREUM_RPC_URL');
   const baseRpcUrl = requiredEnv(env.BASE_RPC_URL, 'BASE_RPC_URL');
-  const bnbRpcUrl = requiredEnv(env.BNB_RPC_URL, 'BNB_RPC_URL');
   const version = resolveMeeVersion(env.BICONOMY_MEE_VERSION);
   const signer = privateKeyToAccount(privateKey);
 
@@ -81,18 +115,13 @@ async function createBiconomyMultichainAccount(env: Bindings, privateKey: `0x${s
     signer,
     chainConfigurations: [
       {
-        chain: mainnet,
+        chain: sepolia,
         transport: http(ethereumRpcUrl),
         version: getMEEVersion(version),
       },
       {
-        chain: base,
+        chain: baseSepolia,
         transport: http(baseRpcUrl),
-        version: getMEEVersion(version),
-      },
-      {
-        chain: bsc,
-        transport: http(bnbRpcUrl),
         version: getMEEVersion(version),
       },
     ],

@@ -62,7 +62,19 @@
     "receiveAddressLabel": "عنوانك",
     "receiveOnlyTokenNotice": "أرسل {{token}} فقط إلى هذا العنوان.",
     "receiveOnlyNetworkNotice": "هذا العنوان يدعم {{token}} على شبكة {{network}} فقط. الإرسال عبر شبكات أخرى قد يؤدي إلى فقدان الأصول.",
-    "receiveProcessingTimeNotice": "تستغرق المعالجة عادة حوالي {{minutes}} دقائق."
+    "receiveProcessingTimeNotice": "تستغرق المعالجة عادة حوالي {{minutes}} دقائق.",
+    "transferTitle": "إرسال تحويل",
+    "transferChain": "الشبكة",
+    "transferToAddress": "عنوان المستلم",
+    "transferAmount": "الكمية",
+    "transferReviewFee": "مراجعة الرسوم",
+    "transferConfirm": "إرسال",
+    "transferSubmitting": "جارٍ الإرسال...",
+    "transferQuoteFee": "الرسوم التقديرية (wei)",
+    "transferQuoteUnavailable": "غير متاح",
+    "transferSuccess": "تم إرسال التحويل.",
+    "transferFailed": "فشل التحويل",
+    "transferFillRequired": "يرجى إدخال العنوان والكمية."
   },
   "settings": {
     "language": "اللغة",

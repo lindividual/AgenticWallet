@@ -62,6 +62,29 @@ type AgentPortfolioSnapshotPoint = {
   total_usd: number;
 };
 
+export type AgentTransfer = {
+  id: string;
+  user_id: string;
+  chain_id: number;
+  from_address: string;
+  to_address: string;
+  token_address: string | null;
+  token_symbol: string | null;
+  token_decimals: number;
+  amount_input: string;
+  amount_raw: string;
+  tx_value: string;
+  tx_hash: string | null;
+  status: 'created' | 'submitted' | 'confirmed' | 'failed';
+  error_code: string | null;
+  error_message: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+  updated_at: string;
+  submitted_at: string | null;
+  confirmed_at: string | null;
+};
+
 type UserAgentRpcStub = DurableObjectStub & {
   ingestEventRpc(event: AgentEventRecord): Promise<AgentEventIngestResult>;
   setUserLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
@@ -94,6 +117,48 @@ type UserAgentRpcStub = DurableObjectStub & {
     userId: string,
     period: '24h' | '7d' | '30d',
   ): Promise<{ points: AgentPortfolioSnapshotPoint[] }>;
+  createTransferRpc(
+    userId: string,
+    input: {
+      id: string;
+      chainId: number;
+      fromAddress: string;
+      toAddress: string;
+      tokenAddress?: string | null;
+      tokenSymbol?: string | null;
+      tokenDecimals: number;
+      amountInput: string;
+      amountRaw: string;
+      txValue: string;
+      status: AgentTransfer['status'];
+      idempotencyKey?: string | null;
+      txHash?: string | null;
+      errorCode?: string | null;
+      errorMessage?: string | null;
+      submittedAt?: string | null;
+      confirmedAt?: string | null;
+    },
+  ): Promise<{ transfer: AgentTransfer; deduped: boolean }>;
+  updateTransferRpc(
+    userId: string,
+    transferId: string,
+    input: {
+      status?: AgentTransfer['status'];
+      txHash?: string | null;
+      errorCode?: string | null;
+      errorMessage?: string | null;
+      submittedAt?: string | null;
+      confirmedAt?: string | null;
+    },
+  ): Promise<{ transfer: AgentTransfer | null }>;
+  getTransferRpc(userId: string, transferId: string): Promise<{ transfer: AgentTransfer | null }>;
+  listTransfersRpc(
+    userId: string,
+    options?: {
+      limit?: number;
+      status?: AgentTransfer['status'];
+    },
+  ): Promise<{ transfers: AgentTransfer[] }>;
 };
 
 function getUserAgentStub(env: Bindings, userId: string): UserAgentRpcStub {
@@ -221,6 +286,57 @@ export async function listUserPortfolioSnapshots(
   try {
     const data = await stub.listPortfolioSnapshotsRpc(userId, period);
     return data.points ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createUserTransfer(
+  env: Bindings,
+  userId: string,
+  input: Parameters<UserAgentRpcStub['createTransferRpc']>[1],
+): Promise<{ transfer: AgentTransfer; deduped: boolean }> {
+  const stub = getUserAgentStub(env, userId);
+  return stub.createTransferRpc(userId, input);
+}
+
+export async function updateUserTransfer(
+  env: Bindings,
+  userId: string,
+  transferId: string,
+  input: Parameters<UserAgentRpcStub['updateTransferRpc']>[2],
+): Promise<AgentTransfer | null> {
+  const stub = getUserAgentStub(env, userId);
+  const data = await stub.updateTransferRpc(userId, transferId, input);
+  return data.transfer ?? null;
+}
+
+export async function getUserTransfer(
+  env: Bindings,
+  userId: string,
+  transferId: string,
+): Promise<AgentTransfer | null> {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    const data = await stub.getTransferRpc(userId, transferId);
+    return data.transfer ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function listUserTransfers(
+  env: Bindings,
+  userId: string,
+  options?: {
+    limit?: number;
+    status?: AgentTransfer['status'];
+  },
+): Promise<AgentTransfer[]> {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    const data = await stub.listTransfersRpc(userId, options);
+    return data.transfers ?? [];
   } catch {
     return [];
   }
