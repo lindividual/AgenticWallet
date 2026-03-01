@@ -14,7 +14,7 @@ app.use(
   cors({
     origin: '*',
     allowMethods: ['GET', 'POST', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Topic-Special-Admin-Token'],
   }),
 );
 
@@ -29,7 +29,7 @@ export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: AppEnv['Bindings'], _ctx: ExecutionContext): Promise<void> {
     const cron = event.cron ?? '';
-    if (matchesCron(cron, '0 */12 * * *')) {
+    if (matchesCron(cron, '5 */12 * * *')) {
       await generateTopicSpecialBatch(env);
       return;
     }
