@@ -186,7 +186,7 @@ export function App() {
       <div className="min-h-screen overflow-x-hidden">
         {activeArticleId ? (
           <div className={isArticleExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
-            <ArticleReaderScreen articleId={activeArticleId} onBack={handleCloseArticle} />
+            <ArticleReaderScreen articleId={activeArticleId} onBack={handleCloseArticle} onOpenToken={handleOpenTokenByRoute} />
           </div>
         ) : activeTokenRoute ? (
           <div className={isTokenExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
