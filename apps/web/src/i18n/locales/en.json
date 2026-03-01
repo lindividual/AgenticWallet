@@ -114,7 +114,9 @@
     "shareCanceled": "Share canceled",
     "listenStarted": "Started reading aloud",
     "listenStopped": "Reading stopped",
-    "listenFailed": "Listen failed, please try again"
+    "listenFailed": "Listen failed, please try again",
+    "zeroBalanceTitle": "Start your on-chain finance journey",
+    "zeroBalanceSubtitle": "Invest in crypto and stocks, use stablecoins for payments or yield."
   },
   "trade": {
     "title": "Trade",

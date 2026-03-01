@@ -9,6 +9,7 @@ import { AssetListItem } from '../AssetListItem';
 type HomeScreenProps = {
   auth: AuthState;
   onOpenArticle: (articleId: string) => void;
+  onOpenToken: (chain: string, contract: string) => void;
 };
 
 function getRecommendationInitial(label: string): string {
@@ -29,9 +30,11 @@ type RecommendationDisplayAsset = {
   name: string;
   image: string | null;
   priceChangePct: number | null;
+  chain: string | null;
+  contract: string | null;
 };
 
-export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
+export function HomeScreen({ auth, onOpenArticle, onOpenToken }: HomeScreenProps) {
   const { t, i18n } = useTranslation();
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
 
@@ -107,6 +110,8 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
           name: displayName,
           image: matched?.image ?? assetMeta?.image ?? null,
           priceChangePct: matched?.price_change_percentage_24h ?? assetMeta?.price_change_percentage_24h ?? null,
+          chain: matched?.chain ?? assetMeta?.chain ?? null,
+          contract: matched?.contract ?? assetMeta?.contract ?? null,
         };
       })
       .filter((item) => Boolean(item.symbol || item.name));
@@ -115,8 +120,6 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
   const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
   const topics = topicData?.articles ?? [];
   const totalBalance = portfolio?.totalUsd ?? 0;
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? t('home.greetingMorning') : hour < 18 ? t('home.greetingAfternoon') : t('home.greetingEvening');
 
   const dailySummary = daily
     ? daily.summary
@@ -135,14 +138,18 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
         locale={i18n.language}
       />
 
-      <section className="bg-base-100">
-        <p className="m-0 text-sm uppercase tracking-wide text-base-content/50">{t('home.agentEntryLabel')}</p>
-        <h2 className="m-0 mt-2 text-xl font-bold">{greeting}</h2>
-        <p className="m-0 mt-2 text-base text-base-content/70">{t('home.agentEntryHint')}</p>
-        <button type="button" className="btn btn-primary mt-4 w-full text-base font-semibold">
-          {t('home.agentEntryAction')}
-        </button>
-      </section>
+      {totalBalance <= 0 && (
+        <section className="rounded-2xl border border-base-300 bg-base-100 px-4 py-5 text-center">
+          <img
+            src="/UMI-Light.svg"
+            alt={t('home.zeroBalanceTitle')}
+            className="mx-auto h-24 w-24 object-contain"
+            loading="lazy"
+          />
+          <h2 className="m-0 mt-3 text-lg font-bold">{t('home.zeroBalanceTitle')}</h2>
+          <p className="m-0 mt-2 text-sm text-base-content/70">{t('home.zeroBalanceSubtitle')}</p>
+        </section>
+      )}
 
       <section className="bg-base-100">
         <div className="flex items-start justify-between gap-3">
@@ -183,29 +190,47 @@ export function HomeScreen({ auth, onOpenArticle }: HomeScreenProps) {
           {recommendations.length === 0 && (
             <p className="m-0 text-base text-base-content/70">{t('home.emptyRecommendations')}</p>
           )}
-          {recommendations.map((item) => (
-            <AssetListItem
-              key={item.id}
-              className="bg-base-100 py-3"
-              leftIcon={
-                item.image ? (
-                  <img
-                    src={item.image}
-                    alt={item.symbol}
-                    className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                    loading="lazy"
-                  />
-                ) : (
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                    {getRecommendationInitial(item.symbol || item.name)}
-                  </div>
-                )
-              }
-              leftPrimary={(item.symbol ?? '').toUpperCase()}
-              leftSecondary={item.name}
-              rightSecondary={formatPct(item.priceChangePct)}
-            />
-          ))}
+          {recommendations.map((item) => {
+            const content = (
+              <AssetListItem
+                className="bg-base-100 py-3"
+                leftIcon={
+                  item.image ? (
+                    <img
+                      src={item.image}
+                      alt={item.symbol}
+                      className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                      {getRecommendationInitial(item.symbol || item.name)}
+                    </div>
+                  )
+                }
+                leftPrimary={(item.symbol ?? '').toUpperCase()}
+                leftSecondary={item.name}
+                rightSecondary={formatPct(item.priceChangePct)}
+              />
+            );
+
+            const chain = item.chain;
+            const contract = item.contract;
+            if (!chain || !contract) {
+              return <div key={item.id}>{content}</div>;
+            }
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className="w-full cursor-pointer px-2 text-left transition-colors hover:bg-base-200/60"
+                onClick={() => onOpenToken(chain, contract)}
+              >
+                {content}
+              </button>
+            );
+          })}
         </div>
       </section>
 

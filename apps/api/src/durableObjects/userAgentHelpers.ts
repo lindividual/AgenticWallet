@@ -282,7 +282,7 @@ export function buildFallbackRecommendations(
     });
   }
 
-  const defaults = ['ETH', 'SOL', 'BNB', 'USDC', 'BTC'];
+  const defaults = ['ETH', 'BNB', 'USDC', 'USDT', 'BTC'];
   const diversify = defaults.find((d) => !used.has(d));
   if (diversify) {
     used.add(diversify);

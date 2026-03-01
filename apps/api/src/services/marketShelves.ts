@@ -1,6 +1,7 @@
 import type { Bindings } from '../types';
 import type { MarketTopAsset, TopAssetListName } from './bitgetWallet';
 import { fetchTopMarketAssets, type TopAssetSource } from './marketTopAssets';
+import { getSupportedMarketChains } from './supportedChains';
 
 type MarketShelfRow = {
   id: string;
@@ -192,6 +193,9 @@ export async function fetchMarketShelves(
     limitPerShelf?: number;
   },
 ): Promise<MarketShelf[]> {
+  const supportedChains = new Set(getSupportedMarketChains());
+  if (supportedChains.size === 0) return [];
+
   const configs = await loadShelfConfigs(env);
   const idFilter = new Set(
     (options?.shelfIds ?? [])
@@ -201,7 +205,15 @@ export async function fetchMarketShelves(
   const hasFilter = idFilter.size > 0;
   const limitOverride = options?.limitPerShelf;
 
-  const selectedConfigs = configs.filter((config) => !hasFilter || idFilter.has(config.id));
+  const selectedConfigs = configs
+    .map((config) => ({
+      ...config,
+      chains:
+        config.chains.length > 0
+          ? config.chains.filter((chain) => supportedChains.has(chain as 'eth' | 'base' | 'bnb'))
+          : [...supportedChains],
+    }))
+    .filter((config) => config.chains.length > 0 && (!hasFilter || idFilter.has(config.id)));
   const shelves = await Promise.all(
     selectedConfigs.map(async (config) => {
       const assets = await fetchTopMarketAssets(env, {

@@ -125,15 +125,19 @@ export function App() {
   }
 
   function handleOpenToken(token: TopMarketAsset) {
+    handleOpenTokenByRoute(token.chain, token.contract);
+  }
+
+  function handleOpenTokenByRoute(chain: string, contract: string) {
     if (tokenExitTimerRef.current) {
       clearTimeout(tokenExitTimerRef.current);
       tokenExitTimerRef.current = null;
     }
     setIsTokenExiting(false);
-    setActiveTokenRoute({ chain: token.chain, contract: token.contract });
+    setActiveTokenRoute({ chain, contract });
     void navigate({
       to: '/token/$chain/$contract',
-      params: { chain: token.chain, contract: token.contract },
+      params: { chain, contract },
     });
   }
 
@@ -165,7 +169,13 @@ export function App() {
 
   function renderBaseScreen() {
     if (activeTab === 'home') {
-      return <HomeScreen auth={authenticatedState} onOpenArticle={handleOpenArticle} />;
+      return (
+        <HomeScreen
+          auth={authenticatedState}
+          onOpenArticle={handleOpenArticle}
+          onOpenToken={handleOpenTokenByRoute}
+        />
+      );
     }
     if (activeTab === 'trade') return <TradeScreen onOpenToken={handleOpenToken} />;
     return <WalletScreen auth={authenticatedState} />;

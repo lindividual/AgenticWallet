@@ -114,7 +114,9 @@
     "shareCanceled": "已取消分享",
     "listenStarted": "开始朗读",
     "listenStopped": "已停止朗读",
-    "listenFailed": "听书失败，请重试"
+    "listenFailed": "听书失败，请重试",
+    "zeroBalanceTitle": "开始你的链上金融之旅",
+    "zeroBalanceSubtitle": "投资加密货币、股票，用稳定币支付或理财"
   },
   "trade": {
     "title": "交易",
