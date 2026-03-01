@@ -22,6 +22,8 @@ export type Bindings = {
   TOKEN_LIST_MAX_TOKENS?: string;
   BGW_API_KEY?: string;
   BGW_API_SECRET?: string;
+  OPENNEWS_TOKEN?: string;
+  TWITTER_TOKEN?: string;
 };
 
 export type Variables = {
