@@ -303,7 +303,7 @@ export async function generateTopicSpecialBatch(
   };
 }
 
-async function ensureTopicSpecialSchema(db: D1Database): Promise<void> {
+export async function ensureTopicSpecialSchema(db: D1Database): Promise<void> {
   if (topicSpecialSchemaReady) return;
 
   await db

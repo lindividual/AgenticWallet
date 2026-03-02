@@ -26,6 +26,8 @@
     "moreReadings": "更多阅读",
     "saved": "已保存",
     "holdings": "资产",
+    "stables": "稳定币",
+    "cryptos": "加密资产",
     "singleChainLabel": "{{chain}}",
     "multiChainCount": "{{count}} 条链",
     "loadingAssets": "正在加载资产...",

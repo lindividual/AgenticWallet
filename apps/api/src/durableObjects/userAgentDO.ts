@@ -36,6 +36,7 @@ import type {
   TodayDailyStatus,
 } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
+import { ensureTopicSpecialSchema } from '../services/topicSpecials';
 
 const OWNER_KEY = 'owner_user_id';
 const USER_LOCALE_KEY = 'user_locale';
@@ -56,6 +57,8 @@ type TopicSpecialArticleIndexRow = {
 };
 
 export class UserAgentDO extends DurableObject<Bindings> {
+  private topicSpecialSchemaReady = false;
+
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
     this.ctx.blockConcurrencyWhile(async () => {
@@ -620,6 +623,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private async getPersonalizedTopicArticles(limit = 20): Promise<ArticleRow[]> {
+    if (!(await this.ensureTopicSpecialSchemaReady())) return [];
     const safeLimit = sanitizeLimit(limit, 1, 100);
     const fetchLimit = Math.min(100, Math.max(safeLimit * TOPIC_SPECIAL_FETCH_MULTIPLIER, TOPIC_SPECIAL_MIN_FETCH));
     let rows: { results?: TopicSpecialArticleIndexRow[] };
@@ -799,6 +803,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
       };
     }
 
+    if (!(await this.ensureTopicSpecialSchemaReady())) return null;
+
     let topicRow: TopicSpecialArticleIndexRow | null = null;
     try {
       topicRow = await this.env.DB.prepare(
@@ -833,6 +839,20 @@ export class UserAgentDO extends DurableObject<Bindings> {
       article: topicArticle,
       markdown,
     };
+  }
+
+  private async ensureTopicSpecialSchemaReady(): Promise<boolean> {
+    if (this.topicSpecialSchemaReady) return true;
+    try {
+      await ensureTopicSpecialSchema(this.env.DB);
+      this.topicSpecialSchemaReady = true;
+      return true;
+    } catch (error) {
+      console.error('topic_special_schema_init_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   private async ensureDailyDigestJobs(): Promise<void> {

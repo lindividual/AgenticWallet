@@ -26,6 +26,8 @@
     "moreReadings": "قراءات إضافية",
     "saved": "المحفوظات",
     "holdings": "المقتنيات",
+    "stables": "العملات المستقرة",
+    "cryptos": "الأصول المشفرة",
     "singleChainLabel": "{{chain}}",
     "multiChainCount": "{{count}} شبكات",
     "loadingAssets": "جار تحميل الأصول...",

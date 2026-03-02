@@ -248,11 +248,11 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
             onClick={() => onOpenArticle(dailyArticleToOpen.id)}
           >
             <div className="flex items-center gap-3">
-              <div className="shrink-0 text-base-content/60" aria-hidden="true">
-                <Newspaper size={32} strokeWidth={2} />
+              <div className="shrink-0 text-base-content p-2" aria-hidden="true">
+                <Newspaper size={24} strokeWidth={2} />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="m-0 text-lg font-semibold">
+                <p className="m-0 text-base font-semibold">
                   {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
                 </p>
                 <p className="m-0 mt-1 overflow-hidden text-sm leading-snug text-base-content/75 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
@@ -292,7 +292,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         )}
       </section>
 
-      <section className="bg-base-100">
+      <section className="bg-base-100 mt-2">
         <h2 className="m-0 text-lg font-bold">{t('home.assetRecommendationsTitle')}</h2>
         <div className="mt-3 flex flex-col gap-1">
           {shouldShowRecommendationSkeleton && (
@@ -339,7 +339,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
               <button
                 key={item.id}
                 type="button"
-                className="w-full cursor-pointer px-2 text-start transition-colors hover:bg-base-200/60"
+                className="w-full cursor-pointer text-start transition-colors hover:bg-base-200/60"
                 onClick={() => onOpenToken(chain, contract)}
               >
                 {content}

@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getAppConfig, getWalletPortfolio, type SimEvmBalance, type TransferRecord, type WalletPortfolioResponse } from '../../api';
+import {
+  getAppConfig,
+  getCoinDetailsBatch,
+  getMarketShelves,
+  getWalletPortfolio,
+  type SimEvmBalance,
+  type TopMarketAsset,
+  type TransferRecord,
+  type WalletPortfolioResponse,
+} from '../../api';
 import { Modal } from '../modals/Modal';
 import { ReceiveCryptoContent } from '../modals/ReceiveCryptoContent';
 import { TopUpContent } from '../modals/TopUpContent';
@@ -16,6 +25,7 @@ import { SkeletonAssetListItem } from '../Skeleton';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
+import { buildChainAssetId } from '../../utils/assetIdentity';
 
 type WalletScreenProps = {
   auth: AuthState;
@@ -48,18 +58,24 @@ function getAssetInitial(symbol: string | null | undefined, name: string | null 
 type WalletHoldingListItem = {
   key: string;
   assetId: string | null;
+  chainAssetId: string | null;
   symbol: string;
   name: string;
   logo: string | null;
   valueUsd: number;
   amountText: string;
-  secondaryLabel: string;
+  priceChangePct: number | null;
   transferAsset: SimEvmBalance;
 };
 
 const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
 
 function normalizeAssetId(raw: string | null | undefined): string | null {
+  const value = (raw ?? '').trim().toLowerCase();
+  return value || null;
+}
+
+function normalizeChainAssetId(raw: string | null | undefined): string | null {
   const value = (raw ?? '').trim().toLowerCase();
   return value || null;
 }
@@ -97,6 +113,70 @@ function resolveAssetIdFallbackIcon(assetId: string | null, symbol: string): str
   if (normalizedSymbol === 'ETH') return '/eth.svg';
   if (normalizedSymbol === 'BNB') return '/bnb.svg';
   return null;
+}
+
+function formatPct(value: number | null | undefined): string {
+  if (!Number.isFinite(Number(value))) return '--';
+  const numeric = Number(value);
+  const sign = numeric > 0 ? '+' : '';
+  return `${sign}${numeric.toFixed(2)}%`;
+}
+
+function toDisplayAmount(rawAmount: string | undefined, decimals: number | undefined): number {
+  const amount = Number(rawAmount ?? 0);
+  if (!Number.isFinite(amount)) return 0;
+  const divisor = 10 ** (decimals ?? 0);
+  if (!Number.isFinite(divisor) || divisor <= 0) return amount;
+  return amount / divisor;
+}
+
+function formatDisplayAmount(value: number): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+function pickPreferredSymbolAsset(
+  assets: TopMarketAsset[],
+  preferredChain: string | null,
+): TopMarketAsset | undefined {
+  if (assets.length === 0) return undefined;
+  const normalizedPreferred = (preferredChain ?? '').trim().toLowerCase();
+  const chainPriority = new Map<string, number>([
+    ['eth', 0],
+    ['base', 1],
+    ['bnb', 2],
+  ]);
+  const sorted = [...assets].sort((a, b) => {
+    const aRank = chainPriority.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
+    const bRank = chainPriority.get((b.chain ?? '').trim().toLowerCase()) ?? 9;
+    if (aRank !== bRank) return aRank - bRank;
+    const aMcapRank = Number(a.market_cap_rank ?? Number.POSITIVE_INFINITY);
+    const bMcapRank = Number(b.market_cap_rank ?? Number.POSITIVE_INFINITY);
+    if (aMcapRank !== bMcapRank) return aMcapRank - bMcapRank;
+    return Number(b.market_cap ?? 0) - Number(a.market_cap ?? 0);
+  });
+  if (!normalizedPreferred) return sorted[0];
+  return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
+}
+
+const STABLE_ASSET_IDS = new Set(['coingecko:usd-coin', 'coingecko:tether']);
+const STABLE_SYMBOLS = new Set(['USDC', 'USDT']);
+const PRICE_CHANGE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PRICE_CHANGE_FAILED_CACHE_TTL_MS = 60 * 1000;
+
+function resolvePriceChangeLookupParams(
+  asset: WalletHoldingListItem,
+): { cacheKey: string; chain: string; contract: string } | null {
+  const transferAsset = asset.transferAsset as SimEvmBalance & { market_chain?: string; contract_key?: string };
+  const chain = (transferAsset.market_chain ?? transferAsset.chain ?? '').trim().toLowerCase();
+  const contractCandidate = (transferAsset.contract_key ?? transferAsset.address ?? '').trim().toLowerCase();
+  const isValidContract = /^0x[a-f0-9]{40}$/.test(contractCandidate);
+  if (!chain || !isValidContract) return null;
+  if (contractCandidate === '0x0000000000000000000000000000000000000000') return null;
+  return {
+    cacheKey: `${chain}:${contractCandidate}`,
+    chain,
+    contract: contractCandidate,
+  };
 }
 
 function TokenAvatar({
@@ -138,8 +218,10 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
+  const [detailPriceChangeByHoldingKey, setDetailPriceChangeByHoldingKey] = useState<Record<string, number | null>>({});
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
+  const detailPriceChangeCacheRef = useRef<Map<string, { value: number | null; expiresAt: number }>>(new Map());
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
@@ -158,6 +240,16 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
+  const { data: shelfData } = useQuery({
+    queryKey: ['wallet-market-shelves', 120],
+    queryFn: () =>
+      getMarketShelves({
+        limitPerShelf: 120,
+      }),
+    staleTime: 60_000,
+    refetchInterval: 90_000,
+    refetchOnWindowFocus: true,
+  });
 
   const portfolioData = data ?? cachedPortfolio;
   const totalBalance = portfolioData?.totalUsd ?? 0;
@@ -169,6 +261,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
 
   useEffect(() => {
     setCachedPortfolio(null);
+    setDetailPriceChangeByHoldingKey({});
   }, [walletAddress]);
 
   useEffect(() => {
@@ -188,6 +281,26 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
       setCachedPortfolio(value);
     });
   }, [data, walletAddress]);
+
+  const marketChangeLookup = useMemo(() => {
+    const byChainAssetId = new Map<string, TopMarketAsset>();
+    const bySymbol = new Map<string, TopMarketAsset[]>();
+    for (const asset of (shelfData ?? []).flatMap((shelf) => shelf.assets ?? [])) {
+      const chainAssetId = normalizeChainAssetId(asset.chain_asset_id ?? buildChainAssetId(asset.chain, asset.contract));
+      if (chainAssetId && !byChainAssetId.has(chainAssetId)) {
+        byChainAssetId.set(chainAssetId, asset);
+      }
+      const symbol = (asset.symbol ?? '').trim().toUpperCase();
+      if (!symbol) continue;
+      const bucket = bySymbol.get(symbol);
+      if (bucket) {
+        bucket.push(asset);
+      } else {
+        bySymbol.set(symbol, [asset]);
+      }
+    }
+    return { byChainAssetId, bySymbol };
+  }, [shelfData]);
 
   const holdings = useMemo<WalletHoldingListItem[]>(() => {
     if (!portfolioData) {
@@ -223,11 +336,22 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
               : t('wallet.singleChainLabel', { chain: chainLabels[0] ?? '--' });
           const symbol = (item.symbol ?? primary.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
           const name = (item.name ?? primary.name ?? t('wallet.token')).trim();
+          const chainAssetId = normalizeChainAssetId(
+            primary.chain_asset_id ?? buildChainAssetId(primary.market_chain ?? primary.chain, primary.contract_key ?? primary.address),
+          );
+          const matchedMarketAsset =
+            (chainAssetId ? marketChangeLookup.byChainAssetId.get(chainAssetId) : undefined)
+            ?? pickPreferredSymbolAsset(marketChangeLookup.bySymbol.get(symbol) ?? [], primary.market_chain ?? primary.chain ?? null);
+          const totalAmount = variants.reduce(
+            (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
+            0,
+          );
 
           return [
             {
               key: item.asset_id || `${primary.chain_id}-${primary.address}`,
               assetId: normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id),
+              chainAssetId,
               symbol,
               name,
               logo: resolveHoldingIcon(
@@ -238,11 +362,8 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
                 resolveAssetIdFallbackIcon(normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id), symbol),
               ),
               valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
-              amountText:
-                chainLabels.length > 1
-                  ? t('wallet.multiChainCount', { count: chainLabels.length })
-                  : formatTokenAmount(primary.amount, primary.decimals),
-              secondaryLabel: `${name} · ${chainSummary}`,
+              amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
+              priceChangePct: matchedMarketAsset?.price_change_percentage_24h ?? null,
               transferAsset: primary,
             } satisfies WalletHoldingListItem,
           ];
@@ -293,9 +414,20 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
             : t('wallet.singleChainLabel', { chain: chainLabels[0] ?? '--' });
         const symbol = (primary.symbol ?? primary.name ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
         const name = (primary.name ?? t('wallet.token')).trim();
+        const chainAssetId = normalizeChainAssetId(
+          primary.chain_asset_id ?? buildChainAssetId(primary.chain, primary.address),
+        );
+        const matchedMarketAsset =
+          (chainAssetId ? marketChangeLookup.byChainAssetId.get(chainAssetId) : undefined)
+          ?? pickPreferredSymbolAsset(marketChangeLookup.bySymbol.get(symbol) ?? [], primary.chain ?? null);
+        const totalAmount = variants.reduce(
+          (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
+          0,
+        );
         return {
           key: normalizeAssetId(primary.asset_id) ?? `${primary.chain_id}-${primary.address}`,
           assetId: normalizeAssetId(primary.asset_id),
+          chainAssetId,
           symbol,
           name,
           logo: resolveHoldingIcon(
@@ -305,17 +437,106 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
             resolveAssetIdFallbackIcon(normalizeAssetId(primary.asset_id), symbol),
           ),
           valueUsd: group.totalValueUsd,
-          amountText:
-            chainLabels.length > 1
-              ? t('wallet.multiChainCount', { count: chainLabels.length })
-              : formatTokenAmount(primary.amount, primary.decimals),
-          secondaryLabel: `${name} · ${chainSummary}`,
+          amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
+          priceChangePct: matchedMarketAsset?.price_change_percentage_24h ?? null,
           transferAsset: primary,
         } satisfies WalletHoldingListItem;
       })
       .filter((item): item is WalletHoldingListItem => Boolean(item))
       .sort((a, b) => b.valueUsd - a.valueUsd);
-  }, [chainNameById, portfolioData, t]);
+  }, [chainNameById, marketChangeLookup.byChainAssetId, marketChangeLookup.bySymbol, portfolioData, t]);
+
+  const stableAndCryptos = useMemo(() => {
+    const stableHoldings = holdings.filter((asset) => {
+      if (asset.assetId && STABLE_ASSET_IDS.has(asset.assetId)) return true;
+      return STABLE_SYMBOLS.has(asset.symbol.trim().toUpperCase());
+    });
+    const cryptoHoldings = holdings.filter((asset) => !stableHoldings.includes(asset));
+    const stablesUsd = stableHoldings.reduce((sum, item) => sum + Number(item.valueUsd ?? 0), 0);
+    const cryptosUsd = cryptoHoldings.reduce((sum, item) => sum + Number(item.valueUsd ?? 0), 0);
+    return { stableHoldings, cryptoHoldings, stablesUsd, cryptosUsd };
+  }, [holdings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const now = Date.now();
+    const cache = detailPriceChangeCacheRef.current;
+    const pendingByCacheKey = new Map<string, { cacheKey: string; chain: string; contract: string; holdingKeys: string[] }>();
+    const resolvedUpdates: Record<string, number | null> = {};
+
+    for (const asset of stableAndCryptos.cryptoHoldings) {
+      if (asset.priceChangePct !== null && asset.priceChangePct !== undefined) continue;
+      const lookupParams = resolvePriceChangeLookupParams(asset);
+      if (!lookupParams) continue;
+
+      const cached = cache.get(lookupParams.cacheKey);
+      if (cached && cached.expiresAt > now) {
+        resolvedUpdates[asset.key] = cached.value;
+        continue;
+      }
+
+      const existing = pendingByCacheKey.get(lookupParams.cacheKey);
+      if (existing) {
+        existing.holdingKeys.push(asset.key);
+      } else {
+        pendingByCacheKey.set(lookupParams.cacheKey, {
+          cacheKey: lookupParams.cacheKey,
+          chain: lookupParams.chain,
+          contract: lookupParams.contract,
+          holdingKeys: [asset.key],
+        });
+      }
+    }
+
+    if (Object.keys(resolvedUpdates).length > 0) {
+      setDetailPriceChangeByHoldingKey((prev) => ({ ...prev, ...resolvedUpdates }));
+    }
+    if (pendingByCacheKey.size === 0) return;
+
+    const pendingItems = [...pendingByCacheKey.values()];
+    void getCoinDetailsBatch(
+      pendingItems.map((item) => ({
+        chain: item.chain,
+        contract: item.contract,
+      })),
+    )
+      .then((details) => {
+        if (cancelled) return;
+        const nowTs = Date.now();
+        const valueByKey = new Map<string, number | null>();
+        for (const item of details) {
+          const value = Number.isFinite(Number(item.detail?.priceChange24h)) ? Number(item.detail?.priceChange24h) : null;
+          valueByKey.set(item.key, value);
+        }
+
+        const updates: Record<string, number | null> = {};
+        for (const pending of pendingItems) {
+          const value = valueByKey.has(pending.cacheKey) ? valueByKey.get(pending.cacheKey) ?? null : null;
+          cache.set(pending.cacheKey, { value, expiresAt: nowTs + PRICE_CHANGE_CACHE_TTL_MS });
+          for (const holdingKey of pending.holdingKeys) {
+            updates[holdingKey] = value;
+          }
+        }
+
+        setDetailPriceChangeByHoldingKey((prev) => ({ ...prev, ...updates }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const nowTs = Date.now();
+        const updates: Record<string, number | null> = {};
+        for (const pending of pendingItems) {
+          cache.set(pending.cacheKey, { value: null, expiresAt: nowTs + PRICE_CHANGE_FAILED_CACHE_TTL_MS });
+          for (const holdingKey of pending.holdingKeys) {
+            updates[holdingKey] = null;
+          }
+        }
+        setDetailPriceChangeByHoldingKey((prev) => ({ ...prev, ...updates }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [stableAndCryptos.cryptoHoldings]);
 
   const shouldShowLoading = isLoading && !portfolioData;
   const shouldShowError = isError && !portfolioData;
@@ -450,7 +671,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         <button
           ref={topUpButtonRef}
           type="button"
-          className="btn btn-primary h-16 text-base font-semibold"
+          className="btn btn-primary text-base font-semibold"
           onClick={openTopUpModal}
         >
           {t('wallet.topUp')}
@@ -458,12 +679,12 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         <button
           ref={transferButtonRef}
           type="button"
-          className="btn btn-primary h-16 text-base font-semibold"
+          className="btn btn-primary text-base font-semibold"
           onClick={openTransferModal}
         >
           {t('wallet.transfer')}
         </button>
-        <button type="button" className="btn btn-primary h-16 text-base font-semibold">
+        <button type="button" className="btn btn-primary text-base font-semibold">
           {t('wallet.trade')}
         </button>
       </section>
@@ -496,24 +717,60 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         {!shouldShowLoading && !shouldShowError && holdings.length === 0 && (
           <div className="bg-base-200 p-4 text-base">{t('wallet.noAssetsFound')}</div>
         )}
-        {holdings.map((asset) => (
-          <AssetListItem
-            key={asset.key}
-            onClick={() => openTransferModalFromAsset(asset.transferAsset)}
-            leftIcon={
-              <TokenAvatar
-                icon={asset.logo}
-                symbol={asset.symbol}
-                name={asset.name || t('wallet.token')}
-                fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
-              />
-            }
-            leftPrimary={asset.symbol}
-            leftSecondary={asset.secondaryLabel}
-            rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
-            rightSecondary={asset.amountText}
-          />
-        ))}
+        {!shouldShowLoading && !shouldShowError && holdings.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <article className="rounded-2xl border border-base-300 bg-base-100 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="m-0 text-base font-semibold">{t('wallet.stables')}</h3>
+                <p className="m-0 text-base font-semibold tabular-nums">
+                  {formatUsdAdaptive(stableAndCryptos.stablesUsd, i18n.language)}
+                </p>
+              </div>
+            </article>
+
+            <article className="rounded-2xl border border-base-300 bg-base-100 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="m-0 text-base font-semibold">{t('wallet.cryptos')}</h3>
+                <p className="m-0 text-base font-semibold tabular-nums">
+                  {formatUsdAdaptive(stableAndCryptos.cryptosUsd, i18n.language)}
+                </p>
+              </div>
+              <div className="mt-2 flex flex-col">
+                {stableAndCryptos.cryptoHoldings.length === 0 && (
+                  <div className="py-2 text-sm text-base-content/60">{t('wallet.noAssetsFound')}</div>
+                )}
+                {stableAndCryptos.cryptoHoldings.map((asset) => {
+                  const resolvedPriceChangePct = asset.priceChangePct ?? detailPriceChangeByHoldingKey[asset.key] ?? null;
+                  const changeClassName =
+                    Number(resolvedPriceChangePct ?? 0) > 0
+                      ? 'text-success'
+                      : Number(resolvedPriceChangePct ?? 0) < 0
+                        ? 'text-error'
+                        : 'text-base-content/60';
+                  return (
+                    <AssetListItem
+                      key={asset.key}
+                      className="py-3"
+                      onClick={() => openTransferModalFromAsset(asset.transferAsset)}
+                      leftIcon={
+                        <TokenAvatar
+                          icon={asset.logo}
+                          symbol={asset.symbol}
+                          name={asset.name || t('wallet.token')}
+                          fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
+                        />
+                      }
+                      leftPrimary={asset.name || t('wallet.token')}
+                      leftSecondary={`${asset.amountText} ${asset.symbol}`}
+                      rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
+                      rightSecondary={<span className={changeClassName}>{formatPct(resolvedPriceChangePct)}</span>}
+                    />
+                  );
+                })}
+              </div>
+            </article>
+          </div>
+        )}
       </section>
 
       {isModalOpen && (

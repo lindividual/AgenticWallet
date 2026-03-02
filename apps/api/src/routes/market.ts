@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { getChainIdByMarketChain } from '../config/appConfig';
 import { ingestTokenLists, listTokenCatalog, resolveBestTokenCatalogLogo } from '../services/market';
-import { fetchBitgetTokenDetail, fetchBitgetTokenKline } from '../services/bitgetWallet';
+import { fetchBitgetTokenDetail, fetchBitgetTokenDetails, fetchBitgetTokenKline } from '../services/bitgetWallet';
 import { getCoinGeckoCoinListSyncStatus, syncCoinGeckoCoinListPlatforms } from '../services/coingecko';
 import {
   fetchTopMarketAssets,
@@ -143,6 +143,57 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json(
         {
           error: 'bitget_token_detail_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.post('/v1/market/token-details', async (c) => {
+    const body = await c.req.json<{ tokens?: Array<{ chain?: string; contract?: string }> }>().catch(() => null);
+    const tokens = (body?.tokens ?? [])
+      .map((item) => ({
+        chain: (item?.chain ?? '').trim().toLowerCase(),
+        contract: (item?.contract ?? '').trim().toLowerCase(),
+      }))
+      .filter((item) => Boolean(item.chain))
+      .slice(0, 100);
+
+    if (!tokens.length) {
+      return c.json({ error: 'invalid_tokens' }, 400);
+    }
+
+    try {
+      const details = await fetchBitgetTokenDetails(c.env, tokens);
+      const enriched = await Promise.all(
+        details.map(async (item) => {
+          const detail = item.detail;
+          if (!detail || detail.image || !detail.contract) {
+            return item;
+          }
+          const chainId = getChainIdByMarketChain(detail.chain);
+          if (chainId == null) {
+            return item;
+          }
+          const fallbackLogo = await resolveBestTokenCatalogLogo(c.env.DB, chainId, detail.contract);
+          if (!fallbackLogo) {
+            return item;
+          }
+          return {
+            ...item,
+            detail: {
+              ...detail,
+              image: fallbackLogo,
+            },
+          };
+        }),
+      );
+      return c.json({ details: enriched });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'bitget_token_details_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,

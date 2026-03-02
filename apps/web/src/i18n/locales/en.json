@@ -26,6 +26,8 @@
     "moreReadings": "More readings",
     "saved": "Saved",
     "holdings": "Holdings",
+    "stables": "Stables",
+    "cryptos": "Cryptos",
     "singleChainLabel": "{{chain}}",
     "multiChainCount": "{{count}} chains",
     "loadingAssets": "Loading assets...",

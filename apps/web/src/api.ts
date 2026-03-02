@@ -232,6 +232,13 @@ export type CoinDetail = {
   lockLpPercent: number | null;
 };
 
+export type CoinDetailBatchItem = {
+  key: string;
+  chain: string;
+  contract: string;
+  detail: CoinDetail | null;
+};
+
 export type KlinePeriod = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
 
 export type KlineCandle = {
@@ -438,6 +445,22 @@ export async function getCoinDetail(chain: string, contract: string): Promise<Co
   query.set('contract', normalizedContract);
   const response = await getJson<{ detail: CoinDetail }>(`/v1/market/token-detail?${query.toString()}`, true);
   return response.detail;
+}
+
+export async function getCoinDetailsBatch(tokens: Array<{ chain: string; contract: string }>): Promise<CoinDetailBatchItem[]> {
+  const normalizedTokens = tokens
+    .map((item) => ({
+      chain: item.chain.trim().toLowerCase(),
+      contract: item.contract.trim().toLowerCase(),
+    }))
+    .filter((item) => Boolean(item.chain));
+  if (normalizedTokens.length === 0) return [];
+  const response = await postJson<{ details: CoinDetailBatchItem[] }>(
+    '/v1/market/token-details',
+    { tokens: normalizedTokens },
+    true,
+  );
+  return response.details;
 }
 
 export async function getTokenKline(

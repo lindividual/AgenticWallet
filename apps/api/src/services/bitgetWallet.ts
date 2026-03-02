@@ -94,6 +94,29 @@ function buildTokenDetailCacheKey(chain: string, contract: string): string {
   return `${normalizeMarketChain(chain)}:${toContractKey(contract)}`;
 }
 
+type NormalizedTokenDetailLookup = {
+  cacheKey: string;
+  chain: string;
+  contract: string;
+};
+
+function normalizeTokenDetailLookup(
+  input: {
+    chain: string;
+    contract: string;
+  },
+): NormalizedTokenDetailLookup | null {
+  const normalizedChain = normalizeText(input.chain);
+  if (!normalizedChain) return null;
+  const chain = normalizeMarketChain(normalizedChain);
+  const contract = toContractKey(input.contract);
+  return {
+    cacheKey: buildTokenDetailCacheKey(chain, contract),
+    chain,
+    contract,
+  };
+}
+
 function buildTokenKlineCacheKey(options: {
   chain: string;
   contract: string;
@@ -303,67 +326,172 @@ export type BitgetTokenDetail = {
   lockLpPercent: number | null;
 };
 
+function mapBitgetBaseInfoRowToTokenDetail(
+  row: BitgetBaseInfoRow,
+  fallback: {
+    chain: string;
+    contract: string;
+  },
+): BitgetTokenDetail {
+  const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? fallback.chain);
+  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(fallback.contract);
+  return {
+    asset_id: buildAssetId(normalizedChain, normalizedContract),
+    chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
+    chain: normalizedChain,
+    contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
+    symbol: normalizeText(row.symbol) ?? 'UNKNOWN',
+    name: normalizeText(row.name) ?? normalizeText(row.symbol) ?? 'Unknown Token',
+    image: normalizeText(row.icon),
+    priceChange24h:
+      normalizeFiniteNumber(row.change_24h)
+      ?? normalizeFiniteNumber(row.price_change_percentage_24h),
+    currentPriceUsd: normalizeFiniteNumber(row.price),
+    holders: normalizeFiniteNumber(row.holders),
+    totalSupply: normalizeFiniteNumber(row.total_supply),
+    liquidityUsd: normalizeFiniteNumber(row.liquidity),
+    top10HolderPercent: normalizeFiniteNumber(row.top10_holder_percent),
+    devHolderPercent: normalizeFiniteNumber(row.dev_holder_percent),
+    lockLpPercent: normalizeFiniteNumber(row.lock_lp_percent),
+  };
+}
+
+export type BitgetTokenDetailBatchItem = {
+  key: string;
+  chain: string;
+  contract: string;
+  detail: BitgetTokenDetail | null;
+};
+
+export async function fetchBitgetTokenDetails(
+  env: Bindings,
+  requests: Array<{
+    chain: string;
+    contract: string;
+  }>,
+): Promise<BitgetTokenDetailBatchItem[]> {
+  const normalizedRequests = requests
+    .map((item) => normalizeTokenDetailLookup(item))
+    .filter((item): item is NormalizedTokenDetailLookup => item != null);
+  if (normalizedRequests.length === 0) return [];
+
+  const uniqueLookups = [...new Map(normalizedRequests.map((item) => [item.cacheKey, item])).values()];
+  const detailByCacheKey = new Map<string, BitgetTokenDetail | null>();
+  const now = Date.now();
+  const pending: Array<Promise<void>> = [];
+  const misses: NormalizedTokenDetailLookup[] = [];
+
+  for (const lookup of uniqueLookups) {
+    const cached = tokenDetailValueCache.get(lookup.cacheKey);
+    if (cached && cached.expiresAt > now) {
+      detailByCacheKey.set(lookup.cacheKey, cached.value);
+      continue;
+    }
+    const inFlight = tokenDetailInFlightCache.get(lookup.cacheKey);
+    if (inFlight) {
+      pending.push(
+        inFlight.then((value) => {
+          detailByCacheKey.set(lookup.cacheKey, value);
+        }),
+      );
+      continue;
+    }
+    misses.push(lookup);
+  }
+
+  if (misses.length > 0) {
+    const batchTask = (async () => {
+      const result = await bitgetPost<{ list?: BitgetBaseInfoRow[] }>(
+        env,
+        '/bgw-pro/market/v3/coin/batchGetBaseInfo',
+        {
+          list: misses.map((item) => ({
+            chain: item.chain,
+            contract: contractKeyToUpstreamContract(item.contract),
+          })),
+        },
+      );
+      const rows = Array.isArray(result.data?.list) ? result.data.list : [];
+      const rowByCacheKey = new Map<string, BitgetTokenDetail>();
+
+      for (const row of rows) {
+        const rowLookup = normalizeTokenDetailLookup({
+          chain: normalizeText(row.chain) ?? '',
+          contract: normalizeText(row.contract) ?? '',
+        });
+        if (!rowLookup || rowByCacheKey.has(rowLookup.cacheKey)) continue;
+        rowByCacheKey.set(
+          rowLookup.cacheKey,
+          mapBitgetBaseInfoRowToTokenDetail(row, {
+            chain: rowLookup.chain,
+            contract: rowLookup.contract,
+          }),
+        );
+      }
+
+      for (let i = 0; i < misses.length; i += 1) {
+        const lookup = misses[i];
+        if (rowByCacheKey.has(lookup.cacheKey)) continue;
+        const row = rows[i];
+        if (!row) continue;
+        rowByCacheKey.set(
+          lookup.cacheKey,
+          mapBitgetBaseInfoRowToTokenDetail(row, {
+            chain: lookup.chain,
+            contract: lookup.contract,
+          }),
+        );
+      }
+
+      const expiresAt = Date.now() + TOKEN_DETAIL_CACHE_TTL_MS;
+      for (const lookup of misses) {
+        const value = rowByCacheKey.get(lookup.cacheKey) ?? null;
+        tokenDetailValueCache.set(lookup.cacheKey, { expiresAt, value });
+        detailByCacheKey.set(lookup.cacheKey, value);
+      }
+    })().finally(() => {
+      for (const lookup of misses) {
+        tokenDetailInFlightCache.delete(lookup.cacheKey);
+      }
+    });
+
+    for (const lookup of misses) {
+      const itemTask = batchTask.then(() => detailByCacheKey.get(lookup.cacheKey) ?? null);
+      tokenDetailInFlightCache.set(lookup.cacheKey, itemTask);
+      pending.push(
+        itemTask.then((value) => {
+          detailByCacheKey.set(lookup.cacheKey, value);
+        }),
+      );
+    }
+  }
+
+  if (pending.length > 0) {
+    await Promise.all(pending);
+  }
+
+  return normalizedRequests.map((item) => ({
+    key: item.cacheKey,
+    chain: item.chain,
+    contract: item.contract === 'native' ? '' : item.contract,
+    detail: detailByCacheKey.get(item.cacheKey) ?? null,
+  }));
+}
+
 export async function fetchBitgetTokenDetail(
   env: Bindings,
   chain: string,
   contract: string,
 ): Promise<BitgetTokenDetail | null> {
-  const cacheKey = buildTokenDetailCacheKey(chain, contract);
-  const now = Date.now();
-  const cached = tokenDetailValueCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    return cached.value;
-  }
-  const inFlight = tokenDetailInFlightCache.get(cacheKey);
-  if (inFlight) {
-    return inFlight;
-  }
-
-  const task = (async () => {
-    const result = await bitgetPost<{ list?: BitgetBaseInfoRow[] }>(
-      env,
-      '/bgw-pro/market/v3/coin/batchGetBaseInfo',
-      {
-        list: [{ chain, contract: contractKeyToUpstreamContract(contract) }],
-      },
-    );
-    const row = Array.isArray(result.data?.list) ? result.data?.list[0] : undefined;
-    const value: BitgetTokenDetail | null = row
-      ? (() => {
-          const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? chain);
-          const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(contract);
-          return {
-            asset_id: buildAssetId(normalizedChain, normalizedContract),
-            chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
-            chain: normalizedChain,
-            contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
-            symbol: normalizeText(row.symbol) ?? 'UNKNOWN',
-            name: normalizeText(row.name) ?? normalizeText(row.symbol) ?? 'Unknown Token',
-            image: normalizeText(row.icon),
-            priceChange24h:
-              normalizeFiniteNumber(row.change_24h)
-              ?? normalizeFiniteNumber(row.price_change_percentage_24h),
-            currentPriceUsd: normalizeFiniteNumber(row.price),
-            holders: normalizeFiniteNumber(row.holders),
-            totalSupply: normalizeFiniteNumber(row.total_supply),
-            liquidityUsd: normalizeFiniteNumber(row.liquidity),
-            top10HolderPercent: normalizeFiniteNumber(row.top10_holder_percent),
-            devHolderPercent: normalizeFiniteNumber(row.dev_holder_percent),
-            lockLpPercent: normalizeFiniteNumber(row.lock_lp_percent),
-          };
-        })()
-      : null;
-    tokenDetailValueCache.set(cacheKey, {
-      expiresAt: Date.now() + TOKEN_DETAIL_CACHE_TTL_MS,
-      value,
-    });
-    return value;
-  })().finally(() => {
-    tokenDetailInFlightCache.delete(cacheKey);
-  });
-
-  tokenDetailInFlightCache.set(cacheKey, task);
-  return task;
+  const normalized = normalizeTokenDetailLookup({ chain, contract });
+  if (!normalized) return null;
+  const results = await fetchBitgetTokenDetails(env, [
+    {
+      chain: normalized.chain,
+      contract: normalized.contract,
+    },
+  ]);
+  return results[0]?.detail ?? null;
 }
 
 export type BitgetKlineCandle = {
