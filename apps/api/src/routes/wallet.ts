@@ -1,5 +1,9 @@
 import type { Hono } from 'hono';
-import { fetchWalletPortfolio, upsertTokenMetadataFromPortfolio } from '../services/market';
+import {
+  buildMergedPortfolioHoldings,
+  fetchWalletPortfolio,
+  upsertTokenMetadataFromPortfolio,
+} from '../services/market';
 import { listUserPortfolioSnapshots, saveUserPortfolioSnapshot } from '../services/agent';
 import { getWallet } from '../services/wallet';
 import type { AppEnv } from '../types';
@@ -27,6 +31,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       );
     }
     const holdings = result.holdings;
+    const mergedHoldings = buildMergedPortfolioHoldings(holdings);
     const totalUsd = result.totalUsd;
     const sample = holdings
       .slice(0, 3)
@@ -46,6 +51,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       walletAddress,
       totalUsd,
       holdings,
+      mergedHoldings,
     });
   });
 

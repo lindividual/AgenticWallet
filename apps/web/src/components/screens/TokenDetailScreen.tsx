@@ -94,7 +94,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   });
 
   const { data: shelfData } = useQuery({
-    queryKey: ['trade-market-shelves'],
+    queryKey: ['market-shelves', 10],
     queryFn: () =>
       getMarketShelves({
         limitPerShelf: 10,

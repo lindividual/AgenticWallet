@@ -42,7 +42,7 @@ export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: ['trade-market-shelves'],
+    queryKey: ['market-shelves', 10],
     queryFn: () =>
       getMarketShelves({
         limitPerShelf: 10,

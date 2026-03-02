@@ -1,6 +1,7 @@
 import type { Bindings } from '../types';
 import { nowIso } from '../utils/time';
-import { getSupportedChainIds } from '../config/appConfig';
+import { getMarketChainByChainId, getSupportedChainIds } from '../config/appConfig';
+import { buildAssetId, buildChainAssetId, NATIVE_CONTRACT_KEY } from './assetIdentity';
 
 type SimBalanceRow = {
   chain: string;
@@ -14,6 +15,22 @@ type SimBalanceRow = {
   value_usd?: number;
   logo?: string;
   url?: string;
+};
+
+export type MergedHoldingVariant = SimBalanceRow & {
+  market_chain: string;
+  contract_key: string;
+  chain_asset_id: string;
+  asset_id: string;
+};
+
+export type MergedPortfolioHolding = {
+  asset_id: string;
+  symbol: string | null;
+  name: string | null;
+  logo: string | null;
+  total_value_usd: number;
+  variants: MergedHoldingVariant[];
 };
 
 type SimBalancesResponse = {
@@ -57,6 +74,32 @@ function normalizeAddress(raw: string | undefined): string | null {
   const normalized = raw.trim().toLowerCase();
   if (!/^0x[a-f0-9]{40}$/.test(normalized)) return null;
   return normalized;
+}
+
+function normalizeText(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value ? value : null;
+}
+
+function normalizeMarketChain(raw: string | undefined): string {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (!value) return 'unknown';
+  if (value === 'ethereum') return 'eth';
+  if (value === 'bsc' || value === 'binance-smart-chain') return 'bnb';
+  return value;
+}
+
+function resolveHoldingMarketChain(row: SimBalanceRow): string {
+  const fromConfig = getMarketChainByChainId(Number(row.chain_id));
+  if (fromConfig) return fromConfig;
+  return normalizeMarketChain(row.chain);
+}
+
+function resolveHoldingContractKey(row: SimBalanceRow): string {
+  const address = normalizeAddress(row.address);
+  if (!address || /^0x0{40}$/.test(address)) return NATIVE_CONTRACT_KEY;
+  return address;
 }
 
 function hasPositiveAmount(rawAmount: string | undefined): boolean {
@@ -105,6 +148,64 @@ export async function fetchWalletPortfolio(
     holdings,
     asOf: nowIso(),
   };
+}
+
+export function buildMergedPortfolioHoldings(holdings: SimBalanceRow[]): MergedPortfolioHolding[] {
+  const byAssetId = new Map<string, MergedPortfolioHolding>();
+  for (const row of holdings) {
+    const marketChain = resolveHoldingMarketChain(row);
+    const contractKey = resolveHoldingContractKey(row);
+    const assetId = buildAssetId(marketChain, contractKey);
+    const chainAssetId = buildChainAssetId(marketChain, contractKey);
+    const valueUsd = Number(row.value_usd ?? 0);
+    const variant: MergedHoldingVariant = {
+      ...row,
+      market_chain: marketChain,
+      contract_key: contractKey,
+      chain_asset_id: chainAssetId,
+      asset_id: assetId,
+    };
+
+    const current = byAssetId.get(assetId);
+    if (current) {
+      current.total_value_usd += valueUsd;
+      current.variants.push(variant);
+      continue;
+    }
+    byAssetId.set(assetId, {
+      asset_id: assetId,
+      symbol: normalizeText(row.symbol)?.toUpperCase() ?? null,
+      name: normalizeText(row.name),
+      logo: normalizeText(row.logo) ?? normalizeText(row.url),
+      total_value_usd: valueUsd,
+      variants: [variant],
+    });
+  }
+
+  const merged = [...byAssetId.values()];
+  for (const item of merged) {
+    item.variants.sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+    if (!item.symbol) {
+      item.symbol = item.variants
+        .map((variant) => normalizeText(variant.symbol)?.toUpperCase() ?? null)
+        .find((symbol): symbol is string => Boolean(symbol))
+        ?? null;
+    }
+    if (!item.name) {
+      item.name = item.variants
+        .map((variant) => normalizeText(variant.name))
+        .find((name): name is string => Boolean(name))
+        ?? null;
+    }
+    if (!item.logo) {
+      item.logo = item.variants
+        .map((variant) => normalizeText(variant.logo) ?? normalizeText(variant.url))
+        .find((logo): logo is string => Boolean(logo))
+        ?? null;
+    }
+  }
+
+  return merged.sort((a, b) => b.total_value_usd - a.total_value_usd);
 }
 
 async function upsertToken(

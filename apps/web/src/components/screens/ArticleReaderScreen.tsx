@@ -185,7 +185,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
   );
 
   const { data: relatedShelfData } = useQuery({
-    queryKey: ['article-related-market-shelves'],
+    queryKey: ['market-shelves', 12],
     queryFn: () =>
       getMarketShelves({
         limitPerShelf: 12,
@@ -196,7 +196,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
   });
 
   const { data: relatedTopAssets } = useQuery({
-    queryKey: ['article-related-top-assets'],
+    queryKey: ['top-assets', 'marketCap', 'auto', 120],
     queryFn: () =>
       getTopMarketAssets({
         name: 'marketCap',

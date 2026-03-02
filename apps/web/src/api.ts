@@ -93,6 +93,21 @@ export type WalletPortfolioResponse = {
   walletAddress: string;
   totalUsd: number;
   holdings: SimEvmBalance[];
+  mergedHoldings?: Array<{
+    asset_id: string;
+    symbol: string | null;
+    name: string | null;
+    logo: string | null;
+    total_value_usd: number;
+    variants: Array<
+      SimEvmBalance & {
+        market_chain: string;
+        contract_key: string;
+        chain_asset_id: string;
+        asset_id: string;
+      }
+    >;
+  }>;
 };
 
 export type TransferQuoteRequest = {

@@ -8,13 +8,12 @@ import {
 } from './assetIdentity';
 
 const BGW_BASE_URL = 'https://bopenapi.bgwapi.io';
-const DEFAULT_BGW_API_KEY = '4843D8C3F1E20772C0E634EDACC5C5F9A0E2DC92';
-const DEFAULT_BGW_API_SECRET = 'F2ABFDC684BDC6775FD6286B8D06A3AAD30FD587';
 
 type JsonLike = null | boolean | number | string | JsonLike[] | { [key: string]: JsonLike };
 
 type BitgetEnvelope<T> = {
-  code?: number;
+  status?: number | string;
+  code?: number | string;
   msg?: string;
   message?: string;
   data?: T;
@@ -124,8 +123,11 @@ async function bitgetPost<TData>(
   apiPath: string,
   body?: JsonLike,
 ): Promise<BitgetEnvelope<TData>> {
-  const apiKey = env.BGW_API_KEY?.trim() || DEFAULT_BGW_API_KEY;
-  const apiSecret = env.BGW_API_SECRET?.trim() || DEFAULT_BGW_API_SECRET;
+  const apiKey = env.BGW_API_KEY?.trim();
+  const apiSecret = env.BGW_API_SECRET?.trim();
+  if (!apiKey || !apiSecret) {
+    throw new Error('bgw_credentials_not_configured');
+  }
   const timestamp = String(Date.now());
   const canonicalBody = body == null ? '' : JSON.stringify(stableSortJson(body));
   const signContent = JSON.stringify(
@@ -156,7 +158,27 @@ async function bitgetPost<TData>(
     throw new Error(`bgw_http_${response.status}:${detail.slice(0, 300)}`);
   }
 
-  return (await response.json()) as BitgetEnvelope<TData>;
+  const payload = (await response.json()) as BitgetEnvelope<TData>;
+
+  const statusValue = Number(payload.status);
+  const codeRaw = payload.code;
+  const codeValue = Number(codeRaw);
+  const codeText = typeof codeRaw === 'string' ? codeRaw.trim() : '';
+  const statusOk =
+    payload.status == null
+    || (Number.isFinite(statusValue) && statusValue === 0)
+    || String(payload.status).trim() === '0';
+  const codeOk =
+    codeRaw == null
+    || (Number.isFinite(codeValue) && codeValue === 0)
+    || codeText === '0'
+    || codeText === '00000';
+  if (!statusOk || !codeOk) {
+    const message = normalizeText(payload.msg) ?? normalizeText(payload.message) ?? 'bgw_business_error';
+    throw new Error(`bgw_business_error:${message}`);
+  }
+
+  return payload;
 }
 
 export type MarketTopAsset = {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useMatch, useNavigate } from '@tanstack/react-router';
+import { useCanGoBack, useLocation, useMatch, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
@@ -18,6 +18,7 @@ const TOKEN_EXIT_MS = 220;
 export function App() {
   const { i18n } = useTranslation();
   const navigate = useNavigate();
+  const canGoBack = useCanGoBack();
   const location = useLocation();
   const articleMatch = useMatch({ from: '/article/$articleId', shouldThrow: false });
   const tokenMatch = useMatch({ from: '/token/$chain/$contract', shouldThrow: false });
@@ -129,7 +130,7 @@ export function App() {
     }, ARTICLE_EXIT_MS);
   }
 
-  function handleOpenToken(token: TopMarketAsset) {
+  function handleOpenToken(token: TopMarketAsset, _shelfId: string) {
     handleOpenTokenByRoute(token.chain, token.contract);
   }
 
@@ -156,7 +157,11 @@ export function App() {
       clearTimeout(tokenExitTimerRef.current);
     }
     tokenExitTimerRef.current = setTimeout(() => {
-      void navigate({ to: '/trade' });
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        void navigate({ to: '/trade' });
+      }
       setIsTokenExiting(false);
       setActiveTokenRoute(null);
       tokenExitTimerRef.current = null;

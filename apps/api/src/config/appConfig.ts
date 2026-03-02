@@ -26,3 +26,8 @@ export function getSupportedChainIds(): number[] {
 export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb'> {
   return [...new Set(APP_CONFIG.supportedChains.map((item) => item.marketChain))];
 }
+
+export function getMarketChainByChainId(chainId: number): ChainConfig['marketChain'] | null {
+  const matched = APP_CONFIG.supportedChains.find((item) => item.chainId === chainId);
+  return matched?.marketChain ?? null;
+}

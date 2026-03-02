@@ -42,7 +42,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
 
   const { data: portfolio } = useQuery({
-    queryKey: ['home-wallet-portfolio', walletAddress],
+    queryKey: ['wallet-portfolio', walletAddress],
     queryFn: () => getWalletPortfolio(),
     enabled: Boolean(walletAddress),
     staleTime: 15_000,
@@ -58,7 +58,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   });
 
   const { data: shelfData } = useQuery({
-    queryKey: ['home-market-shelves'],
+    queryKey: ['market-shelves', 10],
     queryFn: () =>
       getMarketShelves({
         limitPerShelf: 10,
