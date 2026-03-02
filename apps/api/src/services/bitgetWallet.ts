@@ -1,4 +1,11 @@
 import type { Bindings } from '../types';
+import {
+  buildAssetId,
+  buildChainAssetId,
+  contractKeyToUpstreamContract,
+  normalizeMarketChain,
+  toContractKey,
+} from './assetIdentity';
 
 const BGW_BASE_URL = 'https://bopenapi.bgwapi.io';
 const DEFAULT_BGW_API_KEY = '4843D8C3F1E20772C0E634EDACC5C5F9A0E2DC92';
@@ -154,6 +161,8 @@ async function bitgetPost<TData>(
 
 export type MarketTopAsset = {
   id: string;
+  asset_id: string;
+  chain_asset_id: string;
   chain: string;
   contract: string;
   symbol: string;
@@ -196,12 +205,16 @@ export async function fetchBitgetTopMarketAssets(
       : rows;
 
   return filtered.slice(0, limit).map((row, idx) => {
-    const chain = normalizeText(row.chain) ?? 'unknown';
+    const chain = normalizeMarketChain(row.chain);
     const contract = normalizeText(row.contract) ?? '';
+    const chainAssetId = buildChainAssetId(chain, contract);
+    const assetId = buildAssetId(chain, contract);
     const symbol = normalizeText(row.symbol) ?? 'UNKNOWN';
     const name = normalizeText(row.name) ?? symbol;
     return {
-      id: `${chain}:${contract || 'native'}`,
+      id: chainAssetId,
+      asset_id: assetId,
+      chain_asset_id: chainAssetId,
       chain,
       contract,
       symbol,
@@ -218,6 +231,8 @@ export async function fetchBitgetTopMarketAssets(
 }
 
 export type BitgetTokenDetail = {
+  asset_id: string;
+  chain_asset_id: string;
   chain: string;
   contract: string;
   symbol: string;
@@ -240,15 +255,20 @@ export async function fetchBitgetTokenDetail(
     env,
     '/bgw-pro/market/v3/coin/batchGetBaseInfo',
     {
-      list: [{ chain, contract }],
+      list: [{ chain, contract: contractKeyToUpstreamContract(contract) }],
     },
   );
   const row = Array.isArray(result.data?.list) ? result.data?.list[0] : undefined;
   if (!row) return null;
 
+  const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? chain);
+  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(contract);
+
   return {
-    chain: normalizeText(row.chain) ?? chain,
-    contract: normalizeText(row.contract) ?? contract,
+    asset_id: buildAssetId(normalizedChain, normalizedContract),
+    chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
+    chain: normalizedChain,
+    contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
     symbol: normalizeText(row.symbol) ?? 'UNKNOWN',
     name: normalizeText(row.name) ?? normalizeText(row.symbol) ?? 'Unknown Token',
     currentPriceUsd: normalizeFiniteNumber(row.price),
@@ -283,7 +303,7 @@ export async function fetchBitgetTokenKline(
   const size = clampInt(options.size ?? 60, 5, 300);
   const result = await bitgetPost<{ list?: BitgetKlineRow[] }>(env, '/bgw-pro/market/v3/coin/getKline', {
     chain: options.chain,
-    contract: options.contract,
+    contract: contractKeyToUpstreamContract(options.contract),
     period,
     size,
   });

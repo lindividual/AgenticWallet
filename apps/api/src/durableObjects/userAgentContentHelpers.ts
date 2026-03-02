@@ -8,6 +8,7 @@ type PortfolioSnapshotRow = {
 };
 
 type RecommendationAssetSnapshot = {
+  assetId: string;
   symbol: string;
   chain: string | null;
   contract: string | null;
@@ -102,17 +103,28 @@ export function buildPortfolioContext(sql: SqlStorage): string {
 
 export function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): Map<string, RecommendationAssetSnapshot> {
   const lookup = new Map<string, RecommendationAssetSnapshot>();
+  const ambiguous = new Set<string>();
   for (const asset of marketAssets) {
     const symbol = (asset.symbol ?? '').trim().toUpperCase();
-    if (!symbol || lookup.has(symbol)) continue;
-    lookup.set(symbol, {
+    if (!symbol || ambiguous.has(symbol)) continue;
+    const next = {
+      assetId: asset.asset_id,
       symbol,
       chain: asset.chain ?? null,
       contract: asset.contract ?? null,
       name: asset.name ?? symbol,
       image: asset.image ?? null,
       priceChange24h: asset.price_change_percentage_24h ?? null,
-    });
+    } satisfies RecommendationAssetSnapshot;
+    const current = lookup.get(symbol);
+    if (!current) {
+      lookup.set(symbol, next);
+      continue;
+    }
+    if (current.assetId !== next.assetId) {
+      lookup.delete(symbol);
+      ambiguous.add(symbol);
+    }
   }
   return lookup;
 }

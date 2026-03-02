@@ -166,6 +166,8 @@ export type MarketToken = {
 
 export type TopMarketAsset = {
   id: string;
+  asset_id: string;
+  chain_asset_id: string;
   chain: string;
   contract: string;
   symbol: string;
@@ -193,6 +195,8 @@ export type MarketShelf = {
 };
 
 export type CoinDetail = {
+  asset_id: string;
+  chain_asset_id: string;
   chain: string;
   contract: string;
   symbol: string;

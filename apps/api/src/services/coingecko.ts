@@ -1,5 +1,6 @@
 import type { Bindings } from '../types';
 import type { MarketTopAsset, TopAssetListName } from './bitgetWallet';
+import { buildAssetId, buildChainAssetId } from './assetIdentity';
 
 const DEFAULT_COINGECKO_BASE_URL = 'https://api.coingecko.com/api/v3';
 const DEFAULT_COINGECKO_USER_AGENT = 'AgenticWallet-MVP/0.1 (market-shelves; +https://agentic-wallet.local)';
@@ -157,6 +158,13 @@ function normalizeNameKey(raw: unknown): string {
   return value.replace(/[^a-z0-9]+/g, '');
 }
 
+function normalizeContractAddress(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  if (!value) return null;
+  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
+  return value;
+}
+
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.trunc(value)));
@@ -200,16 +208,18 @@ function pickChainFromPlatforms(
 
   for (const chain of preferredChains) {
     if (chain === 'eth') {
-      const contract = normalizedPlatforms.ethereum;
-      if (typeof contract === 'string') return { chain, contract };
+      const contract = normalizeContractAddress(normalizedPlatforms.ethereum);
+      if (contract) return { chain, contract };
     }
     if (chain === 'base') {
-      const contract = normalizedPlatforms.base;
-      if (typeof contract === 'string') return { chain, contract };
+      const contract = normalizeContractAddress(normalizedPlatforms.base);
+      if (contract) return { chain, contract };
     }
     if (chain === 'bnb') {
-      const contract = normalizedPlatforms['binance-smart-chain'] ?? normalizedPlatforms['bnb-smart-chain'];
-      if (typeof contract === 'string') return { chain, contract };
+      const contract = normalizeContractAddress(
+        normalizedPlatforms['binance-smart-chain'] ?? normalizedPlatforms['bnb-smart-chain'],
+      );
+      if (contract) return { chain, contract };
     }
   }
 
@@ -225,8 +235,9 @@ function pickNativeChainFallback(
   const sym = (symbol ?? '').trim().toUpperCase();
 
   const preferred = new Set(preferredChains);
-  if ((id === 'ethereum' || sym === 'ETH') && preferred.has('eth')) {
-    return { chain: 'eth', contract: '' };
+  if (id === 'ethereum' || sym === 'ETH') {
+    if (preferred.has('eth')) return { chain: 'eth', contract: '' };
+    if (preferred.has('base')) return { chain: 'base', contract: '' };
   }
   if ((id === 'binancecoin' || sym === 'BNB') && preferred.has('bnb')) {
     return { chain: 'bnb', contract: '' };
@@ -759,8 +770,13 @@ function toMarketTopAsset(
   const name = normalizeText(row.name);
   if (!coinId || !symbol || !name) return null;
 
+  const chainAssetId = buildChainAssetId(chainMatch.chain, chainMatch.contract);
+  const assetId = buildAssetId(chainMatch.chain, chainMatch.contract, `coingecko:${coinId}`);
+
   return {
-    id: `coingecko:${coinId}:${chainMatch.chain}:${chainMatch.contract || 'native'}`,
+    id: chainAssetId,
+    asset_id: assetId,
+    chain_asset_id: chainAssetId,
     chain: chainMatch.chain,
     contract: chainMatch.contract,
     symbol,

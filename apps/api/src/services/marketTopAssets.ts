@@ -40,7 +40,7 @@ function dedupeAssets(assets: MarketTopAsset[]): MarketTopAsset[] {
   const output: MarketTopAsset[] = [];
   const seen = new Set<string>();
   for (const asset of assets) {
-    const key = `${asset.chain}:${asset.contract.toLowerCase()}:${asset.symbol.toLowerCase()}`;
+    const key = asset.chain_asset_id || `${asset.chain}:${asset.contract.toLowerCase()}:${asset.symbol.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
     output.push(asset);

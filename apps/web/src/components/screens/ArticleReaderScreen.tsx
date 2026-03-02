@@ -216,18 +216,27 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
       ...(relatedShelfData ?? []).flatMap((shelf) => shelf.assets),
     ];
 
-    const bySymbol = new Map<string, TopMarketAsset>();
+    const bySymbol = new Map<string, TopMarketAsset | null>();
     for (const asset of marketAssets) {
       const symbol = normalizeSymbol(asset.symbol);
       if (!symbol) continue;
       const existing = bySymbol.get(symbol);
-      if (!existing || shouldPreferAsset(asset, existing)) {
+      if (existing === undefined) {
+        bySymbol.set(symbol, asset);
+        continue;
+      }
+      if (!existing) continue;
+      if (existing.asset_id !== asset.asset_id) {
+        bySymbol.set(symbol, null);
+        continue;
+      }
+      if (shouldPreferAsset(asset, existing)) {
         bySymbol.set(symbol, asset);
       }
     }
 
     return relatedSymbols.map((symbol) => {
-      const matched = bySymbol.get(symbol);
+      const matched = bySymbol.get(symbol) ?? undefined;
       const marketChain = matched?.chain?.trim() ?? '';
       const marketContract = matched?.contract?.trim() ?? '';
       const routeFromMarket = marketChain && marketContract && isValidEvmContract(marketContract)

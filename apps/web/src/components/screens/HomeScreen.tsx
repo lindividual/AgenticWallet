@@ -6,6 +6,7 @@ import type { AuthState } from '../../hooks/useWalletApp';
 import { BalanceHeader } from '../BalanceHeader';
 import { AssetListItem } from '../AssetListItem';
 import { SettingsDropdown } from '../SettingsDropdown';
+import { buildChainAssetId } from '../../utils/assetIdentity';
 
 type HomeScreenProps = {
   auth: AuthState;
@@ -85,14 +86,24 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
     const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
     const marketAssets = (shelfData ?? []).flatMap((shelf) => shelf.assets);
-    const byChainContract = new Map<string, TopMarketAsset>();
-    const bySymbol = new Map<string, TopMarketAsset>();
+    const byChainAssetId = new Map<string, TopMarketAsset>();
+    const byUniqueSymbol = new Map<string, TopMarketAsset | null>();
 
     for (const asset of marketAssets) {
-      const key = `${asset.chain.toLowerCase()}:${(asset.contract ?? '').toLowerCase()}`;
-      if (!byChainContract.has(key)) byChainContract.set(key, asset);
+      const chainAssetId = asset.chain_asset_id || buildChainAssetId(asset.chain, asset.contract);
+      if (!byChainAssetId.has(chainAssetId)) byChainAssetId.set(chainAssetId, asset);
+
       const symbol = (asset.symbol ?? '').trim().toUpperCase();
-      if (symbol && !bySymbol.has(symbol)) bySymbol.set(symbol, asset);
+      if (!symbol) continue;
+      const current = byUniqueSymbol.get(symbol);
+      if (current === undefined) {
+        byUniqueSymbol.set(symbol, asset);
+        continue;
+      }
+      if (!current) continue;
+      if (current.asset_id !== asset.asset_id) {
+        byUniqueSymbol.set(symbol, null);
+      }
     }
 
     return recommended
@@ -101,8 +112,10 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         const symbol = (assetMeta?.symbol ?? item.title ?? '').trim().toUpperCase();
         const chain = (assetMeta?.chain ?? '').trim().toLowerCase();
         const contract = (assetMeta?.contract ?? '').trim().toLowerCase();
-        const exactKey = chain ? `${chain}:${contract}` : '';
-        const matched = (exactKey ? byChainContract.get(exactKey) : undefined) ?? (symbol ? bySymbol.get(symbol) : undefined);
+        const exactKey = chain ? buildChainAssetId(chain, contract) : '';
+        const matched =
+          (exactKey ? byChainAssetId.get(exactKey) : undefined)
+          ?? (symbol ? byUniqueSymbol.get(symbol) ?? undefined : undefined);
 
         const displaySymbol = (matched?.symbol ?? symbol ?? '').toUpperCase();
         const displayName = matched?.name ?? assetMeta?.name ?? item.title ?? displaySymbol;
