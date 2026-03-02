@@ -36,11 +36,22 @@ function formatTokenAmount(rawAmount: string | undefined, decimals: number | und
   return normalized.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
-function getAssetInitial(asset: SimEvmBalance): string {
-  const label = (asset.symbol ?? asset.name ?? '').trim();
+function getAssetInitial(symbol: string | null | undefined, name: string | null | undefined): string {
+  const label = (symbol ?? name ?? '').trim();
   if (!label) return '?';
   return label[0].toUpperCase();
 }
+
+type WalletHoldingListItem = {
+  key: string;
+  symbol: string;
+  name: string;
+  logo: string | null;
+  valueUsd: number;
+  amountText: string;
+  secondaryLabel: string;
+  transferAsset: SimEvmBalance;
+};
 
 export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
@@ -71,47 +82,88 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     refetchOnWindowFocus: false,
   });
 
-  const holdings = useMemo<SimEvmBalance[]>(() => {
+  const totalBalance = data?.totalUsd ?? 0;
+  const supportedChains = appConfig?.supportedChains ?? [];
+  const chainNameById = useMemo(
+    () => new Map(supportedChains.map((chain) => [chain.chainId, chain.name] as const)),
+    [supportedChains],
+  );
+
+  const holdings = useMemo<WalletHoldingListItem[]>(() => {
     if (!data) {
       return [];
     }
 
+    const merged = data.mergedHoldings ?? [];
+    if (merged.length > 0) {
+      return [...merged]
+        .sort((a, b) => Number(b.total_value_usd ?? 0) - Number(a.total_value_usd ?? 0))
+        .slice(0, 10)
+        .flatMap((item) => {
+          const variants = [...(item.variants ?? [])].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+          const primary = variants[0];
+          if (!primary) return [];
+
+          const chainLabels = [
+            ...new Set(
+              variants
+                .map((variant) => {
+                  const fromConfig = chainNameById.get(Number(variant.chain_id));
+                  if (fromConfig) return fromConfig;
+                  if (variant.chain) return variant.chain.toUpperCase();
+                  const fallbackChainId = Number(variant.chain_id);
+                  return Number.isFinite(fallbackChainId) ? String(fallbackChainId) : '--';
+                })
+                .filter(Boolean),
+            ),
+          ];
+          const chainSummary =
+            chainLabels.length > 1
+              ? t('wallet.multiChainCount', { count: chainLabels.length })
+              : t('wallet.singleChainLabel', { chain: chainLabels[0] ?? '--' });
+          const symbol = (item.symbol ?? primary.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
+          const name = (item.name ?? primary.name ?? t('wallet.token')).trim();
+
+          return [
+            {
+              key: item.asset_id || `${primary.chain_id}-${primary.address}`,
+              symbol,
+              name,
+              logo: item.logo ?? primary.logo ?? null,
+              valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
+              amountText:
+                chainLabels.length > 1
+                  ? t('wallet.multiChainCount', { count: chainLabels.length })
+                  : formatTokenAmount(primary.amount, primary.decimals),
+              secondaryLabel: `${name} · ${chainSummary}`,
+              transferAsset: primary,
+            } satisfies WalletHoldingListItem,
+          ];
+        });
+    }
+
     return [...data.holdings]
       .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0))
-      .slice(0, 10);
-  }, [data]);
-
-  const totalBalance = data?.totalUsd ?? 0;
-  const supportedChains = appConfig?.supportedChains ?? [];
-
-  useEffect(() => {
-    if (!walletAddress) {
-      console.log('[wallet-ui] no walletAddress in auth payload');
-      return;
-    }
-    console.log('[wallet-ui] query_state', {
-      walletAddress,
-      isLoading,
-      isFetching,
-      isError,
-      error: isError ? (error as Error)?.message : null,
-    });
-  }, [walletAddress, isLoading, isFetching, isError, error]);
-
-  useEffect(() => {
-    if (!data) return;
-    console.log('[wallet-ui] portfolio_response', {
-      walletAddress: data.walletAddress,
-      totalUsd: data.totalUsd,
-      holdingsCount: data.holdings.length,
-      sample: data.holdings.slice(0, 3).map((row) => ({
-        chain_id: row.chain_id,
-        symbol: row.symbol,
-        amount: row.amount,
-        value_usd: row.value_usd ?? null,
-      })),
-    });
-  }, [data]);
+      .slice(0, 10)
+      .map((asset) => {
+        const chainName =
+          chainNameById.get(Number(asset.chain_id))
+          ?? asset.chain?.toUpperCase()
+          ?? (Number.isFinite(Number(asset.chain_id)) ? String(asset.chain_id) : '--');
+        const symbol = (asset.symbol ?? asset.name ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
+        const name = (asset.name ?? t('wallet.token')).trim();
+        return {
+          key: `${asset.chain_id}-${asset.address}`,
+          symbol,
+          name,
+          logo: asset.logo ?? null,
+          valueUsd: Number(asset.value_usd ?? 0),
+          amountText: formatTokenAmount(asset.amount, asset.decimals),
+          secondaryLabel: `${name} · ${t('wallet.singleChainLabel', { chain: chainName })}`,
+          transferAsset: asset,
+        } satisfies WalletHoldingListItem;
+      });
+  }, [chainNameById, data, t]);
 
   useEffect(
     () => () => {
@@ -277,26 +329,26 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         )}
         {holdings.map((asset) => (
           <AssetListItem
-            key={`${asset.chain_id}-${asset.address}`}
-            onClick={() => openTransferModalFromAsset(asset)}
+            key={asset.key}
+            onClick={() => openTransferModalFromAsset(asset.transferAsset)}
             leftIcon={
               asset.logo ? (
                 <img
                   src={asset.logo}
-                  alt={asset.symbol ?? asset.name ?? t('wallet.token')}
+                  alt={asset.symbol || asset.name || t('wallet.token')}
                   className="h-10 w-10 rounded-full bg-base-300 object-cover"
                   loading="lazy"
                 />
               ) : (
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                  {getAssetInitial(asset)}
+                  {getAssetInitial(asset.symbol, asset.name)}
                 </div>
               )
             }
-            leftPrimary={asset.symbol ?? asset.name ?? t('wallet.unknownAsset')}
-            leftSecondary={asset.name ?? t('wallet.token')}
-            rightPrimary={formatUsdAdaptive(Number(asset.value_usd ?? 0), i18n.language)}
-            rightSecondary={formatTokenAmount(asset.amount, asset.decimals)}
+            leftPrimary={asset.symbol}
+            leftSecondary={asset.secondaryLabel}
+            rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
+            rightSecondary={asset.amountText}
           />
         ))}
       </section>

@@ -113,8 +113,8 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
   });
 
   app.get('/v1/market/token-detail', async (c) => {
-    const chain = (c.req.query('chain') ?? '').trim();
-    const contract = (c.req.query('contract') ?? '').trim();
+    const chain = (c.req.query('chain') ?? '').trim().toLowerCase();
+    const contract = (c.req.query('contract') ?? '').trim().toLowerCase();
     if (!chain) {
       return c.json({ error: 'invalid_chain' }, 400);
     }
@@ -137,8 +137,8 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
   });
 
   app.get('/v1/market/kline', async (c) => {
-    const chain = (c.req.query('chain') ?? '').trim();
-    const contract = (c.req.query('contract') ?? '').trim();
+    const chain = (c.req.query('chain') ?? '').trim().toLowerCase();
+    const contract = (c.req.query('contract') ?? '').trim().toLowerCase();
     const period = (c.req.query('period') ?? '1h').trim();
     const sizeRaw = Number(c.req.query('size'));
     const size = Number.isFinite(sizeRaw) ? sizeRaw : 60;

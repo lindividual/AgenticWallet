@@ -26,6 +26,8 @@
     "moreReadings": "قراءات إضافية",
     "saved": "المحفوظات",
     "holdings": "المقتنيات",
+    "singleChainLabel": "{{chain}}",
+    "multiChainCount": "{{count}} شبكات",
     "loadingAssets": "جار تحميل الأصول...",
     "refresh": "تحديث",
     "refreshing": "جار التحديث...",

@@ -2,6 +2,7 @@ import type { Bindings } from '../types';
 import { nowIso } from '../utils/time';
 import { getMarketChainByChainId, getSupportedChainIds } from '../config/appConfig';
 import { buildAssetId, buildChainAssetId, NATIVE_CONTRACT_KEY } from './assetIdentity';
+import { resolveCoinGeckoAssetIdForContract } from './coingecko';
 
 type SimBalanceRow = {
   chain: string;
@@ -150,13 +151,36 @@ export async function fetchWalletPortfolio(
   };
 }
 
-export function buildMergedPortfolioHoldings(holdings: SimBalanceRow[]): MergedPortfolioHolding[] {
+export async function buildMergedPortfolioHoldings(
+  env: Bindings,
+  holdings: SimBalanceRow[],
+): Promise<MergedPortfolioHolding[]> {
   const byAssetId = new Map<string, MergedPortfolioHolding>();
+  const preferredAssetIdByChainAssetId = new Map<string, string | null>();
+
   for (const row of holdings) {
     const marketChain = resolveHoldingMarketChain(row);
     const contractKey = resolveHoldingContractKey(row);
-    const assetId = buildAssetId(marketChain, contractKey);
     const chainAssetId = buildChainAssetId(marketChain, contractKey);
+    if (!preferredAssetIdByChainAssetId.has(chainAssetId)) {
+      if (contractKey === NATIVE_CONTRACT_KEY) {
+        preferredAssetIdByChainAssetId.set(chainAssetId, null);
+      } else {
+        try {
+          preferredAssetIdByChainAssetId.set(
+            chainAssetId,
+            await resolveCoinGeckoAssetIdForContract(env, marketChain, contractKey),
+          );
+        } catch {
+          preferredAssetIdByChainAssetId.set(chainAssetId, null);
+        }
+      }
+    }
+    const assetId = buildAssetId(
+      marketChain,
+      contractKey,
+      preferredAssetIdByChainAssetId.get(chainAssetId) ?? undefined,
+    );
     const valueUsd = Number(row.value_usd ?? 0);
     const variant: MergedHoldingVariant = {
       ...row,

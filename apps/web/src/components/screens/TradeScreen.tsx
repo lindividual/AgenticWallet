@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState, type TouchEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type TouchEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getMarketShelves, type MarketShelf, type TopMarketAsset } from '../../api';
 import { AssetListItem } from '../AssetListItem';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { readTradeScrollY, saveTradeScrollY } from '../../utils/tradeScrollMemory';
 import { SettingsDropdown } from '../SettingsDropdown';
 
 type TradeScreenProps = {
@@ -31,6 +32,7 @@ export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
   const { t, i18n } = useTranslation();
   const pullStartYRef = useRef<number | null>(null);
   const lastManualRefreshAtRef = useRef(0);
+  const pendingRestoreYRef = useRef<number | null>(null);
   const [pullDistance, setPullDistance] = useState(0);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
 
@@ -56,6 +58,60 @@ export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
     () => shelves.some((shelf) => shelf.assets.length > 0),
     [shelves],
   );
+
+  useLayoutEffect(() => {
+    if (pendingRestoreYRef.current == null) {
+      const storedY = readTradeScrollY();
+      pendingRestoreYRef.current = storedY > 0 ? storedY : null;
+    }
+    const targetY = pendingRestoreYRef.current;
+    if (targetY == null) return;
+
+    let frame = 0;
+    let rafId = 0;
+    const restore = () => {
+      const maxY = Math.max(document.documentElement.scrollHeight - window.innerHeight, 0);
+      const nextY = Math.min(targetY, maxY);
+      window.scrollTo({ top: nextY, left: 0, behavior: 'auto' });
+      frame += 1;
+
+      const reachedTarget = Math.abs(window.scrollY - targetY) <= 1;
+      const canReachTargetNow = maxY >= targetY - 1;
+      if (reachedTarget || (canReachTargetNow && Math.abs(window.scrollY - nextY) <= 1)) {
+        pendingRestoreYRef.current = null;
+        return;
+      }
+
+      if (frame < 60) {
+        rafId = window.requestAnimationFrame(restore);
+      }
+    };
+
+    rafId = window.requestAnimationFrame(restore);
+    return () => {
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [isLoading, shelves.length]);
+
+  useEffect(() => {
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        saveTradeScrollY(window.scrollY);
+        ticking = false;
+      });
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      saveTradeScrollY(window.scrollY);
+      window.removeEventListener('scroll', onScroll);
+    };
+  }, []);
 
   async function triggerPullRefresh(): Promise<void> {
     if (isFetching || isPullRefreshing) return;

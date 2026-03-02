@@ -31,7 +31,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       );
     }
     const holdings = result.holdings;
-    const mergedHoldings = buildMergedPortfolioHoldings(holdings);
+    const mergedHoldings = await buildMergedPortfolioHoldings(c.env, holdings);
     const totalUsd = result.totalUsd;
     const sample = holdings
       .slice(0, 3)

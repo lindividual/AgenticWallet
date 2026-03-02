@@ -33,6 +33,10 @@ type MarketShelfConfig = Omit<MarketShelf, 'assets'> & {
   enabled: boolean;
 };
 
+const MARKET_SHELVES_CACHE_TTL_MS = 20_000;
+const marketShelvesValueCache = new Map<string, { expiresAt: number; shelves: MarketShelf[] }>();
+const marketShelvesInFlightCache = new Map<string, Promise<MarketShelf[]>>();
+
 const DEFAULT_SHELF_CONFIGS: MarketShelfConfig[] = [
   {
     id: 'meme_trending_global',
@@ -186,6 +190,21 @@ async function loadShelfConfigs(env: Bindings): Promise<MarketShelfConfig[]> {
   return [...DEFAULT_SHELF_CONFIGS].sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
+function buildShelfCacheKey(
+  supportedChains: Set<'eth' | 'base' | 'bnb'>,
+  options?: {
+    shelfIds?: string[];
+    limitPerShelf?: number;
+  },
+): string {
+  const chains = [...supportedChains].sort().join(',');
+  const ids = [...new Set((options?.shelfIds ?? []).map((item) => item.trim()).filter(Boolean))]
+    .sort()
+    .join(',');
+  const limit = Number.isFinite(options?.limitPerShelf) ? String(options?.limitPerShelf) : '';
+  return `${chains}|${ids}|${limit}`;
+}
+
 export async function fetchMarketShelves(
   env: Bindings,
   options?: {
@@ -196,55 +215,77 @@ export async function fetchMarketShelves(
   const supportedChains = new Set(getSupportedMarketChains());
   if (supportedChains.size === 0) return [];
 
-  const configs = await loadShelfConfigs(env);
-  const idFilter = new Set(
-    (options?.shelfIds ?? [])
-      .map((item) => item.trim())
-      .filter(Boolean),
-  );
-  const hasFilter = idFilter.size > 0;
-  const limitOverride = options?.limitPerShelf;
+  const cacheKey = buildShelfCacheKey(supportedChains, options);
+  const cached = marketShelvesValueCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.shelves;
+  }
+  const inflight = marketShelvesInFlightCache.get(cacheKey);
+  if (inflight) {
+    return inflight;
+  }
 
-  const selectedConfigs = configs
-    .map((config) => ({
-      ...config,
-      chains:
-        config.chains.length > 0
-          ? config.chains.filter((chain) => supportedChains.has(chain as 'eth' | 'base' | 'bnb'))
-          : [...supportedChains],
-    }))
-    .filter((config) => config.chains.length > 0 && (!hasFilter || idFilter.has(config.id)));
-  const shelves = await Promise.all(
-    selectedConfigs.map(async (config) => {
-      const assets = await fetchTopMarketAssets(env, {
-        source: config.source,
-        name: config.name,
-        chains: config.chains,
-        category: config.category ?? undefined,
-        limit: clampInt(limitOverride ?? config.limit, 1, 30),
-      }).catch((error) => {
-        console.warn('[market/shelves] shelf_fetch_failed', {
-          shelfId: config.id,
+  const task = (async () => {
+    const configs = await loadShelfConfigs(env);
+    const idFilter = new Set(
+      (options?.shelfIds ?? [])
+        .map((item) => item.trim())
+        .filter(Boolean),
+    );
+    const hasFilter = idFilter.size > 0;
+    const limitOverride = options?.limitPerShelf;
+
+    const selectedConfigs = configs
+      .map((config) => ({
+        ...config,
+        chains:
+          config.chains.length > 0
+            ? config.chains.filter((chain) => supportedChains.has(chain as 'eth' | 'base' | 'bnb'))
+            : [...supportedChains],
+      }))
+      .filter((config) => config.chains.length > 0 && (!hasFilter || idFilter.has(config.id)));
+    const shelves = await Promise.all(
+      selectedConfigs.map(async (config) => {
+        const assets = await fetchTopMarketAssets(env, {
           source: config.source,
           name: config.name,
-          chains: config.chains.join(','),
-          category: config.category ?? null,
-          message: error instanceof Error ? error.message : 'unknown_error',
+          chains: config.chains,
+          category: config.category ?? undefined,
+          limit: clampInt(limitOverride ?? config.limit, 1, 30),
+        }).catch((error) => {
+          console.warn('[market/shelves] shelf_fetch_failed', {
+            shelfId: config.id,
+            source: config.source,
+            name: config.name,
+            chains: config.chains.join(','),
+            category: config.category ?? null,
+            message: error instanceof Error ? error.message : 'unknown_error',
+          });
+          return [] as MarketTopAsset[];
         });
-        return [] as MarketTopAsset[];
-      });
 
-      return {
-        id: config.id,
-        title: config.title,
-        description: config.description,
-        source: config.source,
-        name: config.name,
-        chains: config.chains,
-        category: config.category,
-        assets,
-      } satisfies MarketShelf;
-    }),
-  );
-  return shelves;
+        return {
+          id: config.id,
+          title: config.title,
+          description: config.description,
+          source: config.source,
+          name: config.name,
+          chains: config.chains,
+          category: config.category,
+          assets,
+        } satisfies MarketShelf;
+      }),
+    );
+    marketShelvesValueCache.set(cacheKey, {
+      expiresAt: Date.now() + MARKET_SHELVES_CACHE_TTL_MS,
+      shelves,
+    });
+    return shelves;
+  })().finally(() => {
+    marketShelvesInFlightCache.delete(cacheKey);
+  });
+
+  marketShelvesInFlightCache.set(cacheKey, task);
+  return task;
 }

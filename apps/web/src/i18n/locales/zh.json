@@ -26,6 +26,8 @@
     "moreReadings": "更多阅读",
     "saved": "已保存",
     "holdings": "资产",
+    "singleChainLabel": "{{chain}}",
+    "multiChainCount": "{{count}} 条链",
     "loadingAssets": "正在加载资产...",
     "refresh": "刷新",
     "refreshing": "刷新中...",

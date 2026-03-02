@@ -8,6 +8,8 @@ import {
 } from './assetIdentity';
 
 const BGW_BASE_URL = 'https://bopenapi.bgwapi.io';
+const TOKEN_DETAIL_CACHE_TTL_MS = 15_000;
+const TOKEN_KLINE_CACHE_TTL_MS = 12_000;
 
 type JsonLike = null | boolean | number | string | JsonLike[] | { [key: string]: JsonLike };
 
@@ -64,6 +66,11 @@ type BitgetKlineRow = {
   turnover?: number | string;
 };
 
+const tokenDetailValueCache = new Map<string, { expiresAt: number; value: BitgetTokenDetail | null }>();
+const tokenDetailInFlightCache = new Map<string, Promise<BitgetTokenDetail | null>>();
+const tokenKlineValueCache = new Map<string, { expiresAt: number; value: BitgetKlineCandle[] }>();
+const tokenKlineInFlightCache = new Map<string, Promise<BitgetKlineCandle[]>>();
+
 function normalizeFiniteNumber(raw: unknown): number | null {
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
@@ -78,6 +85,29 @@ function normalizeText(raw: unknown): string | null {
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function buildTokenDetailCacheKey(chain: string, contract: string): string {
+  return `${normalizeMarketChain(chain)}:${toContractKey(contract)}`;
+}
+
+function buildTokenKlineCacheKey(options: {
+  chain: string;
+  contract: string;
+  period?: string;
+  size?: number;
+}): { cacheKey: string; chain: string; contract: string; period: string; size: number } {
+  const chain = normalizeMarketChain(options.chain);
+  const contract = toContractKey(options.contract);
+  const period = normalizeText(options.period) ?? '1h';
+  const size = clampInt(options.size ?? 60, 5, 300);
+  return {
+    cacheKey: `${chain}:${contract}:${period}:${size}`,
+    chain,
+    contract,
+    period,
+    size,
+  };
 }
 
 function stableSortJson(input: JsonLike): JsonLike {
@@ -273,34 +303,58 @@ export async function fetchBitgetTokenDetail(
   chain: string,
   contract: string,
 ): Promise<BitgetTokenDetail | null> {
-  const result = await bitgetPost<{ list?: BitgetBaseInfoRow[] }>(
-    env,
-    '/bgw-pro/market/v3/coin/batchGetBaseInfo',
-    {
-      list: [{ chain, contract: contractKeyToUpstreamContract(contract) }],
-    },
-  );
-  const row = Array.isArray(result.data?.list) ? result.data?.list[0] : undefined;
-  if (!row) return null;
+  const cacheKey = buildTokenDetailCacheKey(chain, contract);
+  const now = Date.now();
+  const cached = tokenDetailValueCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const inFlight = tokenDetailInFlightCache.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
 
-  const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? chain);
-  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(contract);
+  const task = (async () => {
+    const result = await bitgetPost<{ list?: BitgetBaseInfoRow[] }>(
+      env,
+      '/bgw-pro/market/v3/coin/batchGetBaseInfo',
+      {
+        list: [{ chain, contract: contractKeyToUpstreamContract(contract) }],
+      },
+    );
+    const row = Array.isArray(result.data?.list) ? result.data?.list[0] : undefined;
+    const value: BitgetTokenDetail | null = row
+      ? (() => {
+          const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? chain);
+          const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(contract);
+          return {
+            asset_id: buildAssetId(normalizedChain, normalizedContract),
+            chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
+            chain: normalizedChain,
+            contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
+            symbol: normalizeText(row.symbol) ?? 'UNKNOWN',
+            name: normalizeText(row.name) ?? normalizeText(row.symbol) ?? 'Unknown Token',
+            currentPriceUsd: normalizeFiniteNumber(row.price),
+            holders: normalizeFiniteNumber(row.holders),
+            totalSupply: normalizeFiniteNumber(row.total_supply),
+            liquidityUsd: normalizeFiniteNumber(row.liquidity),
+            top10HolderPercent: normalizeFiniteNumber(row.top10_holder_percent),
+            devHolderPercent: normalizeFiniteNumber(row.dev_holder_percent),
+            lockLpPercent: normalizeFiniteNumber(row.lock_lp_percent),
+          };
+        })()
+      : null;
+    tokenDetailValueCache.set(cacheKey, {
+      expiresAt: Date.now() + TOKEN_DETAIL_CACHE_TTL_MS,
+      value,
+    });
+    return value;
+  })().finally(() => {
+    tokenDetailInFlightCache.delete(cacheKey);
+  });
 
-  return {
-    asset_id: buildAssetId(normalizedChain, normalizedContract),
-    chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
-    chain: normalizedChain,
-    contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
-    symbol: normalizeText(row.symbol) ?? 'UNKNOWN',
-    name: normalizeText(row.name) ?? normalizeText(row.symbol) ?? 'Unknown Token',
-    currentPriceUsd: normalizeFiniteNumber(row.price),
-    holders: normalizeFiniteNumber(row.holders),
-    totalSupply: normalizeFiniteNumber(row.total_supply),
-    liquidityUsd: normalizeFiniteNumber(row.liquidity),
-    top10HolderPercent: normalizeFiniteNumber(row.top10_holder_percent),
-    devHolderPercent: normalizeFiniteNumber(row.dev_holder_percent),
-    lockLpPercent: normalizeFiniteNumber(row.lock_lp_percent),
-  };
+  tokenDetailInFlightCache.set(cacheKey, task);
+  return task;
 }
 
 export type BitgetKlineCandle = {
@@ -321,35 +375,57 @@ export async function fetchBitgetTokenKline(
     size?: number;
   },
 ): Promise<BitgetKlineCandle[]> {
-  const period = normalizeText(options.period) ?? '1h';
-  const size = clampInt(options.size ?? 60, 5, 300);
-  const result = await bitgetPost<{ list?: BitgetKlineRow[] }>(env, '/bgw-pro/market/v3/coin/getKline', {
-    chain: options.chain,
-    contract: contractKeyToUpstreamContract(options.contract),
-    period,
-    size,
-  });
-  const rows = Array.isArray(result.data?.list) ? result.data?.list : [];
+  const normalized = buildTokenKlineCacheKey(options);
+  const now = Date.now();
+  const cached = tokenKlineValueCache.get(normalized.cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const inFlight = tokenKlineInFlightCache.get(normalized.cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
 
-  return rows
-    .map((row) => {
-      const time = normalizeFiniteNumber(row.ts);
-      const open = normalizeFiniteNumber(row.open);
-      const high = normalizeFiniteNumber(row.high);
-      const low = normalizeFiniteNumber(row.low);
-      const close = normalizeFiniteNumber(row.close);
-      if (time == null || open == null || high == null || low == null || close == null) {
-        return null;
-      }
-      return {
-        time,
-        open,
-        high,
-        low,
-        close,
-        turnover: normalizeFiniteNumber(row.turnover),
-      } satisfies BitgetKlineCandle;
-    })
-    .filter((item): item is BitgetKlineCandle => item != null)
-    .sort((a, b) => a.time - b.time);
+  const task = (async () => {
+    const result = await bitgetPost<{ list?: BitgetKlineRow[] }>(env, '/bgw-pro/market/v3/coin/getKline', {
+      chain: normalized.chain,
+      contract: contractKeyToUpstreamContract(normalized.contract),
+      period: normalized.period,
+      size: normalized.size,
+    });
+    const rows = Array.isArray(result.data?.list) ? result.data?.list : [];
+
+    const value = rows
+      .map((row) => {
+        const time = normalizeFiniteNumber(row.ts);
+        const open = normalizeFiniteNumber(row.open);
+        const high = normalizeFiniteNumber(row.high);
+        const low = normalizeFiniteNumber(row.low);
+        const close = normalizeFiniteNumber(row.close);
+        if (time == null || open == null || high == null || low == null || close == null) {
+          return null;
+        }
+        return {
+          time,
+          open,
+          high,
+          low,
+          close,
+          turnover: normalizeFiniteNumber(row.turnover),
+        } satisfies BitgetKlineCandle;
+      })
+      .filter((item): item is BitgetKlineCandle => item != null)
+      .sort((a, b) => a.time - b.time);
+
+    tokenKlineValueCache.set(normalized.cacheKey, {
+      expiresAt: Date.now() + TOKEN_KLINE_CACHE_TTL_MS,
+      value,
+    });
+    return value;
+  })().finally(() => {
+    tokenKlineInFlightCache.delete(normalized.cacheKey);
+  });
+
+  tokenKlineInFlightCache.set(normalized.cacheKey, task);
+  return task;
 }

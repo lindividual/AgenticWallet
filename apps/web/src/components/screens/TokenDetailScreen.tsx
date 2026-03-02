@@ -72,8 +72,8 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
 
-  const normalizedChain = chain.trim();
-  const normalizedContract = contract.trim();
+  const normalizedChain = chain.trim().toLowerCase();
+  const normalizedContract = contract.trim().toLowerCase();
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });

@@ -93,21 +93,23 @@ export type WalletPortfolioResponse = {
   walletAddress: string;
   totalUsd: number;
   holdings: SimEvmBalance[];
-  mergedHoldings?: Array<{
-    asset_id: string;
-    symbol: string | null;
-    name: string | null;
-    logo: string | null;
-    total_value_usd: number;
-    variants: Array<
-      SimEvmBalance & {
-        market_chain: string;
-        contract_key: string;
-        chain_asset_id: string;
-        asset_id: string;
-      }
-    >;
-  }>;
+  mergedHoldings?: WalletMergedHolding[];
+};
+
+export type WalletMergedHoldingVariant = SimEvmBalance & {
+  market_chain: string;
+  contract_key: string;
+  chain_asset_id: string;
+  asset_id: string;
+};
+
+export type WalletMergedHolding = {
+  asset_id: string;
+  symbol: string | null;
+  name: string | null;
+  logo: string | null;
+  total_value_usd: number;
+  variants: WalletMergedHoldingVariant[];
 };
 
 export type TransferQuoteRequest = {
@@ -424,9 +426,11 @@ export async function getMarketShelves(params?: {
 }
 
 export async function getCoinDetail(chain: string, contract: string): Promise<CoinDetail> {
+  const normalizedChain = chain.trim().toLowerCase();
+  const normalizedContract = contract.trim().toLowerCase();
   const query = new URLSearchParams();
-  query.set('chain', chain);
-  query.set('contract', contract);
+  query.set('chain', normalizedChain);
+  query.set('contract', normalizedContract);
   const response = await getJson<{ detail: CoinDetail }>(`/v1/market/token-detail?${query.toString()}`, true);
   return response.detail;
 }
@@ -437,9 +441,11 @@ export async function getTokenKline(
   period: KlinePeriod = '1h',
   size = 60,
 ): Promise<KlineCandle[]> {
+  const normalizedChain = chain.trim().toLowerCase();
+  const normalizedContract = contract.trim().toLowerCase();
   const query = new URLSearchParams();
-  query.set('chain', chain);
-  query.set('contract', contract);
+  query.set('chain', normalizedChain);
+  query.set('contract', normalizedContract);
   query.set('period', period);
   query.set('size', String(size));
   const response = await getJson<{ candles: KlineCandle[] }>(`/v1/market/kline?${query.toString()}`, true);

@@ -26,6 +26,8 @@
     "moreReadings": "More readings",
     "saved": "Saved",
     "holdings": "Holdings",
+    "singleChainLabel": "{{chain}}",
+    "multiChainCount": "{{count}} chains",
     "loadingAssets": "Loading assets...",
     "refresh": "Refresh",
     "refreshing": "Refreshing...",
