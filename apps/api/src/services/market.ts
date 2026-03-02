@@ -65,6 +65,22 @@ const DEFAULT_TOKEN_LIST_URLS = [
   'https://raw.githubusercontent.com/pancakeswap/token-list/main/lists/pancakeswap-extended.json',
 ];
 
+const FALLBACK_ASSET_NAME_BY_ID: Record<string, string> = {
+  'coingecko:ethereum': 'Ethereum',
+  'coingecko:binancecoin': 'BNB',
+  'coingecko:bitcoin': 'Bitcoin',
+  'coingecko:tether': 'Tether',
+  'coingecko:usd-coin': 'USD Coin',
+};
+
+const FALLBACK_ASSET_NAME_BY_SYMBOL: Record<string, string> = {
+  ETH: 'Ethereum',
+  BNB: 'BNB',
+  BTC: 'Bitcoin',
+  USDT: 'Tether',
+  USDC: 'USD Coin',
+};
+
 let tokenCatalogSchemaReady = false;
 let aggregatedAssetCatalogSchemaReady = false;
 
@@ -153,6 +169,16 @@ function hasPositiveAmount(rawAmount: string | undefined): boolean {
   }
   const asNumber = Number(normalized);
   return Number.isFinite(asNumber) && asNumber > 0;
+}
+
+function resolveFallbackAssetName(assetId: string | null | undefined, symbol: string | null | undefined): string | null {
+  const normalizedAssetId = normalizeAssetId(assetId);
+  if (normalizedAssetId && FALLBACK_ASSET_NAME_BY_ID[normalizedAssetId]) {
+    return FALLBACK_ASSET_NAME_BY_ID[normalizedAssetId];
+  }
+  const normalizedSymbol = normalizeText(symbol)?.toUpperCase();
+  if (!normalizedSymbol) return null;
+  return FALLBACK_ASSET_NAME_BY_SYMBOL[normalizedSymbol] ?? null;
 }
 
 export async function fetchWalletPortfolio(
@@ -268,6 +294,9 @@ export async function buildMergedPortfolioHoldings(
         .map((variant) => normalizeText(variant.name))
         .find((name): name is string => Boolean(name))
         ?? null;
+    }
+    if (!item.name) {
+      item.name = resolveFallbackAssetName(item.asset_id, item.symbol);
     }
     if (!item.logo) {
       item.logo = item.variants

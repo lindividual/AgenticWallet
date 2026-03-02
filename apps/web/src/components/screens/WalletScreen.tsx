@@ -671,7 +671,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         <button
           ref={topUpButtonRef}
           type="button"
-          className="btn btn-primary text-base font-semibold"
+          className="btn btn-lg text-base font-semibold"
           onClick={openTopUpModal}
         >
           {t('wallet.topUp')}
