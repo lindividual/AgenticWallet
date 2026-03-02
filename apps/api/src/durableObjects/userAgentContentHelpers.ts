@@ -30,6 +30,30 @@ export type RecommendationLanguage = {
   reasonLengthHint: string;
 };
 
+function pickPreferredMarketAsset(
+  assets: MarketTopAsset[],
+  preferredChain?: string | null,
+): MarketTopAsset | null {
+  if (assets.length === 0) return null;
+  const normalizedPreferred = (preferredChain ?? '').trim().toLowerCase();
+  const chainRank = new Map<string, number>([
+    ['eth', 0],
+    ['base', 1],
+    ['bnb', 2],
+  ]);
+  const sorted = [...assets].sort((a, b) => {
+    const aChainRank = chainRank.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
+    const bChainRank = chainRank.get((b.chain ?? '').trim().toLowerCase()) ?? 9;
+    if (aChainRank !== bChainRank) return aChainRank - bChainRank;
+    const aMarketCapRank = Number(a.market_cap_rank ?? Number.POSITIVE_INFINITY);
+    const bMarketCapRank = Number(b.market_cap_rank ?? Number.POSITIVE_INFINITY);
+    if (aMarketCapRank !== bMarketCapRank) return aMarketCapRank - bMarketCapRank;
+    return Number(b.market_cap ?? 0) - Number(a.market_cap ?? 0);
+  });
+  if (!normalizedPreferred) return sorted[0];
+  return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
+}
+
 function getLatestPortfolioSnapshot(sql: SqlStorage): PortfolioSnapshotRow | null {
   const rows = sql
     .exec(
@@ -102,29 +126,31 @@ export function buildPortfolioContext(sql: SqlStorage): string {
 }
 
 export function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): Map<string, RecommendationAssetSnapshot> {
-  const lookup = new Map<string, RecommendationAssetSnapshot>();
-  const ambiguous = new Set<string>();
+  const bySymbol = new Map<string, MarketTopAsset[]>();
   for (const asset of marketAssets) {
     const symbol = (asset.symbol ?? '').trim().toUpperCase();
-    if (!symbol || ambiguous.has(symbol)) continue;
-    const next = {
-      assetId: asset.asset_id,
+    if (!symbol) continue;
+    const bucket = bySymbol.get(symbol);
+    if (bucket) {
+      bucket.push(asset);
+    } else {
+      bySymbol.set(symbol, [asset]);
+    }
+  }
+
+  const lookup = new Map<string, RecommendationAssetSnapshot>();
+  for (const [symbol, candidates] of bySymbol) {
+    const selected = pickPreferredMarketAsset(candidates);
+    if (!selected) continue;
+    lookup.set(symbol, {
+      assetId: selected.asset_id,
       symbol,
-      chain: asset.chain ?? null,
-      contract: asset.contract ?? null,
-      name: asset.name ?? symbol,
-      image: asset.image ?? null,
-      priceChange24h: asset.price_change_percentage_24h ?? null,
-    } satisfies RecommendationAssetSnapshot;
-    const current = lookup.get(symbol);
-    if (!current) {
-      lookup.set(symbol, next);
-      continue;
-    }
-    if (current.assetId !== next.assetId) {
-      lookup.delete(symbol);
-      ambiguous.add(symbol);
-    }
+      chain: selected.chain ?? null,
+      contract: selected.contract ?? null,
+      name: selected.name ?? symbol,
+      image: selected.image ?? null,
+      priceChange24h: selected.price_change_percentage_24h ?? null,
+    });
   }
   return lookup;
 }

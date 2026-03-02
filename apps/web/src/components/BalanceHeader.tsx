@@ -21,7 +21,7 @@ export function BalanceHeader({
   return (
     <>
       <header className="flex items-center justify-between gap-3">
-        <h1 className="m-0 text-2xl my-4 font-bold tracking-tight">{title}</h1>
+        <h1 className="m-0 text-2xl mt-4 font-bold tracking-tight">{title}</h1>
         {rightAction ? <div className="shrink-0">{rightAction}</div> : null}
       </header>
       <section>

@@ -21,8 +21,18 @@ function isRemoteIcon(src: string): boolean {
   return /^https?:\/\//i.test(src);
 }
 
+function canWarmRemoteIcon(src: string): boolean {
+  if (!isRemoteIcon(src) || typeof window === 'undefined') return false;
+  try {
+    const url = new URL(src, window.location.href);
+    return url.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 async function getCachedIcon(src: string): Promise<string | null> {
-  if (!isRemoteIcon(src)) return null;
+  if (!canWarmRemoteIcon(src)) return null;
   const memory = memoryCache.get(src);
   if (memory) return memory;
   const cached = await readCache<string>(cacheStores.icon, src);
@@ -40,7 +50,7 @@ function toDataUrl(blob: Blob): Promise<string> {
 }
 
 async function warmIconCache(src: string): Promise<void> {
-  if (!isRemoteIcon(src)) return;
+  if (!canWarmRemoteIcon(src)) return;
   if (await getCachedIcon(src)) return;
   const existing = pendingWarmups.get(src);
   if (existing) {
@@ -82,7 +92,7 @@ export function CachedIconImage({
   onError,
 }: CachedIconImageProps) {
   const normalizedSrc = useMemo(() => src.trim(), [src]);
-  const [resolvedSrc, setResolvedSrc] = useState<string>(() => (isRemoteIcon(normalizedSrc) ? '' : normalizedSrc));
+  const [resolvedSrc, setResolvedSrc] = useState<string>(() => normalizedSrc);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,14 +108,18 @@ export function CachedIconImage({
         cancelled = true;
       };
     }
-    setResolvedSrc('');
+    setResolvedSrc(normalizedSrc);
+    if (!canWarmRemoteIcon(normalizedSrc)) {
+      return () => {
+        cancelled = true;
+      };
+    }
     void getCachedIcon(normalizedSrc).then((cached) => {
       if (cancelled) return;
       if (cached) {
         setResolvedSrc(cached);
         return;
       }
-      setResolvedSrc(normalizedSrc);
     });
     return () => {
       cancelled = true;
@@ -113,7 +127,7 @@ export function CachedIconImage({
   }, [normalizedSrc]);
 
   useEffect(() => {
-    if (!isRemoteIcon(normalizedSrc)) return;
+    if (!canWarmRemoteIcon(normalizedSrc)) return;
     void warmIconCache(normalizedSrc).then(async () => {
       const value = await getCachedIcon(normalizedSrc);
       if (value) setResolvedSrc(value);

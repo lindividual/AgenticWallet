@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Newspaper } from 'lucide-react';
 import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getMarketShelves, getWalletPortfolio, type TopMarketAsset, type WalletPortfolioResponse } from '../../api';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { BalanceHeader } from '../BalanceHeader';
@@ -39,6 +40,30 @@ type RecommendationDisplayAsset = {
   chain: string | null;
   contract: string | null;
 };
+
+function pickPreferredSymbolAsset(
+  assets: TopMarketAsset[],
+  preferredChain: string | null,
+): TopMarketAsset | undefined {
+  if (assets.length === 0) return undefined;
+  const normalizedPreferred = (preferredChain ?? '').trim().toLowerCase();
+  const chainPriority = new Map<string, number>([
+    ['eth', 0],
+    ['base', 1],
+    ['bnb', 2],
+  ]);
+  const sorted = [...assets].sort((a, b) => {
+    const aRank = chainPriority.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
+    const bRank = chainPriority.get((b.chain ?? '').trim().toLowerCase()) ?? 9;
+    if (aRank !== bRank) return aRank - bRank;
+    const aMcapRank = Number(a.market_cap_rank ?? Number.POSITIVE_INFINITY);
+    const bMcapRank = Number(b.market_cap_rank ?? Number.POSITIVE_INFINITY);
+    if (aMcapRank !== bMcapRank) return aMcapRank - bMcapRank;
+    return Number(b.market_cap ?? 0) - Number(a.market_cap ?? 0);
+  });
+  if (!normalizedPreferred) return sorted[0];
+  return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
+}
 
 const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
 
@@ -121,7 +146,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
     const marketAssets = (shelfData ?? []).flatMap((shelf) => shelf.assets);
     const byChainAssetId = new Map<string, TopMarketAsset>();
-    const byUniqueSymbol = new Map<string, TopMarketAsset | null>();
+    const bySymbol = new Map<string, TopMarketAsset[]>();
 
     for (const asset of marketAssets) {
       const chainAssetId = asset.chain_asset_id || buildChainAssetId(asset.chain, asset.contract);
@@ -129,14 +154,11 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
 
       const symbol = (asset.symbol ?? '').trim().toUpperCase();
       if (!symbol) continue;
-      const current = byUniqueSymbol.get(symbol);
-      if (current === undefined) {
-        byUniqueSymbol.set(symbol, asset);
-        continue;
-      }
-      if (!current) continue;
-      if (current.asset_id !== asset.asset_id) {
-        byUniqueSymbol.set(symbol, null);
+      const bucket = bySymbol.get(symbol);
+      if (bucket) {
+        bucket.push(asset);
+      } else {
+        bySymbol.set(symbol, [asset]);
       }
     }
 
@@ -149,7 +171,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         const exactKey = chain ? buildChainAssetId(chain, contract) : '';
         const matched =
           (exactKey ? byChainAssetId.get(exactKey) : undefined)
-          ?? (symbol ? byUniqueSymbol.get(symbol) ?? undefined : undefined);
+          ?? (symbol ? pickPreferredSymbolAsset(bySymbol.get(symbol) ?? [], chain || null) : undefined);
 
         const displaySymbol = (matched?.symbol ?? symbol ?? '').toUpperCase();
         const displayName = matched?.name ?? assetMeta?.name ?? item.title ?? displaySymbol;
@@ -173,6 +195,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
   const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
   const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isShelfLoading);
+  const dailyArticleToOpen = daily ?? lastReadyDaily;
 
   const dailySummary = daily
     ? daily.summary
@@ -216,44 +239,57 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         </section>
       )}
 
-      <section className="bg-base-100">
-        <div className="flex items-start justify-between gap-3">
-          <h2 className="m-0 text-lg font-bold">{t('home.dailyNewsTitle')}</h2>
-          <span className="text-xs uppercase tracking-wide text-base-content/50">Personal Crypto Daily</span>
-        </div>
-        <p className="m-0 mt-2 text-base font-semibold">
-          {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
-        </p>
-        <p className="m-0 mt-2 truncate text-base leading-snug text-base-content/75">
-          {isDailyLoading && !daily && !lastReadyDaily ? (
-            <span className="flex flex-col gap-2">
-              <SkeletonBlock className="h-4 w-56" />
-              <SkeletonBlock className="h-4 w-40" />
-            </span>
-          ) : (
-            dailySummary
-          )}
-        </p>
-        <div className="mt-3 flex items-center gap-2">
-          {daily && (
-            <button
-              type="button"
-              className="btn btn-outline btn-sm h-8 min-h-0 px-3"
-              onClick={() => onOpenArticle(daily.id)}
-            >
-              {t('home.readArticle')}
-            </button>
-          )}
-          {!daily && lastReadyDaily && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm h-8 min-h-0 px-3"
-              onClick={() => onOpenArticle(lastReadyDaily.id)}
-            >
-              {t('home.readYesterday')}
-            </button>
-          )}
-        </div>
+
+      <section className="mt-5 bg-base-200 p-4">
+        {dailyArticleToOpen ? (
+          <button
+            type="button"
+            className="w-full cursor-pointer border-0 bg-transparent p-0 text-left"
+            onClick={() => onOpenArticle(dailyArticleToOpen.id)}
+          >
+            <div className="flex items-center gap-3">
+              <div className="shrink-0 text-base-content/60" aria-hidden="true">
+                <Newspaper size={32} strokeWidth={2} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="m-0 text-lg font-semibold">
+                  {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
+                </p>
+                <p className="m-0 mt-1 overflow-hidden text-sm leading-snug text-base-content/75 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+                  {isDailyLoading && !daily && !lastReadyDaily ? (
+                    <span className="flex flex-col gap-2">
+                      <SkeletonBlock className="h-4 w-56" />
+                      <SkeletonBlock className="h-4 w-40" />
+                    </span>
+                  ) : (
+                    dailySummary
+                  )}
+                </p>
+              </div>
+            </div>
+          </button>
+        ) : (
+          <div className="flex items-center gap-3">
+            <div className="shrink-0 text-base-content/60" aria-hidden="true">
+              <Newspaper size={32} strokeWidth={2} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="m-0 text-lg font-semibold">
+                {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
+              </p>
+              <p className="m-0 mt-1 overflow-hidden text-sm leading-snug text-base-content/75 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+                {isDailyLoading && !daily && !lastReadyDaily ? (
+                  <span className="flex flex-col gap-2">
+                    <SkeletonBlock className="h-4 w-56" />
+                    <SkeletonBlock className="h-4 w-40" />
+                  </span>
+                ) : (
+                  dailySummary
+                )}
+              </p>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="bg-base-100">
