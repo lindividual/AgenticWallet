@@ -27,6 +27,23 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+function formatTokenAmount(rawAmount: string | null, decimals: number | null | undefined): string | null {
+  if (!rawAmount) return null;
+  const normalizedDecimals = Number.isFinite(decimals) ? Number(decimals) : 18;
+  if (normalizedDecimals < 0 || normalizedDecimals > 36) return null;
+  try {
+    const raw = BigInt(rawAmount);
+    const divisor = 10n ** BigInt(normalizedDecimals);
+    const whole = raw / divisor;
+    const fraction = raw % divisor;
+    if (fraction === 0n) return whole.toString();
+    const fractionText = fraction.toString().padStart(normalizedDecimals, '0').replace(/0+$/, '');
+    return `${whole.toString()}.${fractionText}`;
+  } catch {
+    return null;
+  }
+}
+
 export function TransferContent({
   active,
   presetAsset = null,
@@ -67,6 +84,16 @@ export function TransferContent({
     };
   }
 
+  function getDisplayFeeText(nextQuote: TransferQuoteResponse): string {
+    const symbol = nextQuote.tokenSymbol ?? '';
+    if (nextQuote.estimatedFeeTokenAmount) {
+      return `${nextQuote.estimatedFeeTokenAmount} ${symbol}`.trim();
+    }
+    const normalized = formatTokenAmount(nextQuote.estimatedFeeTokenWei, nextQuote.tokenDecimals);
+    if (normalized) return `${normalized} ${symbol}`.trim();
+    return nextQuote.estimatedFeeWei ?? t('wallet.transferQuoteUnavailable');
+  }
+
   async function handleQuote() {
     if (!toAddress.trim() || !amount.trim()) {
       showError(t('wallet.transferFillRequired'));
@@ -97,13 +124,23 @@ export function TransferContent({
         amountRaw: nextQuote.amountRaw,
         estimatedFeeWei: nextQuote.estimatedFeeWei,
       });
+      if (nextQuote.insufficientFeeTokenBalance) {
+        showError(t('wallet.transferInsufficientFeeTokenBalanceWithFee', { fee: getDisplayFeeText(nextQuote) }));
+      }
     } catch (error) {
       setQuote(null);
       console.error('[wallet-ui][transfer/quote] failed', {
         request: requestPayload,
         error: error instanceof Error ? error.message : 'unknown_error',
       });
-      showError(`${t('wallet.transferFailed')}: ${(error as Error).message}`);
+      const message = (error as Error).message;
+      if (message === 'insufficient_fee_token_balance') {
+        showError(t('wallet.transferInsufficientFeeTokenBalance'));
+      } else if (message === 'unsupported_fee_token') {
+        showError(t('wallet.transferUnsupportedFeeToken'));
+      } else {
+        showError(`${t('wallet.transferFailed')}: ${message}`);
+      }
     } finally {
       setQuoting(false);
     }
@@ -117,6 +154,11 @@ export function TransferContent({
 
     setSubmitting(true);
     try {
+      if (quote.insufficientFeeTokenBalance) {
+        showError(t('wallet.transferInsufficientFeeTokenBalanceWithFee', { fee: getDisplayFeeText(quote) }));
+        return;
+      }
+
       const submitPayload = {
         chainId: quote.chainId,
         toAddress: quote.toAddress,
@@ -222,7 +264,12 @@ export function TransferContent({
           {quote && (
             <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
               <p className="m-0 text-base-content/70">{t('wallet.transferQuoteFee')}</p>
-              <p className="m-0 mt-1 font-semibold break-all">{quote.estimatedFeeWei ?? t('wallet.transferQuoteUnavailable')}</p>
+              <p className="m-0 mt-1 font-semibold break-all">
+                {getDisplayFeeText(quote)}
+              </p>
+              {quote.insufficientFeeTokenBalance ? (
+                <p className="m-0 mt-2 text-warning">{t('wallet.transferInsufficientFeeTokenBalanceWithFee', { fee: getDisplayFeeText(quote) })}</p>
+              ) : null}
               <p className="m-0 mt-2 text-base-content/60">
                 {t('wallet.transferToAddress')}: {truncateAddress(quote.toAddress)}
               </p>
@@ -247,7 +294,7 @@ export function TransferContent({
             <button
               type="button"
               className="btn btn-primary"
-              disabled={submitting || quoting}
+              disabled={submitting || quoting || Boolean(quote?.insufficientFeeTokenBalance)}
               onClick={() => {
                 void handleSubmit();
               }}

@@ -219,7 +219,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
 
             const chain = item.chain;
             const contract = item.contract;
-            if (!chain || !contract) {
+            if (!chain || contract == null) {
               return <div key={item.id}>{content}</div>;
             }
 

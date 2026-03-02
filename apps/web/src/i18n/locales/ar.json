@@ -70,11 +70,14 @@
     "transferReviewFee": "مراجعة الرسوم",
     "transferConfirm": "إرسال",
     "transferSubmitting": "جارٍ الإرسال...",
-    "transferQuoteFee": "الرسوم التقديرية (wei)",
+    "transferQuoteFee": "الرسوم التقديرية",
     "transferQuoteUnavailable": "غير متاح",
     "transferSuccess": "تم إرسال التحويل.",
     "transferFailed": "فشل التحويل",
-    "transferFillRequired": "يرجى إدخال العنوان والكمية."
+    "transferFillRequired": "يرجى إدخال العنوان والكمية.",
+    "transferInsufficientFeeTokenBalance": "رصيد العملة غير كافٍ لتغطية مبلغ التحويل ورسوم الغاز.",
+    "transferInsufficientFeeTokenBalanceWithFee": "الرصيد غير كافٍ. الرسوم التقديرية: {{fee}}.",
+    "transferUnsupportedFeeToken": "هذه العملة غير مدعومة لدفع الرسوم على الشبكة المحددة."
   },
   "settings": {
     "language": "اللغة",

@@ -10,6 +10,7 @@ import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
 import { setAgentPreferredLocale, type TopMarketAsset } from './api';
 import { useWalletApp } from './hooks/useWalletApp';
+import { decodeTokenContractParam, encodeTokenContractParam } from './utils/tokenRoute';
 
 const ARTICLE_EXIT_MS = 220;
 const TOKEN_EXIT_MS = 220;
@@ -23,7 +24,10 @@ export function App() {
   const routeArticleId = articleMatch?.params.articleId ?? null;
   const isArticleRoute = Boolean(routeArticleId);
   const routeToken = tokenMatch?.params
-    ? { chain: tokenMatch.params.chain, contract: tokenMatch.params.contract }
+    ? {
+        chain: tokenMatch.params.chain.trim(),
+        contract: decodeTokenContractParam(tokenMatch.params.contract),
+      }
     : null;
   const isTokenRoute = Boolean(routeToken);
 
@@ -130,15 +134,18 @@ export function App() {
   }
 
   function handleOpenTokenByRoute(chain: string, contract: string) {
+    const normalizedChain = chain.trim();
+    const normalizedContract = contract.trim();
+    const routeContractParam = encodeTokenContractParam(normalizedContract);
     if (tokenExitTimerRef.current) {
       clearTimeout(tokenExitTimerRef.current);
       tokenExitTimerRef.current = null;
     }
     setIsTokenExiting(false);
-    setActiveTokenRoute({ chain, contract });
+    setActiveTokenRoute({ chain: normalizedChain, contract: normalizedContract });
     void navigate({
       to: '/token/$chain/$contract',
-      params: { chain, contract },
+      params: { chain: normalizedChain, contract: routeContractParam },
     });
   }
 

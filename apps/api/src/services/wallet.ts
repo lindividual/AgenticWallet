@@ -4,7 +4,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, WalletSummary } from '../types';
 import { generatePrivateKeyHex, encryptString } from '../utils/crypto';
-import { requiredEnv, resolveMeeVersion } from '../utils/env';
+import { resolveMeeVersion } from '../utils/env';
 import { nowIso } from '../utils/time';
 
 export type WalletWithPrivateKey = WalletSummary & {
@@ -107,9 +107,9 @@ export async function getWalletWithPrivateKey(
 }
 
 export async function createBiconomyMultichainAccount(env: Bindings, privateKey: `0x${string}`) {
-  const ethereumRpcUrl = requiredEnv(env.ETHEREUM_RPC_URL, 'ETHEREUM_RPC_URL');
-  const baseRpcUrl = requiredEnv(env.BASE_RPC_URL, 'BASE_RPC_URL');
-  const bnbRpcUrl = requiredEnv(env.BNB_RPC_URL, 'BNB_RPC_URL');
+  const ethereumRpcUrl = env.ETHEREUM_RPC_URL?.trim() || undefined;
+  const baseRpcUrl = env.BASE_RPC_URL?.trim() || undefined;
+  const bnbRpcUrl = env.BNB_RPC_URL?.trim() || undefined;
   const version = resolveMeeVersion(env.BICONOMY_MEE_VERSION);
   const signer = privateKeyToAccount(privateKey);
 

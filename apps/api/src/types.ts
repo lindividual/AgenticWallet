@@ -14,6 +14,8 @@ export type Bindings = {
   BICONOMY_MEE_VERSION?: string;
   BICONOMY_BUNDLER_API_KEY?: string;
   BICONOMY_BUNDLER_URL?: string;
+  MEE_ENABLE_SIMULATION?: string;
+  MEE_TRANSFER_CALL_GAS_LIMIT?: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
   LLM_API_KEY?: string;
@@ -91,6 +93,8 @@ export type TransferQuoteRequest = {
   tokenAddress?: string;
   tokenSymbol?: string;
   tokenDecimals?: number;
+  feeTokenAddress?: string;
+  feeTokenChainId?: number;
 };
 
 export type TransferQuoteResponse = {
@@ -103,6 +107,11 @@ export type TransferQuoteResponse = {
   amountInput: string;
   amountRaw: string;
   estimatedFeeWei: string | null;
+  estimatedFeeTokenAmount: string | null;
+  estimatedFeeTokenWei: string | null;
+  estimatedFeeTokenAddress: string | null;
+  estimatedFeeTokenChainId: number | null;
+  insufficientFeeTokenBalance: boolean;
   estimatedGas: {
     preVerificationGas: string | null;
     verificationGasLimit: string | null;

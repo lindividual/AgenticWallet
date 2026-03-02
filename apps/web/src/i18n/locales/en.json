@@ -70,11 +70,14 @@
     "transferReviewFee": "Review Fee",
     "transferConfirm": "Send",
     "transferSubmitting": "Submitting...",
-    "transferQuoteFee": "Estimated fee (wei)",
+    "transferQuoteFee": "Estimated fee",
     "transferQuoteUnavailable": "Unavailable",
     "transferSuccess": "Transfer submitted.",
     "transferFailed": "Transfer failed",
-    "transferFillRequired": "Please fill address and amount."
+    "transferFillRequired": "Please fill address and amount.",
+    "transferInsufficientFeeTokenBalance": "Insufficient token balance to cover transfer amount and gas fee.",
+    "transferInsufficientFeeTokenBalanceWithFee": "Insufficient token balance. Estimated fee: {{fee}}.",
+    "transferUnsupportedFeeToken": "This token is not supported for gas payment on the selected network."
   },
   "settings": {
     "language": "Language",

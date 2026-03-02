@@ -102,6 +102,8 @@ export type TransferQuoteRequest = {
   tokenAddress?: string;
   tokenSymbol?: string;
   tokenDecimals?: number;
+  feeTokenAddress?: string;
+  feeTokenChainId?: number;
 };
 
 export type TransferQuoteResponse = {
@@ -114,6 +116,11 @@ export type TransferQuoteResponse = {
   amountInput: string;
   amountRaw: string;
   estimatedFeeWei: string | null;
+  estimatedFeeTokenAmount: string | null;
+  estimatedFeeTokenWei: string | null;
+  estimatedFeeTokenAddress: string | null;
+  estimatedFeeTokenChainId: number | null;
+  insufficientFeeTokenBalance: boolean;
   estimatedGas: {
     preVerificationGas: string | null;
     verificationGasLimit: string | null;

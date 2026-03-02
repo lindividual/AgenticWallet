@@ -1,4 +1,4 @@
-import { DEFAULT_MEE_VERSION, MEEVersion } from '@biconomy/abstractjs';
+import { MEEVersion } from '@biconomy/abstractjs';
 
 function isPlaceholderValue(value: string): boolean {
   const normalized = value.trim().toLowerCase();
@@ -18,7 +18,7 @@ export function requiredEnv(value: string | undefined, key: string): string {
 
 export function resolveMeeVersion(raw: string | undefined): MEEVersion {
   const normalized = raw?.trim();
-  if (!normalized) return DEFAULT_MEE_VERSION;
+  if (!normalized) return MEEVersion.V2_2_1;
 
   const matched = Object.values(MEEVersion).find((v) => v === normalized);
   if (!matched) {

@@ -5,11 +5,15 @@ WEBAUTHN_REQUIRE_UV=false
 ETHEREUM_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/replace
 BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/replace
 BNB_RPC_URL=https://bnb-mainnet.g.alchemy.com/v2/replace
-# Optional, defaults to SDK default MEE version
-BICONOMY_MEE_VERSION=2.3.0
+# Optional, defaults to 2.2.1 for broad chain compatibility
+BICONOMY_MEE_VERSION=2.2.1
 # Optional, used by abstractjs Nexus client (bundler URL can also be provided directly)
 BICONOMY_BUNDLER_API_KEY=
 BICONOMY_BUNDLER_URL=
+# Optional, enable quote simulation for tighter gas estimation (defaults to true)
+MEE_ENABLE_SIMULATION=true
+# Optional, manual call gas limit for MEE ERC20 transfer instruction when simulation is disabled (defaults to 35000)
+MEE_TRANSFER_CALL_GAS_LIMIT=35000
 
 # Optional LLM integration (Phase 1 content/recommendation generation)
 LLM_PROVIDER=openai

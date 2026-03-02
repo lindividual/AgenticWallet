@@ -48,9 +48,13 @@ function toApiTransfer(row: AgentTransfer) {
 
 function toErrorStatus(error: unknown): 400 | 404 | 502 {
   const message = error instanceof Error ? error.message : 'unknown_error';
+  const normalizedMessage = message.toLowerCase();
   if (
     message.startsWith('invalid_') ||
     message.startsWith('insufficient_') ||
+    message === 'unsupported_fee_token' ||
+    normalizedMessage.includes('insufficient balance to pay for the gas') ||
+    normalizedMessage.includes('orchestration fee') ||
     message === 'unsupported_chain' ||
     message === 'wallet_key_decryption_failed'
   ) {
@@ -71,7 +75,7 @@ async function maybeRefreshSubmittedTransfer(
     return transfer;
   }
 
-  const refreshed = await refreshTransferStatusByHash(env, transfer.chain_id, transfer.tx_hash as `0x${string}`);
+  const refreshed = await refreshTransferStatusByHash(env, userId, transfer.chain_id, transfer.tx_hash as `0x${string}`);
   if (refreshed === 'pending') {
     return transfer;
   }
@@ -123,6 +127,11 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
         amountInput: prepared.quote.amountInput,
         amountRaw: prepared.quote.amountRaw,
         estimatedFeeWei: prepared.quote.estimatedFeeWei,
+        estimatedFeeTokenAmount: prepared.quote.estimatedFeeTokenAmount,
+        estimatedFeeTokenWei: prepared.quote.estimatedFeeTokenWei,
+        estimatedFeeTokenAddress: prepared.quote.estimatedFeeTokenAddress,
+        estimatedFeeTokenChainId: prepared.quote.estimatedFeeTokenChainId,
+        insufficientFeeTokenBalance: prepared.quote.insufficientFeeTokenBalance,
       });
       return c.json(prepared.quote);
     } catch (error) {

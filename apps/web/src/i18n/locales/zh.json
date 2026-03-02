@@ -70,11 +70,14 @@
     "transferReviewFee": "预估手续费",
     "transferConfirm": "发送",
     "transferSubmitting": "提交中...",
-    "transferQuoteFee": "预估费用（wei）",
+    "transferQuoteFee": "预估手续费",
     "transferQuoteUnavailable": "暂不可用",
     "transferSuccess": "转账已提交。",
     "transferFailed": "转账失败",
-    "transferFillRequired": "请填写地址和金额。"
+    "transferFillRequired": "请填写地址和金额。",
+    "transferInsufficientFeeTokenBalance": "代币余额不足，无法同时覆盖转账金额和手续费。",
+    "transferInsufficientFeeTokenBalanceWithFee": "代币余额不足。预估手续费：{{fee}}。",
+    "transferUnsupportedFeeToken": "该币种在当前网络不支持用于支付手续费。"
   },
   "settings": {
     "language": "语言",
