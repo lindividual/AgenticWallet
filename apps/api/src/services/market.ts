@@ -338,7 +338,7 @@ async function getAggregatedAssetLogos(db: D1Database, assetIds: string[]): Prom
   return output;
 }
 
-async function resolveBestTokenCatalogLogo(
+export async function resolveBestTokenCatalogLogo(
   db: D1Database,
   chainId: number,
   address: string,

@@ -65,6 +65,17 @@ function getTokenInitial(symbol: string | null | undefined, name: string | null 
   return label ? label[0].toUpperCase() : '?';
 }
 
+function compute24hChangePctFromHourlyCandles(
+  candles: Array<{ close: number }> | null | undefined,
+): number | null {
+  if (!candles || candles.length < 2) return null;
+  const latestClose = Number(candles[candles.length - 1]?.close);
+  const baseIndex = Math.max(0, candles.length - 1 - 24);
+  const baseClose = Number(candles[baseIndex]?.close);
+  if (!Number.isFinite(latestClose) || !Number.isFinite(baseClose) || baseClose <= 0) return null;
+  return ((latestClose - baseClose) / baseClose) * 100;
+}
+
 export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -114,6 +125,17 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     return token ?? null;
   }, [normalizedChain, normalizedContract, shelfData]);
 
+  const rawPriceChangePct = detail?.priceChange24h ?? selected?.price_change_percentage_24h;
+  const shouldUseKlineChangeFallback = !Number.isFinite(Number(rawPriceChangePct));
+
+  const { data: fallbackChangeKlineData } = useQuery({
+    queryKey: ['trade-token-kline-change-fallback', normalizedChain, normalizedContract],
+    queryFn: () => getTokenKline(normalizedChain, normalizedContract, '1h', 48),
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+    enabled: shouldUseKlineChangeFallback,
+  });
+
   useEffect(() => {
     ingestAgentEvent('asset_viewed', {
       asset: (detail?.symbol ?? selected?.symbol)?.toUpperCase(),
@@ -156,7 +178,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const displayName = detail?.name ?? selected?.name ?? displayContract;
   const displaySymbol = (detail?.symbol ?? selected?.symbol ?? '').trim();
 
-  const priceChangePct = selected?.price_change_percentage_24h;
+  const fallbackPriceChangePct = useMemo(
+    () => compute24hChangePctFromHourlyCandles(fallbackChangeKlineData),
+    [fallbackChangeKlineData],
+  );
+  const priceChangePct = rawPriceChangePct ?? fallbackPriceChangePct;
   const hasPriceChangePct = Number.isFinite(Number(priceChangePct));
   const numericPriceChangePct = hasPriceChangePct ? Number(priceChangePct) : 0;
   const priceChangeTone =
@@ -219,9 +245,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
       <section className="p-0">
         <div className="flex flex-col items-start gap-3">
-          {selected?.image ? (
+          {detail?.image ?? selected?.image ? (
             <img
-              src={selected.image}
+              src={(detail?.image ?? selected?.image) ?? ''}
               alt={displaySymbol || displayName}
               className="h-12 w-12 rounded-full bg-base-300 object-cover"
               loading="lazy"

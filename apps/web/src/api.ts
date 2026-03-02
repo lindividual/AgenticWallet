@@ -221,6 +221,8 @@ export type CoinDetail = {
   contract: string;
   symbol: string;
   name: string;
+  image: string | null;
+  priceChange24h: number | null;
   currentPriceUsd: number | null;
   holders: number | null;
   totalSupply: number | null;

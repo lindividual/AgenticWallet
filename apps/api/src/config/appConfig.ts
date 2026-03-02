@@ -31,3 +31,9 @@ export function getMarketChainByChainId(chainId: number): ChainConfig['marketCha
   const matched = APP_CONFIG.supportedChains.find((item) => item.chainId === chainId);
   return matched?.marketChain ?? null;
 }
+
+export function getChainIdByMarketChain(marketChain: string): number | null {
+  const normalized = (marketChain ?? '').trim().toLowerCase();
+  const matched = APP_CONFIG.supportedChains.find((item) => item.marketChain === normalized);
+  return matched?.chainId ?? null;
+}

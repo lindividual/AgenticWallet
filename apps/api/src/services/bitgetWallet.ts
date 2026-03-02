@@ -41,6 +41,9 @@ type BitgetBaseInfoRow = {
   contract?: string;
   symbol?: string;
   name?: string;
+  icon?: string;
+  change_24h?: number | string;
+  price_change_percentage_24h?: number | string;
   decimals?: number | string;
   total_supply?: number | string;
   holders?: number | string;
@@ -289,6 +292,8 @@ export type BitgetTokenDetail = {
   contract: string;
   symbol: string;
   name: string;
+  image: string | null;
+  priceChange24h: number | null;
   currentPriceUsd: number | null;
   holders: number | null;
   totalSupply: number | null;
@@ -334,6 +339,10 @@ export async function fetchBitgetTokenDetail(
             contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
             symbol: normalizeText(row.symbol) ?? 'UNKNOWN',
             name: normalizeText(row.name) ?? normalizeText(row.symbol) ?? 'Unknown Token',
+            image: normalizeText(row.icon),
+            priceChange24h:
+              normalizeFiniteNumber(row.change_24h)
+              ?? normalizeFiniteNumber(row.price_change_percentage_24h),
             currentPriceUsd: normalizeFiniteNumber(row.price),
             holders: normalizeFiniteNumber(row.holders),
             totalSupply: normalizeFiniteNumber(row.total_supply),

@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
-import { ingestTokenLists, listTokenCatalog } from '../services/market';
+import { getChainIdByMarketChain } from '../config/appConfig';
+import { ingestTokenLists, listTokenCatalog, resolveBestTokenCatalogLogo } from '../services/market';
 import { fetchBitgetTokenDetail, fetchBitgetTokenKline } from '../services/bitgetWallet';
 import { getCoinGeckoCoinListSyncStatus, syncCoinGeckoCoinListPlatforms } from '../services/coingecko';
 import {
@@ -124,7 +125,20 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       if (!detail) {
         return c.json({ error: 'token_not_found' }, 404);
       }
-      return c.json({ detail });
+      let enrichedDetail = detail;
+      if (!enrichedDetail.image && enrichedDetail.contract) {
+        const chainId = getChainIdByMarketChain(enrichedDetail.chain);
+        if (chainId != null) {
+          const fallbackLogo = await resolveBestTokenCatalogLogo(c.env.DB, chainId, enrichedDetail.contract);
+          if (fallbackLogo) {
+            enrichedDetail = {
+              ...enrichedDetail,
+              image: fallbackLogo,
+            };
+          }
+        }
+      }
+      return c.json({ detail: enrichedDetail });
     } catch (error) {
       return c.json(
         {
