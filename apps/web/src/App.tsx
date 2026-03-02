@@ -10,7 +10,6 @@ import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
 import { setAgentPreferredLocale, type TopMarketAsset } from './api';
 import { useWalletApp } from './hooks/useWalletApp';
-import { saveTradeScrollY } from './utils/tradeScrollMemory';
 import { decodeTokenContractParam, encodeTokenContractParam } from './utils/tokenRoute';
 
 const ARTICLE_EXIT_MS = 220;
@@ -133,7 +132,6 @@ export function App() {
   }
 
   function handleOpenToken(token: TopMarketAsset, _shelfId: string) {
-    saveTradeScrollY(window.scrollY);
     handleOpenTokenByRoute(token.chain, token.contract);
   }
 

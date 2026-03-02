@@ -37,7 +37,10 @@ const tokenRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, articleRoute, tokenRoute]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({
+  routeTree,
+  scrollRestoration: true,
+});
 
 declare module '@tanstack/react-router' {
   interface Register {
