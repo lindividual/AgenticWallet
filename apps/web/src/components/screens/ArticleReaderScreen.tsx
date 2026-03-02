@@ -2,18 +2,67 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Bookmark, Heart, Pause, Play, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { getAgentArticleDetail, ingestAgentEvent } from '../../api';
+import {
+  getAgentArticleDetail,
+  getMarketShelves,
+  getTopMarketAssets,
+  ingestAgentEvent,
+  type TopMarketAsset,
+} from '../../api';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { useToast } from '../../contexts/ToastContext';
 
 type ArticleReaderScreenProps = {
   articleId: string;
   onBack: () => void;
+  onOpenToken?: (chain: string, contract: string) => void;
 };
 
 type ArticleEngagement = {
   liked: boolean;
   favorited: boolean;
+};
+
+type RelatedAssetPill = {
+  symbol: string;
+  name: string;
+  priceChangePct: number | null;
+  chain: string | null;
+  contract: string | null;
+  clickable: boolean;
+};
+
+const DEFAULT_TOKEN_ROUTE_BY_SYMBOL: Record<string, { chain: string; contract: string; name?: string }> = {
+  ETH: {
+    chain: 'eth',
+    contract: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+    name: 'Ethereum',
+  },
+  BTC: {
+    chain: 'eth',
+    contract: '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599',
+    name: 'Bitcoin',
+  },
+  USDT: {
+    chain: 'eth',
+    contract: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+    name: 'Tether',
+  },
+  USDC: {
+    chain: 'eth',
+    contract: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+    name: 'USD Coin',
+  },
+  BNB: {
+    chain: 'bnb',
+    contract: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+    name: 'BNB',
+  },
+  LEO: {
+    chain: 'eth',
+    contract: '0x2af5d2ad76741191d15dfe7bf6ac92d4bd912ca3',
+    name: 'LEO Token',
+  },
 };
 
 const STORAGE_KEY = 'agentic_wallet_article_engagement_v1';
@@ -50,7 +99,69 @@ function stripMarkdown(markdown: string): string {
     .trim();
 }
 
-export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenProps) {
+function normalizeSymbol(value: string | null | undefined): string {
+  return (value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function formatPct(value: number | null | undefined): string {
+  if (!Number.isFinite(Number(value))) return '--';
+  const numeric = Number(value);
+  const sign = numeric > 0 ? '+' : '';
+  return `${sign}${numeric.toFixed(2)}%`;
+}
+
+function isValidEvmContract(contract: string): boolean {
+  return /^0x[a-f0-9]{40}$/i.test(contract.trim());
+}
+
+function extractRelatedSymbols(tags: string[] | undefined, markdown: string): string[] {
+  const collected: string[] = [];
+
+  for (const tag of tags ?? []) {
+    if (!tag.startsWith('asset:')) continue;
+    const symbol = normalizeSymbol(tag.slice('asset:'.length));
+    if (symbol) collected.push(symbol);
+  }
+
+  if (collected.length === 0) {
+    const section = markdown.match(/##\s*Related Assets\s*([\s\S]*?)(?:\n##\s+|$)/i);
+    const body = section?.[1] ?? '';
+    const lines = body.split('\n');
+    for (const line of lines) {
+      const bullet = line.match(/^\s*[-*+]\s+([A-Za-z0-9._-]{2,24})/);
+      if (!bullet?.[1]) continue;
+      const symbol = normalizeSymbol(bullet[1]);
+      if (symbol) collected.push(symbol);
+    }
+  }
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const symbol of collected) {
+    if (!symbol || seen.has(symbol)) continue;
+    seen.add(symbol);
+    deduped.push(symbol);
+  }
+  return deduped.slice(0, 8);
+}
+
+function hasTokenRoute(asset: TopMarketAsset | null | undefined): boolean {
+  if (!asset) return false;
+  return Boolean(asset.chain?.trim() && asset.contract?.trim());
+}
+
+function shouldPreferAsset(candidate: TopMarketAsset, current: TopMarketAsset): boolean {
+  const candidateHasRoute = hasTokenRoute(candidate);
+  const currentHasRoute = hasTokenRoute(current);
+  if (candidateHasRoute && !currentHasRoute) return true;
+  if (!candidateHasRoute && currentHasRoute) return false;
+  const candidateRank = Number(candidate.market_cap_rank ?? Number.MAX_SAFE_INTEGER);
+  const currentRank = Number(current.market_cap_rank ?? Number.MAX_SAFE_INTEGER);
+  if (candidateRank !== currentRank) return candidateRank < currentRank;
+  return false;
+}
+
+export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleReaderScreenProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess, showInfo } = useToast();
   const [engagementMap, setEngagementMap] = useState<Record<string, ArticleEngagement>>(() => readEngagementMap());
@@ -68,6 +179,77 @@ export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenPr
 
   const engagement = engagementMap[articleId] ?? { liked: false, favorited: false };
   const speakText = useMemo(() => (data ? stripMarkdown(data.markdown) : ''), [data]);
+  const relatedSymbols = useMemo(
+    () => (data ? extractRelatedSymbols(data.article.tags, data.markdown) : []),
+    [data],
+  );
+
+  const { data: relatedShelfData } = useQuery({
+    queryKey: ['article-related-market-shelves'],
+    queryFn: () =>
+      getMarketShelves({
+        limitPerShelf: 12,
+      }),
+    enabled: relatedSymbols.length > 0,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: relatedTopAssets } = useQuery({
+    queryKey: ['article-related-top-assets'],
+    queryFn: () =>
+      getTopMarketAssets({
+        name: 'marketCap',
+        source: 'auto',
+        limit: 120,
+      }),
+    enabled: relatedSymbols.length > 0,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const relatedPills = useMemo<RelatedAssetPill[]>(() => {
+    if (!data || relatedSymbols.length === 0) return [];
+
+    const marketAssets = [
+      ...(relatedTopAssets ?? []),
+      ...(relatedShelfData ?? []).flatMap((shelf) => shelf.assets),
+    ];
+
+    const bySymbol = new Map<string, TopMarketAsset>();
+    for (const asset of marketAssets) {
+      const symbol = normalizeSymbol(asset.symbol);
+      if (!symbol) continue;
+      const existing = bySymbol.get(symbol);
+      if (!existing || shouldPreferAsset(asset, existing)) {
+        bySymbol.set(symbol, asset);
+      }
+    }
+
+    return relatedSymbols.map((symbol) => {
+      const matched = bySymbol.get(symbol);
+      const marketChain = matched?.chain?.trim() ?? '';
+      const marketContract = matched?.contract?.trim() ?? '';
+      const routeFromMarket = marketChain && marketContract && isValidEvmContract(marketContract)
+        ? {
+            chain: marketChain,
+            contract: marketContract.toLowerCase(),
+          }
+        : null;
+      const fallbackRoute = DEFAULT_TOKEN_ROUTE_BY_SYMBOL[symbol] ?? null;
+      const route = routeFromMarket ?? fallbackRoute;
+      return {
+        symbol,
+        name: matched?.name?.trim() || fallbackRoute?.name || symbol,
+        priceChangePct: matched?.price_change_percentage_24h ?? null,
+        chain: route?.chain ?? null,
+        contract: route?.contract ?? null,
+        clickable: Boolean(route?.chain && route?.contract && onOpenToken),
+      };
+    });
+  }, [data, onOpenToken, relatedShelfData, relatedSymbols, relatedTopAssets]);
+
+  const hasRelatedPanel = relatedPills.length > 0;
 
   useEffect(() => {
     ingestAgentEvent('article_read', { articleId }).catch(() => undefined);
@@ -170,8 +352,19 @@ export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenPr
     showSuccess(t('home.listenStarted'));
   }
 
+  function handleOpenRelatedAsset(asset: RelatedAssetPill) {
+    if (!asset.clickable || !asset.chain || !asset.contract || !onOpenToken) return;
+    ingestAgentEvent('asset_viewed', {
+      asset: asset.symbol,
+      chain: asset.chain,
+      contract: asset.contract,
+      source: 'article_related',
+    }).catch(() => undefined);
+    onOpenToken(asset.chain, asset.contract);
+  }
+
   return (
-    <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-4 p-5 py-8">
+    <section className={`mx-auto flex min-h-screen w-full max-w-105 flex-col gap-4 p-5 py-8 ${hasRelatedPanel ? 'pb-36' : ''}`}>
       <button type="button" className="btn btn-ghost btn-sm h-12 min-h-0 w-8 p-0" onClick={onBack} aria-label={t('home.backToFeed')}>
         <ArrowLeft size={24} />
       </button>
@@ -225,6 +418,37 @@ export function ArticleReaderScreen({ articleId, onBack }: ArticleReaderScreenPr
             <MarkdownRenderer markdown={data.markdown} />
           </div>
         </article>
+      )}
+
+      {hasRelatedPanel && (
+        <div className="fixed inset-x-0 bottom-0 z-30 flex justify-center px-3 pb-3">
+          <section className="w-full max-w-105 rounded-2xl border border-base-300 bg-base-100/98 px-3 py-2 shadow-lg backdrop-blur">
+            <p className="m-0 text-xs font-semibold uppercase tracking-wide text-base-content/60">{t('home.related')}</p>
+            <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+              {relatedPills.map((asset) => {
+                const isUp = Number(asset.priceChangePct ?? 0) > 0;
+                const isDown = Number(asset.priceChangePct ?? 0) < 0;
+                const pctClass = isUp ? 'text-success' : isDown ? 'text-error' : 'text-base-content/60';
+                return (
+                  <button
+                    key={asset.symbol}
+                    type="button"
+                    onClick={() => handleOpenRelatedAsset(asset)}
+                    disabled={!asset.clickable}
+                    className={`flex min-w-max items-center gap-2 rounded-full border px-3 py-1.5 text-left transition-colors ${
+                      asset.clickable
+                        ? 'border-base-300 bg-base-100 hover:border-primary hover:bg-base-200/70'
+                        : 'border-base-300 bg-base-100/70 opacity-60'
+                    }`}
+                  >
+                    <span className="text-sm font-medium text-base-content">{asset.name}</span>
+                    <span className={`text-xs font-semibold ${pctClass}`}>{formatPct(asset.priceChangePct)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
       )}
     </section>
   );

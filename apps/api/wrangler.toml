@@ -28,4 +28,4 @@ tag = "user-agent-do-v1"
 new_sqlite_classes = ["UserAgentDO"]
 
 [triggers]
-crons = ["0 0 * * *"]
+crons = ["0 0 * * *", "5 */12 * * *"]

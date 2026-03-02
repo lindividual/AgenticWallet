@@ -12,6 +12,7 @@ import {
   syncUserAgentRequestLocale,
 } from '../services/agent';
 import { getLlmStatus } from '../services/llm';
+import { generateTopicSpecialBatch } from '../services/topicSpecials';
 import type { AppEnv } from '../types';
 import { safeJsonParse } from '../utils/json';
 import { nowIso } from '../utils/time';
@@ -29,6 +30,16 @@ function normalizePreferredLocale(raw: string | undefined): string | null {
     .filter(Boolean)[0];
   if (!first) return null;
   return first.toLowerCase();
+}
+
+function hasTopicSpecialAdminAccess(c: {
+  env: AppEnv['Bindings'];
+  req: { header: (name: string) => string | undefined };
+}): boolean {
+  const expected = c.env.TOPIC_SPECIAL_ADMIN_TOKEN?.trim();
+  if (!expected) return false;
+  const provided = (c.req.header('x-topic-special-admin-token') ?? '').trim();
+  return provided.length > 0 && provided === expected;
 }
 
 function toApiArticle(row: {
@@ -220,6 +231,31 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     });
     await runUserAgentJobsNow(c.env, userId);
     return c.json(result);
+  });
+
+  app.post('/v1/admin/topic-specials/run', async (c) => {
+    const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
+    if (!hasTopicSpecialAdminAccess(c)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const body = await c.req.json<{ force?: boolean }>().catch(
+      () =>
+        ({
+          force: undefined,
+        }) satisfies { force?: boolean },
+    );
+    const result = await generateTopicSpecialBatch(c.env, {
+      force: body.force === true,
+    });
+    return c.json({
+      ok: true,
+      jobId: `topic_special:${result.slotKey}`,
+      deduped: result.skipped,
+      slotKey: result.slotKey,
+      generated: result.generated,
+      totalInSlot: result.totalInSlot,
+    });
   });
 
   app.post('/v1/agent/recommendations/mock', async (c) => {

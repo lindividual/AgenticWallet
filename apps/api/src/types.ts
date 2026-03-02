@@ -30,6 +30,7 @@ export type Bindings = {
   COINGECKO_USER_AGENT?: string;
   OPENNEWS_TOKEN?: string;
   TWITTER_TOKEN?: string;
+  TOPIC_SPECIAL_ADMIN_TOKEN?: string;
 };
 
 export type Variables = {
