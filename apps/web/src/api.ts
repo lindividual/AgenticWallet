@@ -79,6 +79,8 @@ export type SimEvmBalance = {
   chain: string;
   chain_id: number;
   address: string;
+  asset_id?: string;
+  chain_asset_id?: string;
   amount: string;
   symbol?: string;
   name?: string;
@@ -86,6 +88,7 @@ export type SimEvmBalance = {
   price_usd?: number;
   value_usd?: number;
   logo?: string;
+  logo_uri?: string;
   url?: string;
 };
 

@@ -44,6 +44,7 @@ function getAssetInitial(symbol: string | null | undefined, name: string | null 
 
 type WalletHoldingListItem = {
   key: string;
+  assetId: string | null;
   symbol: string;
   name: string;
   logo: string | null;
@@ -52,6 +53,76 @@ type WalletHoldingListItem = {
   secondaryLabel: string;
   transferAsset: SimEvmBalance;
 };
+
+function normalizeAssetId(raw: string | null | undefined): string | null {
+  const value = (raw ?? '').trim().toLowerCase();
+  return value || null;
+}
+
+function normalizeIconUrl(raw: string | null | undefined): string | null {
+  const value = (raw ?? '').trim();
+  if (!value) return null;
+  if (value.startsWith('ipfs://ipfs/')) {
+    return `https://ipfs.io/ipfs/${value.slice('ipfs://ipfs/'.length)}`;
+  }
+  if (value.startsWith('ipfs://')) {
+    return `https://ipfs.io/ipfs/${value.slice('ipfs://'.length)}`;
+  }
+  return value;
+}
+
+function resolveHoldingIcon(...candidates: Array<string | null | undefined>): string | null {
+  for (const candidate of candidates) {
+    const normalized = normalizeIconUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function resolveAssetIdFallbackIcon(assetId: string | null, symbol: string): string | null {
+  const normalizedAssetId = (assetId ?? '').trim().toLowerCase();
+  if (normalizedAssetId === 'coingecko:usd-coin') return '/usdc.svg';
+  if (normalizedAssetId === 'coingecko:tether') return '/usdt.svg';
+  if (normalizedAssetId === 'coingecko:ethereum') return '/eth.svg';
+  if (normalizedAssetId === 'coingecko:binancecoin') return '/bnb.svg';
+
+  const normalizedSymbol = symbol.trim().toUpperCase();
+  if (normalizedSymbol === 'USDC') return '/usdc.svg';
+  if (normalizedSymbol === 'USDT') return '/usdt.svg';
+  if (normalizedSymbol === 'ETH') return '/eth.svg';
+  if (normalizedSymbol === 'BNB') return '/bnb.svg';
+  return null;
+}
+
+function TokenAvatar({
+  icon,
+  symbol,
+  name,
+  fallbackLabel,
+}: {
+  icon: string | null;
+  symbol: string;
+  name: string;
+  fallbackLabel: string;
+}) {
+  const [loadFailed, setLoadFailed] = useState(false);
+  if (!icon || loadFailed) {
+    return (
+      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+        {fallbackLabel}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={icon}
+      alt={symbol || name}
+      className="h-10 w-10 rounded-full bg-base-300 object-cover"
+      loading="lazy"
+      onError={() => setLoadFailed(true)}
+    />
+  );
+}
 
 export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
@@ -127,9 +198,16 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           return [
             {
               key: item.asset_id || `${primary.chain_id}-${primary.address}`,
+              assetId: normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id),
               symbol,
               name,
-              logo: item.logo ?? primary.logo ?? null,
+              logo: resolveHoldingIcon(
+                item.logo,
+                primary.logo,
+                primary.logo_uri,
+                primary.url,
+                resolveAssetIdFallbackIcon(normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id), symbol),
+              ),
               valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
               amountText:
                 chainLabels.length > 1
@@ -142,27 +220,72 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         });
     }
 
-    return [...data.holdings]
-      .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0))
+    const grouped = [...data.holdings].reduce<Map<string, { totalValueUsd: number; variants: SimEvmBalance[] }>>(
+      (acc, asset) => {
+        const key = normalizeAssetId(asset.asset_id) ?? `${asset.chain_id}:${asset.address?.toLowerCase() ?? ''}`;
+        const current = acc.get(key);
+        const valueUsd = Number(asset.value_usd ?? 0);
+        if (current) {
+          current.totalValueUsd += valueUsd;
+          current.variants.push(asset);
+          return acc;
+        }
+        acc.set(key, { totalValueUsd: valueUsd, variants: [asset] });
+        return acc;
+      },
+      new Map(),
+    );
+
+    return Array.from(grouped.values())
+      .sort((a, b) => b.totalValueUsd - a.totalValueUsd)
       .slice(0, 10)
-      .map((asset) => {
-        const chainName =
-          chainNameById.get(Number(asset.chain_id))
-          ?? asset.chain?.toUpperCase()
-          ?? (Number.isFinite(Number(asset.chain_id)) ? String(asset.chain_id) : '--');
-        const symbol = (asset.symbol ?? asset.name ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
-        const name = (asset.name ?? t('wallet.token')).trim();
+      .map((group) => {
+        const variants = [...group.variants].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+        const primary = variants[0];
+        if (!primary) {
+          return null;
+        }
+        const chainLabels = [
+          ...new Set(
+            variants
+              .map((variant) => {
+                const fromConfig = chainNameById.get(Number(variant.chain_id));
+                if (fromConfig) return fromConfig;
+                if (variant.chain) return variant.chain.toUpperCase();
+                const fallbackChainId = Number(variant.chain_id);
+                return Number.isFinite(fallbackChainId) ? String(fallbackChainId) : '--';
+              })
+              .filter(Boolean),
+          ),
+        ];
+        const chainSummary =
+          chainLabels.length > 1
+            ? t('wallet.multiChainCount', { count: chainLabels.length })
+            : t('wallet.singleChainLabel', { chain: chainLabels[0] ?? '--' });
+        const symbol = (primary.symbol ?? primary.name ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
+        const name = (primary.name ?? t('wallet.token')).trim();
         return {
-          key: `${asset.chain_id}-${asset.address}`,
+          key: normalizeAssetId(primary.asset_id) ?? `${primary.chain_id}-${primary.address}`,
+          assetId: normalizeAssetId(primary.asset_id),
           symbol,
           name,
-          logo: asset.logo ?? null,
-          valueUsd: Number(asset.value_usd ?? 0),
-          amountText: formatTokenAmount(asset.amount, asset.decimals),
-          secondaryLabel: `${name} · ${t('wallet.singleChainLabel', { chain: chainName })}`,
-          transferAsset: asset,
+          logo: resolveHoldingIcon(
+            primary.logo,
+            primary.logo_uri,
+            primary.url,
+            resolveAssetIdFallbackIcon(normalizeAssetId(primary.asset_id), symbol),
+          ),
+          valueUsd: group.totalValueUsd,
+          amountText:
+            chainLabels.length > 1
+              ? t('wallet.multiChainCount', { count: chainLabels.length })
+              : formatTokenAmount(primary.amount, primary.decimals),
+          secondaryLabel: `${name} · ${chainSummary}`,
+          transferAsset: primary,
         } satisfies WalletHoldingListItem;
-      });
+      })
+      .filter((item): item is WalletHoldingListItem => Boolean(item))
+      .sort((a, b) => b.valueUsd - a.valueUsd);
   }, [chainNameById, data, t]);
 
   useEffect(
@@ -332,18 +455,12 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
             key={asset.key}
             onClick={() => openTransferModalFromAsset(asset.transferAsset)}
             leftIcon={
-              asset.logo ? (
-                <img
-                  src={asset.logo}
-                  alt={asset.symbol || asset.name || t('wallet.token')}
-                  className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                  {getAssetInitial(asset.symbol, asset.name)}
-                </div>
-              )
+              <TokenAvatar
+                icon={asset.logo}
+                symbol={asset.symbol}
+                name={asset.name || t('wallet.token')}
+                fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
+              />
             }
             leftPrimary={asset.symbol}
             leftSecondary={asset.secondaryLabel}

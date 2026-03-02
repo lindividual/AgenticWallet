@@ -8,6 +8,8 @@ type SimBalanceRow = {
   chain: string;
   chain_id: number;
   address: string;
+  asset_id?: string;
+  chain_asset_id?: string;
   amount: string;
   symbol?: string;
   name?: string;
@@ -15,7 +17,13 @@ type SimBalanceRow = {
   price_usd?: number;
   value_usd?: number;
   logo?: string;
+  logo_uri?: string;
   url?: string;
+  token_metadata?: {
+    logo?: string;
+    logoURI?: string;
+    url?: string;
+  };
 };
 
 export type MergedHoldingVariant = SimBalanceRow & {
@@ -58,6 +66,7 @@ const DEFAULT_TOKEN_LIST_URLS = [
 ];
 
 let tokenCatalogSchemaReady = false;
+let aggregatedAssetCatalogSchemaReady = false;
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -83,6 +92,30 @@ function normalizeText(raw: unknown): string | null {
   return value ? value : null;
 }
 
+function normalizeAssetId(raw: unknown): string | null {
+  const value = normalizeText(raw);
+  if (!value) return null;
+  return value.toLowerCase();
+}
+
+function parseCoingeckoCoinIdFromAssetId(assetId: string | null | undefined): string | null {
+  const value = normalizeText(assetId)?.toLowerCase();
+  if (!value || !value.startsWith('coingecko:')) return null;
+  const coinId = value.slice('coingecko:'.length).trim();
+  return coinId || null;
+}
+
+function resolveHoldingLogo(row: SimBalanceRow): string | null {
+  return (
+    normalizeText(row.logo) ??
+    normalizeText(row.logo_uri) ??
+    normalizeText(row.url) ??
+    normalizeText(row.token_metadata?.logo) ??
+    normalizeText(row.token_metadata?.logoURI) ??
+    normalizeText(row.token_metadata?.url)
+  );
+}
+
 function normalizeMarketChain(raw: string | undefined): string {
   const value = (raw ?? '').trim().toLowerCase();
   if (!value) return 'unknown';
@@ -101,6 +134,14 @@ function resolveHoldingContractKey(row: SimBalanceRow): string {
   const address = normalizeAddress(row.address);
   if (!address || /^0x0{40}$/.test(address)) return NATIVE_CONTRACT_KEY;
   return address;
+}
+
+function resolveManualAssetIdOverride(marketChain: string, contractKey: string): string | null {
+  // Manual normalization: treat BNB bridged USDC as canonical USDC for wallet aggregation.
+  if (marketChain === 'bnb' && contractKey === '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d') {
+    return 'coingecko:usd-coin';
+  }
+  return null;
 }
 
 function hasPositiveAmount(rawAmount: string | undefined): boolean {
@@ -161,26 +202,33 @@ export async function buildMergedPortfolioHoldings(
   for (const row of holdings) {
     const marketChain = resolveHoldingMarketChain(row);
     const contractKey = resolveHoldingContractKey(row);
-    const chainAssetId = buildChainAssetId(marketChain, contractKey);
-    if (!preferredAssetIdByChainAssetId.has(chainAssetId)) {
-      if (contractKey === NATIVE_CONTRACT_KEY) {
-        preferredAssetIdByChainAssetId.set(chainAssetId, null);
-      } else {
-        try {
-          preferredAssetIdByChainAssetId.set(
-            chainAssetId,
-            await resolveCoinGeckoAssetIdForContract(env, marketChain, contractKey),
-          );
-        } catch {
+    const chainAssetId = normalizeText(row.chain_asset_id) ?? buildChainAssetId(marketChain, contractKey);
+    const upstreamAssetId = normalizeAssetId(row.asset_id);
+    const manualOverrideAssetId = resolveManualAssetIdOverride(marketChain, contractKey);
+
+    let assetId = manualOverrideAssetId ?? upstreamAssetId;
+    if (!assetId) {
+      if (!preferredAssetIdByChainAssetId.has(chainAssetId)) {
+        if (contractKey === NATIVE_CONTRACT_KEY) {
           preferredAssetIdByChainAssetId.set(chainAssetId, null);
+        } else {
+          try {
+            preferredAssetIdByChainAssetId.set(
+              chainAssetId,
+              await resolveCoinGeckoAssetIdForContract(env, marketChain, contractKey),
+            );
+          } catch {
+            preferredAssetIdByChainAssetId.set(chainAssetId, null);
+          }
         }
       }
+      assetId = buildAssetId(
+        marketChain,
+        contractKey,
+        preferredAssetIdByChainAssetId.get(chainAssetId) ?? undefined,
+      );
     }
-    const assetId = buildAssetId(
-      marketChain,
-      contractKey,
-      preferredAssetIdByChainAssetId.get(chainAssetId) ?? undefined,
-    );
+
     const valueUsd = Number(row.value_usd ?? 0);
     const variant: MergedHoldingVariant = {
       ...row,
@@ -200,7 +248,7 @@ export async function buildMergedPortfolioHoldings(
       asset_id: assetId,
       symbol: normalizeText(row.symbol)?.toUpperCase() ?? null,
       name: normalizeText(row.name),
-      logo: normalizeText(row.logo) ?? normalizeText(row.url),
+      logo: resolveHoldingLogo(row),
       total_value_usd: valueUsd,
       variants: [variant],
     });
@@ -223,13 +271,211 @@ export async function buildMergedPortfolioHoldings(
     }
     if (!item.logo) {
       item.logo = item.variants
-        .map((variant) => normalizeText(variant.logo) ?? normalizeText(variant.url))
+        .map((variant) => resolveHoldingLogo(variant))
         .find((logo): logo is string => Boolean(logo))
         ?? null;
     }
   }
 
   return merged.sort((a, b) => b.total_value_usd - a.total_value_usd);
+}
+
+function parsePlatformsJson(raw: string | null | undefined): Record<string, string | null | undefined> {
+  const value = normalizeText(raw);
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as Record<string, string | null | undefined>;
+  } catch {
+    return {};
+  }
+}
+
+function mapPlatformToChainId(platform: string): number | null {
+  if (platform === 'ethereum') return 1;
+  if (platform === 'base') return 8453;
+  if (platform === 'binance-smart-chain' || platform === 'bnb-smart-chain') return 56;
+  return null;
+}
+
+async function ensureAggregatedAssetCatalogSchema(db: D1Database): Promise<void> {
+  if (aggregatedAssetCatalogSchemaReady) return;
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS aggregated_asset_catalog (
+        asset_id TEXT PRIMARY KEY,
+        coingecko_coin_id TEXT,
+        symbol TEXT,
+        name TEXT,
+        logo_uri TEXT,
+        platforms_json TEXT,
+        source TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_aggregated_asset_catalog_coin_id ON aggregated_asset_catalog(coingecko_coin_id)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_aggregated_asset_catalog_updated_at ON aggregated_asset_catalog(updated_at DESC)').run();
+  aggregatedAssetCatalogSchemaReady = true;
+}
+
+async function getAggregatedAssetLogos(db: D1Database, assetIds: string[]): Promise<Map<string, string>> {
+  const output = new Map<string, string>();
+  const ids = [...new Set(assetIds.map((id) => normalizeText(id)?.toLowerCase() ?? '').filter(Boolean))];
+  if (ids.length === 0) return output;
+  await ensureAggregatedAssetCatalogSchema(db);
+
+  const placeholders = ids.map(() => '?').join(',');
+  const sql = `SELECT asset_id, logo_uri FROM aggregated_asset_catalog WHERE asset_id IN (${placeholders})`;
+  const result = await db.prepare(sql).bind(...ids).all<{ asset_id: string; logo_uri: string | null }>();
+  for (const row of result.results ?? []) {
+    const assetId = normalizeText(row.asset_id)?.toLowerCase();
+    const logoUri = normalizeText(row.logo_uri);
+    if (!assetId || !logoUri) continue;
+    output.set(assetId, logoUri);
+  }
+  return output;
+}
+
+async function resolveBestTokenCatalogLogo(
+  db: D1Database,
+  chainId: number,
+  address: string,
+): Promise<string | null> {
+  const normalizedAddress = normalizeAddress(address);
+  if (!normalizedAddress) return null;
+  const result = await db
+    .prepare(
+      `SELECT logo_uri
+       FROM token_catalog
+       WHERE chain_id = ?
+         AND address = ?
+         AND logo_uri IS NOT NULL
+       ORDER BY confidence DESC, updated_at DESC
+       LIMIT 1`,
+    )
+    .bind(chainId, normalizedAddress)
+    .first<{ logo_uri: string | null }>();
+  return normalizeText(result?.logo_uri);
+}
+
+async function hydrateAggregatedAssetCatalogByAssetIds(
+  env: Bindings,
+  assetIds: string[],
+): Promise<void> {
+  const normalizedAssetIds = [...new Set(assetIds.map((id) => normalizeText(id)?.toLowerCase() ?? '').filter(Boolean))];
+  if (!normalizedAssetIds.length) return;
+  const coinIds = [
+    ...new Set(
+      normalizedAssetIds
+        .map((assetId) => parseCoingeckoCoinIdFromAssetId(assetId))
+        .filter((coinId): coinId is string => Boolean(coinId)),
+    ),
+  ];
+  if (!coinIds.length) return;
+  await ensureAggregatedAssetCatalogSchema(env.DB);
+
+  const placeholders = coinIds.map(() => '?').join(',');
+  const rows = await env.DB
+    .prepare(
+      `SELECT coin_id, symbol, name, platforms_json
+       FROM coingecko_coin_platforms
+       WHERE coin_id IN (${placeholders})`,
+    )
+    .bind(...coinIds)
+    .all<{ coin_id: string; symbol: string | null; name: string | null; platforms_json: string | null }>();
+
+  const now = nowIso();
+  for (const row of rows.results ?? []) {
+    const coinId = normalizeText(row.coin_id)?.toLowerCase();
+    if (!coinId) continue;
+    const assetId = `coingecko:${coinId}`;
+    const platforms = parsePlatformsJson(row.platforms_json);
+    let logoUri: string | null = null;
+
+    const platformEntries = Object.entries(platforms ?? {})
+      .map(([platformRaw, addressRaw]) => ({
+        chainId: mapPlatformToChainId(platformRaw.trim().toLowerCase()),
+        address: normalizeText(addressRaw) ?? '',
+      }))
+      .filter((entry): entry is { chainId: number; address: string } => Boolean(entry.chainId) && Boolean(entry.address));
+
+    for (const entry of platformEntries) {
+      const candidate = await resolveBestTokenCatalogLogo(env.DB, entry.chainId, entry.address);
+      if (candidate) {
+        logoUri = candidate;
+        break;
+      }
+    }
+
+    await env.DB
+      .prepare(
+        `INSERT INTO aggregated_asset_catalog (
+          asset_id, coingecko_coin_id, symbol, name, logo_uri, platforms_json, source, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(asset_id) DO UPDATE SET
+          coingecko_coin_id = excluded.coingecko_coin_id,
+          symbol = COALESCE(excluded.symbol, aggregated_asset_catalog.symbol),
+          name = COALESCE(excluded.name, aggregated_asset_catalog.name),
+          logo_uri = COALESCE(excluded.logo_uri, aggregated_asset_catalog.logo_uri),
+          platforms_json = COALESCE(excluded.platforms_json, aggregated_asset_catalog.platforms_json),
+          source = excluded.source,
+          updated_at = excluded.updated_at`,
+      )
+      .bind(
+        assetId,
+        coinId,
+        normalizeText(row.symbol)?.toUpperCase() ?? null,
+        normalizeText(row.name),
+        logoUri,
+        JSON.stringify(platforms ?? {}),
+        'coingecko_coin_list+token_catalog',
+        now,
+      )
+      .run();
+  }
+}
+
+export async function enrichMergedHoldingLogosByAssetId(
+  env: Bindings,
+  holdings: MergedPortfolioHolding[],
+): Promise<MergedPortfolioHolding[]> {
+  if (!holdings.length) return holdings;
+  const missingAssetIds = holdings
+    .filter((item) => !normalizeText(item.logo))
+    .map((item) => normalizeText(item.asset_id)?.toLowerCase() ?? '')
+    .filter(Boolean);
+  if (!missingAssetIds.length) return holdings;
+
+  // 1) Resolve from aggregated catalog table.
+  const cachedByAssetId = await getAggregatedAssetLogos(env.DB, missingAssetIds);
+  for (const item of holdings) {
+    if (normalizeText(item.logo)) continue;
+    const assetId = normalizeText(item.asset_id)?.toLowerCase();
+    if (!assetId) continue;
+    const cached = cachedByAssetId.get(assetId);
+    if (cached) item.logo = cached;
+  }
+
+  // 2) Rebuild missing rows from coingecko coin list + token catalog, then read again.
+  const stillMissingAssetIds = holdings
+    .filter((item) => !normalizeText(item.logo))
+    .map((item) => normalizeText(item.asset_id)?.toLowerCase() ?? '')
+    .filter(Boolean);
+  if (!stillMissingAssetIds.length) return holdings;
+
+  await hydrateAggregatedAssetCatalogByAssetIds(env, stillMissingAssetIds);
+  const refreshedByAssetId = await getAggregatedAssetLogos(env.DB, stillMissingAssetIds);
+  for (const item of holdings) {
+    if (normalizeText(item.logo)) continue;
+    const assetId = normalizeText(item.asset_id)?.toLowerCase();
+    if (!assetId) continue;
+    const refreshed = refreshedByAssetId.get(assetId);
+    if (refreshed) item.logo = refreshed;
+  }
+
+  return holdings;
 }
 
 async function upsertToken(
@@ -374,7 +620,7 @@ export async function upsertTokenMetadataFromPortfolio(
       symbol: symbol.slice(0, 24),
       name: row.name?.trim().slice(0, 120) ?? null,
       decimals: Number.isFinite(row.decimals) ? clampInt(Number(row.decimals), 0, 36) : null,
-      logoUri: row.logo?.trim().slice(0, 300) ?? row.url?.trim().slice(0, 300) ?? null,
+      logoUri: resolveHoldingLogo(row)?.slice(0, 300) ?? null,
       source: 'portfolio_api',
       confidence: 0.65,
       now: asOf,

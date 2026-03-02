@@ -201,7 +201,7 @@ export function App() {
           <div className={isArticleExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
             <ArticleReaderScreen articleId={activeArticleId} onBack={handleCloseArticle} onOpenToken={handleOpenTokenByRoute} />
           </div>
-        ) : activeTokenRoute ? (
+        ) : isTokenRoute && activeTokenRoute ? (
           <div className={isTokenExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
             <TokenDetailScreen
               chain={activeTokenRoute.chain}

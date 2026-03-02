@@ -71,6 +71,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>('1h');
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
+  const [loadingPrice, setLoadingPrice] = useState(100);
 
   const normalizedChain = chain.trim().toLowerCase();
   const normalizedContract = contract.trim().toLowerCase();
@@ -164,6 +165,27 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       : numericPriceChangePct > 0
         ? 'text-success'
         : 'text-error';
+  const isPriceLoading = isDetailLoading;
+  const isChartLoading = isKlineLoading && chartCandles.length === 0;
+  const hasTradeListPrice = Number.isFinite(Number(selected?.current_price)) && Number(selected?.current_price) > 0;
+
+  useEffect(() => {
+    const seed = detail?.currentPriceUsd ?? selected?.current_price ?? 100;
+    setLoadingPrice(Number.isFinite(seed) && seed > 0 ? seed : 100);
+  }, [normalizedChain, normalizedContract, detail?.currentPriceUsd, selected?.current_price]);
+
+  useEffect(() => {
+    if (!isPriceLoading || hasTradeListPrice) return;
+    const timer = window.setInterval(() => {
+      setLoadingPrice((prev) => {
+        const next = prev * (1 + (Math.random() - 0.5) * 0.01);
+        return Math.max(0.0001, next);
+      });
+    }, 700);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [hasTradeListPrice, isPriceLoading]);
 
   async function switchKlinePeriod(nextPeriod: KlinePeriod): Promise<void> {
     if (nextPeriod === klinePeriod || pendingKlinePeriod) return;
@@ -218,7 +240,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         </div>
         <div className="mt-4">
           <p className="m-0 text-3xl font-bold">
-            {detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
+            {isPriceLoading
+              ? hasTradeListPrice
+                ? formatUsdAdaptive(Number(selected?.current_price), i18n.language)
+                : formatUsdAdaptive(loadingPrice, i18n.language)
+              : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
               ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)
               : t('trade.priceUnavailable')}
           </p>
@@ -280,8 +306,30 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             candle
           </button>
         </div>
-        {isKlineLoading && chartCandles.length === 0 ? (
-          <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.loadingKline')}</p>
+        {isChartLoading ? (
+          <div className="mt-3">
+            <div className="h-72 overflow-hidden rounded-lg bg-base-200/30 px-2 py-2">
+              <svg viewBox="0 0 640 220" className="h-full w-full" role="img" aria-label={t('trade.loadingKline')}>
+                <defs>
+                  <linearGradient id="loading-kline-line" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="currentColor" stopOpacity="0.3" />
+                    <stop offset="50%" stopColor="currentColor" stopOpacity="0.9" />
+                    <stop offset="100%" stopColor="currentColor" stopOpacity="0.3" />
+                  </linearGradient>
+                </defs>
+                <line
+                  x1="24"
+                  y1="110"
+                  x2="616"
+                  y2="110"
+                  stroke="url(#loading-kline-line)"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  className="text-base-content/70"
+                />
+              </svg>
+            </div>
+          </div>
         ) : chartCandles.length === 0 ? (
           <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.noKline')}</p>
         ) : (

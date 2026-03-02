@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import {
   buildMergedPortfolioHoldings,
+  enrichMergedHoldingLogosByAssetId,
   fetchWalletPortfolio,
   upsertTokenMetadataFromPortfolio,
 } from '../services/market';
@@ -31,7 +32,10 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       );
     }
     const holdings = result.holdings;
-    const mergedHoldings = await buildMergedPortfolioHoldings(c.env, holdings);
+    const mergedHoldings = await enrichMergedHoldingLogosByAssetId(
+      c.env,
+      await buildMergedPortfolioHoldings(c.env, holdings),
+    );
     const totalUsd = result.totalUsd;
     const sample = holdings
       .slice(0, 3)
