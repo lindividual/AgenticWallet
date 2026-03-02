@@ -90,9 +90,9 @@
   },
   "tabs": {
     "navigation": "شريط التنقل السفلي",
-    "home": "Home",
-    "trade": "Trade",
-    "wallet": "Wallet"
+    "home": "الرئيسية",
+    "trade": "تداول",
+    "wallet": "المحفظة"
   },
   "home": {
     "title": "الرئيسية",

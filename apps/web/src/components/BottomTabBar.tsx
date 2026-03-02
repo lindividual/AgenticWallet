@@ -31,8 +31,10 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
                 key={tab}
                 type="button"
                 onClick={() => onTabChange(tab)}
-                className={`btn btn-ghost h-12 min-h-0 border border-transparent bg-transparent px-1 hover:bg-transparent active:bg-transparent ${
-                  isActive ? 'text-black' : 'text-gray-400'
+                className={`btn btn-ghost h-12 min-h-0 border-0 bg-transparent px-1 hover:bg-transparent active:bg-transparent ${
+                  isActive
+                    ? 'text-primary'
+                    : 'text-base-content/60'
                 }`}
                 aria-current={isActive ? 'page' : undefined}
               >

@@ -6,10 +6,18 @@ type BalanceHeaderProps = {
   balanceLabel: string;
   totalBalance: number;
   locale: string;
+  isBalanceLoading?: boolean;
   rightAction?: ReactNode;
 };
 
-export function BalanceHeader({ title, balanceLabel, totalBalance, locale, rightAction }: BalanceHeaderProps) {
+export function BalanceHeader({
+  title,
+  balanceLabel,
+  totalBalance,
+  locale,
+  isBalanceLoading = false,
+  rightAction,
+}: BalanceHeaderProps) {
   return (
     <>
       <header className="flex items-center justify-between gap-3">
@@ -18,7 +26,7 @@ export function BalanceHeader({ title, balanceLabel, totalBalance, locale, right
       </header>
       <section>
         <p className="m-0 text-base text-base-content/60">{balanceLabel}</p>
-        <p className="m-0 mt-1 text-4xl font-bold leading-none">{formatUsdAdaptive(totalBalance, locale)}</p>
+        <p className="m-0 mt-1 text-4xl font-bold leading-none">{isBalanceLoading ? '--' : formatUsdAdaptive(totalBalance, locale)}</p>
       </section>
     </>
   );

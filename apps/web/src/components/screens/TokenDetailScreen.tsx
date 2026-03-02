@@ -12,6 +12,9 @@ import {
   type TopMarketAsset,
 } from '../../api';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { CachedIconImage } from '../CachedIconImage';
+import { SkeletonBlock } from '../Skeleton';
+import { useTheme } from '../../contexts/ThemeContext';
 
 type TokenDetailScreenProps = {
   chain: string;
@@ -65,6 +68,17 @@ function getTokenInitial(symbol: string | null | undefined, name: string | null 
   return label ? label[0].toUpperCase() : '?';
 }
 
+function resolveThemeColor(variable: string, fallback: string): string {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback;
+
+  const probe = document.createElement('span');
+  probe.style.color = `var(${variable})`;
+  document.body.appendChild(probe);
+  const resolved = getComputedStyle(probe).color.trim();
+  probe.remove();
+  return resolved || fallback;
+}
+
 function compute24hChangePctFromHourlyCandles(
   candles: Array<{ close: number }> | null | undefined,
 ): number | null {
@@ -78,11 +92,11 @@ function compute24hChangePctFromHourlyCandles(
 
 export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreenProps) {
   const { t, i18n } = useTranslation();
+  const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>('1h');
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
-  const [loadingPrice, setLoadingPrice] = useState(100);
 
   const normalizedChain = chain.trim().toLowerCase();
   const normalizedContract = contract.trim().toLowerCase();
@@ -193,25 +207,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         : 'text-error';
   const isPriceLoading = isDetailLoading;
   const isChartLoading = isKlineLoading && chartCandles.length === 0;
-  const hasTradeListPrice = Number.isFinite(Number(selected?.current_price)) && Number(selected?.current_price) > 0;
-
-  useEffect(() => {
-    const seed = detail?.currentPriceUsd ?? selected?.current_price ?? 100;
-    setLoadingPrice(Number.isFinite(seed) && seed > 0 ? seed : 100);
-  }, [normalizedChain, normalizedContract, detail?.currentPriceUsd, selected?.current_price]);
-
-  useEffect(() => {
-    if (!isPriceLoading || hasTradeListPrice) return;
-    const timer = window.setInterval(() => {
-      setLoadingPrice((prev) => {
-        const next = prev * (1 + (Math.random() - 0.5) * 0.01);
-        return Math.max(0.0001, next);
-      });
-    }, 700);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [hasTradeListPrice, isPriceLoading]);
+  const shouldShowHeaderSkeleton = isDetailLoading && !detail;
+  const chartColor = useMemo(
+    () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
+    [resolvedTheme],
+  );
 
   async function switchKlinePeriod(nextPeriod: KlinePeriod): Promise<void> {
     if (nextPeriod === klinePeriod || pendingKlinePeriod) return;
@@ -244,58 +244,76 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       </header>
 
       <section className="p-0">
-        <div className="flex flex-col items-start gap-3">
-          {detail?.image ?? selected?.image ? (
-            <img
-              src={(detail?.image ?? selected?.image) ?? ''}
-              alt={displaySymbol || displayName}
-              className="h-12 w-12 rounded-full bg-base-300 object-cover"
-              loading="lazy"
-            />
-          ) : (
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-base-300 text-lg font-semibold text-base-content/70">
-              {getTokenInitial(displaySymbol, displayName)}
+        {shouldShowHeaderSkeleton ? (
+          <div>
+            <div className="flex flex-col items-start gap-3">
+              <SkeletonBlock className="h-12 w-12 rounded-full" />
+              <div className="min-w-0">
+                <SkeletonBlock className="h-5 w-48" />
+                <SkeletonBlock className="mt-2 h-4 w-20" />
+              </div>
             </div>
-          )}
-          <div className="min-w-0">
-            <p className="m-0 flex items-baseline gap-2">
-              <span className="truncate text-lg font-bold text-base-content/75">{displayName}</span>
-              {displaySymbol && <span className="text-sm font-medium uppercase text-base-content/50">{displaySymbol}</span>}
-            </p>
+            <div className="mt-4">
+              <SkeletonBlock className="h-9 w-44" />
+              <SkeletonBlock className="mt-2 h-4 w-24" />
+            </div>
           </div>
-        </div>
-        <div className="mt-4">
-          <p className="m-0 text-3xl font-bold">
-            {isPriceLoading
-              ? hasTradeListPrice
-                ? formatUsdAdaptive(Number(selected?.current_price), i18n.language)
-                : formatUsdAdaptive(loadingPrice, i18n.language)
-              : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
-              ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)
-              : t('trade.priceUnavailable')}
-          </p>
-          <p className={`m-0 mt-1 flex items-center gap-1 text-base font-medium ${priceChangeTone}`}>
-            <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
-              {hasPriceChangePct && numericPriceChangePct > 0 ? (
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 19V5" />
-                  <path d="M6 11l6-6 6 6" />
-                </svg>
-              ) : hasPriceChangePct && numericPriceChangePct < 0 ? (
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 5v14" />
-                  <path d="M18 13l-6 6-6-6" />
-                </svg>
+        ) : (
+          <>
+            <div className="flex flex-col items-start gap-3">
+              {detail?.image ?? selected?.image ? (
+                <CachedIconImage
+                  src={(detail?.image ?? selected?.image) ?? ''}
+                  alt={displaySymbol || displayName}
+                  className="h-12 w-12 rounded-full bg-base-300 object-cover"
+                  loading="lazy"
+                />
               ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M5 12h14" />
-                  <path d="M15 8l4 4-4 4" />
-                </svg>
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-base-300 text-lg font-semibold text-base-content/70">
+                  {getTokenInitial(displaySymbol, displayName)}
+                </div>
               )}
-            </span>
-            <span>{formatPct(priceChangePct)}</span>
-          </p>
-        </div>
+              <div className="min-w-0">
+                <p className="m-0 flex items-baseline gap-2">
+                  <span className="truncate text-lg font-bold text-base-content/75">{displayName}</span>
+                  {displaySymbol && <span className="text-sm font-medium uppercase text-base-content/50">{displaySymbol}</span>}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <p className="m-0 text-3xl font-bold">
+                {isPriceLoading
+                  ? Number.isFinite(Number(selected?.current_price))
+                    ? formatUsdAdaptive(Number(selected?.current_price), i18n.language)
+                    : t('trade.priceUnavailable')
+                  : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
+                  ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)
+                  : t('trade.priceUnavailable')}
+              </p>
+              <p className={`m-0 mt-1 flex items-center gap-1 text-base font-medium ${priceChangeTone}`}>
+                <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
+                  {hasPriceChangePct && numericPriceChangePct > 0 ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 19V5" />
+                      <path d="M6 11l6-6 6 6" />
+                    </svg>
+                  ) : hasPriceChangePct && numericPriceChangePct < 0 ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 5v14" />
+                      <path d="M18 13l-6 6-6-6" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 12h14" />
+                      <path d="M15 8l4 4-4 4" />
+                    </svg>
+                  )}
+                </span>
+                <span>{formatPct(priceChangePct)}</span>
+              </p>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="p-0">
@@ -370,8 +388,8 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
               lineMode={chartMode === 'line'}
               lineData={chartLine}
               lineValue={latestChartValue}
-              theme="light"
-              color="#000000"
+              theme={resolvedTheme}
+              color={chartColor}
               badge={false}
               window={chartWindow}
               formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
@@ -387,7 +405,14 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       <section className="p-0">
         <h2 className="m-0 text-lg font-bold">{t('trade.tokenInfo')}</h2>
         {isDetailLoading ? (
-          <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.loadingDetail')}</p>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            {Array.from({ length: 8 }).map((_, index) => (
+              <div key={`token-info-skeleton-${index}`} className="rounded bg-base-200/40 p-2">
+                <SkeletonBlock className="h-3 w-16" />
+                <SkeletonBlock className="mt-2 h-4 w-20" />
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div className="rounded bg-base-200/40 p-2">

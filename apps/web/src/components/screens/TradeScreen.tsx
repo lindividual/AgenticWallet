@@ -1,9 +1,12 @@
-import { useMemo, useRef, useState, type TouchEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type TouchEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getMarketShelves, type MarketShelf, type TopMarketAsset } from '../../api';
 import { AssetListItem } from '../AssetListItem';
+import { CachedIconImage } from '../CachedIconImage';
+import { SkeletonAssetListItem, SkeletonBlock } from '../Skeleton';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 
 type TradeScreenProps = {
@@ -26,6 +29,8 @@ function getTokenInitial(token: TopMarketAsset): string {
 const PULL_REFRESH_THRESHOLD_PX = 72;
 const PULL_REFRESH_MAX_PX = 120;
 const MANUAL_REFRESH_COOLDOWN_MS = 5_000;
+const TRADE_SHELVES_CACHE_KEY = 'trade-market-shelves:v1:limit=10';
+const TRADE_SHELVES_CACHE_TTL_MS = 15 * 60 * 1000;
 
 export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
   const { t, i18n } = useTranslation();
@@ -33,6 +38,7 @@ export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
   const lastManualRefreshAtRef = useRef(0);
   const [pullDistance, setPullDistance] = useState(0);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const [cachedShelves, setCachedShelves] = useState<MarketShelf[] | null>(null);
 
   const {
     data: shelfData,
@@ -51,11 +57,31 @@ export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
     refetchInterval: 90_000,
   });
 
-  const shelves = useMemo(() => shelfData ?? [], [shelfData]);
+  const shelves = useMemo(() => shelfData ?? cachedShelves ?? [], [cachedShelves, shelfData]);
   const hasAnyShelfAssets = useMemo(
     () => shelves.some((shelf) => shelf.assets.length > 0),
     [shelves],
   );
+  const shouldShowLoading = isLoading && shelves.length === 0;
+  const shouldShowError = isError && shelves.length === 0;
+
+  useEffect(() => {
+    if (!shelfData || shelfData.length === 0) return;
+    void writeCache<MarketShelf[]>(
+      cacheStores.query,
+      TRADE_SHELVES_CACHE_KEY,
+      shelfData,
+      TRADE_SHELVES_CACHE_TTL_MS,
+    );
+  }, [shelfData]);
+
+  useEffect(() => {
+    if (shelfData) return;
+    void readCache<MarketShelf[]>(cacheStores.query, TRADE_SHELVES_CACHE_KEY).then((data) => {
+      if (!data || data.length === 0) return;
+      setCachedShelves(data);
+    });
+  }, [shelfData]);
 
   async function triggerPullRefresh(): Promise<void> {
     if (isFetching || isPullRefreshing) return;
@@ -124,13 +150,29 @@ export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
         </div>
       )}
 
-      {isLoading && <div className="bg-base-100 p-4">{t('trade.loadingAssets')}</div>}
-      {isError && (
+      {shouldShowLoading && (
+        <section className="flex flex-col gap-5" aria-label={t('trade.loadingAssets')}>
+          {Array.from({ length: 2 }).map((_, shelfIndex) => (
+            <section key={`trade-skeleton-shelf-${shelfIndex}`} className="rounded-xl bg-base-200/35 p-3">
+              <SkeletonBlock className="h-6 w-36" />
+              <div className="mt-2 flex flex-col gap-1">
+                {Array.from({ length: 4 }).map((__, rowIndex) => (
+                  <SkeletonAssetListItem
+                    key={`trade-skeleton-row-${shelfIndex}-${rowIndex}`}
+                    className="bg-transparent py-3"
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </section>
+      )}
+      {shouldShowError && (
         <div className="bg-error/10 p-4 text-error">
           {t('trade.loadFailed', { message: (error as Error).message })}
         </div>
       )}
-      {!isLoading && !isError && !hasAnyShelfAssets && (
+      {!shouldShowLoading && !shouldShowError && !hasAnyShelfAssets && (
         <div className="bg-base-200 p-4 text-sm">{t('trade.empty')}</div>
       )}
 
@@ -146,14 +188,14 @@ export function TradeScreen({ onOpenToken, onLogout }: TradeScreenProps) {
                   <button
                     key={`${shelf.id}:${token.id}`}
                     type="button"
-                    className="w-full cursor-pointer px-2 text-left transition-colors hover:bg-base-200/60"
+                    className="w-full cursor-pointer px-2 text-start transition-colors hover:bg-base-200/60"
                     onClick={() => onOpenToken(token, shelf.id)}
                   >
                     <AssetListItem
                       className="py-3"
                       leftIcon={
                         token.image ? (
-                          <img
+                          <CachedIconImage
                             src={token.image}
                             alt={token.symbol}
                             className="h-10 w-10 rounded-full bg-base-300 object-cover"

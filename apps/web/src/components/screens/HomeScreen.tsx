@@ -1,12 +1,15 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getMarketShelves, getWalletPortfolio, type TopMarketAsset } from '../../api';
+import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getMarketShelves, getWalletPortfolio, type TopMarketAsset, type WalletPortfolioResponse } from '../../api';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { BalanceHeader } from '../BalanceHeader';
 import { AssetListItem } from '../AssetListItem';
 import { SettingsDropdown } from '../SettingsDropdown';
+import { CachedIconImage } from '../CachedIconImage';
+import { SkeletonAssetListItem, SkeletonBlock } from '../Skeleton';
 import { buildChainAssetId } from '../../utils/assetIdentity';
+import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 
 type HomeScreenProps = {
   auth: AuthState;
@@ -37,11 +40,14 @@ type RecommendationDisplayAsset = {
   contract: string | null;
 };
 
+const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
+
 export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeScreenProps) {
   const { t, i18n } = useTranslation();
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
+  const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
 
-  const { data: portfolio } = useQuery({
+  const { data: portfolio, isFetching: isPortfolioFetching, isPending: isPortfolioPending } = useQuery({
     queryKey: ['wallet-portfolio', walletAddress],
     queryFn: () => getWalletPortfolio(),
     enabled: Boolean(walletAddress),
@@ -50,14 +56,36 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     refetchOnWindowFocus: true,
   });
 
-  const { data: recommendationsData } = useQuery({
+  useEffect(() => {
+    setCachedPortfolio(null);
+  }, [walletAddress]);
+
+  useEffect(() => {
+    if (!walletAddress) return;
+    const cacheKey = `wallet-portfolio:v1:${walletAddress.toLowerCase()}`;
+    if (portfolio) {
+      void writeCache<WalletPortfolioResponse>(
+        cacheStores.query,
+        cacheKey,
+        portfolio,
+        WALLET_PORTFOLIO_CACHE_TTL_MS,
+      );
+      return;
+    }
+    void readCache<WalletPortfolioResponse>(cacheStores.query, cacheKey).then((value) => {
+      if (!value) return;
+      setCachedPortfolio(value);
+    });
+  }, [portfolio, walletAddress]);
+
+  const { data: recommendationsData, isLoading: isRecommendationsLoading } = useQuery({
     queryKey: ['home-agent-recommendations'],
     queryFn: getAgentRecommendations,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });
 
-  const { data: shelfData } = useQuery({
+  const { data: shelfData, isLoading: isShelfLoading } = useQuery({
     queryKey: ['market-shelves', 10],
     queryFn: () =>
       getMarketShelves({
@@ -68,15 +96,21 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     refetchOnWindowFocus: true,
   });
 
-  const { data: dailyToday } = useQuery({
+  const { data: dailyToday, isLoading: isDailyLoading } = useQuery({
     queryKey: ['home-agent-daily-today'],
     queryFn: getAgentTodayDaily,
     staleTime: 45_000,
-    refetchOnWindowFocus: true,
-    refetchInterval: 15_000,
+    refetchOnWindowFocus: (query) => {
+      const data = query.state.data;
+      return !(data?.status === 'ready' && data?.article);
+    },
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data?.status === 'ready' && data?.article ? false : 15_000;
+    },
   });
 
-  const { data: topicData } = useQuery({
+  const { data: topicData, isLoading: isTopicLoading } = useQuery({
     queryKey: ['home-agent-topic'],
     queryFn: () => getAgentArticles({ type: 'topic', limit: 3 }),
     staleTime: 45_000,
@@ -134,7 +168,11 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const daily = dailyToday?.article ?? null;
   const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
   const topics = topicData?.articles ?? [];
-  const totalBalance = portfolio?.totalUsd ?? 0;
+  const resolvedPortfolio = portfolio ?? cachedPortfolio;
+  const totalBalance = resolvedPortfolio?.totalUsd ?? 0;
+  const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
+  const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
+  const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isShelfLoading);
 
   const dailySummary = daily
     ? daily.summary
@@ -150,11 +188,22 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         title={t('home.title')}
         balanceLabel={t('wallet.balance')}
         totalBalance={totalBalance}
+        isBalanceLoading={isBalanceLoading}
         locale={i18n.language}
-        rightAction={<SettingsDropdown onLogout={onLogout} />}
+        rightAction={(
+          <div className="flex items-center gap-2">
+            {isPortfolioFetching && (
+              <span className="inline-flex items-center gap-1 text-xs text-base-content/60" aria-live="polite">
+                <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                {t('wallet.refreshing')}
+              </span>
+            )}
+            <SettingsDropdown onLogout={onLogout} />
+          </div>
+        )}
       />
 
-      {totalBalance <= 0 && (
+      {shouldShowZeroBalanceCard && (
         <section className="rounded-2xl border border-base-300 bg-base-100 px-4 py-5 text-center">
           <img
             src="/UMI-Light.svg"
@@ -176,7 +225,14 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
           {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
         </p>
         <p className="m-0 mt-2 truncate text-base leading-snug text-base-content/75">
-          {dailySummary}
+          {isDailyLoading && !daily && !lastReadyDaily ? (
+            <span className="flex flex-col gap-2">
+              <SkeletonBlock className="h-4 w-56" />
+              <SkeletonBlock className="h-4 w-40" />
+            </span>
+          ) : (
+            dailySummary
+          )}
         </p>
         <div className="mt-3 flex items-center gap-2">
           {daily && (
@@ -203,7 +259,14 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
       <section className="bg-base-100">
         <h2 className="m-0 text-lg font-bold">{t('home.assetRecommendationsTitle')}</h2>
         <div className="mt-3 flex flex-col gap-1">
-          {recommendations.length === 0 && (
+          {shouldShowRecommendationSkeleton && (
+            <>
+              {Array.from({ length: 4 }).map((_, index) => (
+                <SkeletonAssetListItem key={`home-reco-skeleton-${index}`} className="bg-base-100 py-3" />
+              ))}
+            </>
+          )}
+          {!shouldShowRecommendationSkeleton && recommendations.length === 0 && (
             <p className="m-0 text-base text-base-content/70">{t('home.emptyRecommendations')}</p>
           )}
           {recommendations.map((item) => {
@@ -212,7 +275,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                 className="bg-base-100 py-3"
                 leftIcon={
                   item.image ? (
-                    <img
+                    <CachedIconImage
                       src={item.image}
                       alt={item.symbol}
                       className="h-10 w-10 rounded-full bg-base-300 object-cover"
@@ -240,7 +303,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
               <button
                 key={item.id}
                 type="button"
-                className="w-full cursor-pointer px-2 text-left transition-colors hover:bg-base-200/60"
+                className="w-full cursor-pointer px-2 text-start transition-colors hover:bg-base-200/60"
                 onClick={() => onOpenToken(chain, contract)}
               >
                 {content}
@@ -253,7 +316,23 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
       <section className="bg-base-100">
         <h2 className="m-0 text-lg font-bold">{t('home.topicRecommendationsTitle')}</h2>
         <div className="mt-3 flex flex-col gap-3">
-          {topics.length === 0 && <p className="m-0 text-base text-base-content/70">{t('home.emptyTopics')}</p>}
+          {isTopicLoading && topics.length === 0 && (
+            <>
+              <article className="border border-base-300 bg-base-200 p-3">
+                <SkeletonBlock className="h-5 w-48" />
+                <SkeletonBlock className="mt-3 h-3 w-full" />
+                <SkeletonBlock className="mt-2 h-3 w-10/12" />
+                <SkeletonBlock className="mt-3 h-8 w-24 rounded-lg" />
+              </article>
+              <article className="border border-base-300 bg-base-200 p-3">
+                <SkeletonBlock className="h-5 w-44" />
+                <SkeletonBlock className="mt-3 h-3 w-full" />
+                <SkeletonBlock className="mt-2 h-3 w-9/12" />
+                <SkeletonBlock className="mt-3 h-8 w-24 rounded-lg" />
+              </article>
+            </>
+          )}
+          {!isTopicLoading && topics.length === 0 && <p className="m-0 text-base text-base-content/70">{t('home.emptyTopics')}</p>}
           {topics.map((topic) => (
             <article key={topic.id} className="border border-base-300 bg-base-200 p-3">
               <p className="m-0 text-base font-semibold">{topic.title}</p>

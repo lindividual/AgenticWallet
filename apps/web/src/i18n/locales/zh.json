@@ -90,9 +90,9 @@
   },
   "tabs": {
     "navigation": "底部导航",
-    "home": "Home",
-    "trade": "Trade",
-    "wallet": "Wallet"
+    "home": "首页",
+    "trade": "交易",
+    "wallet": "钱包"
   },
   "home": {
     "title": "首页",

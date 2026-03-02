@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getAppConfig, getWalletPortfolio, type SimEvmBalance, type TransferRecord } from '../../api';
+import { getAppConfig, getWalletPortfolio, type SimEvmBalance, type TransferRecord, type WalletPortfolioResponse } from '../../api';
 import { Modal } from '../modals/Modal';
 import { ReceiveCryptoContent } from '../modals/ReceiveCryptoContent';
 import { TopUpContent } from '../modals/TopUpContent';
@@ -11,7 +11,10 @@ import { useToast } from '../../contexts/ToastContext';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { AssetListItem } from '../AssetListItem';
 import { BalanceHeader } from '../BalanceHeader';
+import { CachedIconImage } from '../CachedIconImage';
+import { SkeletonAssetListItem } from '../Skeleton';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 
 type WalletScreenProps = {
@@ -53,6 +56,8 @@ type WalletHoldingListItem = {
   secondaryLabel: string;
   transferAsset: SimEvmBalance;
 };
+
+const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
 
 function normalizeAssetId(raw: string | null | undefined): string | null {
   const value = (raw ?? '').trim().toLowerCase();
@@ -114,7 +119,7 @@ function TokenAvatar({
     );
   }
   return (
-    <img
+    <CachedIconImage
       src={icon}
       alt={symbol || name}
       className="h-10 w-10 rounded-full bg-base-300 object-cover"
@@ -132,6 +137,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   const [modalVisible, setModalVisible] = useState(false);
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
+  const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -153,19 +159,42 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     refetchOnWindowFocus: false,
   });
 
-  const totalBalance = data?.totalUsd ?? 0;
+  const portfolioData = data ?? cachedPortfolio;
+  const totalBalance = portfolioData?.totalUsd ?? 0;
   const supportedChains = appConfig?.supportedChains ?? [];
   const chainNameById = useMemo(
     () => new Map(supportedChains.map((chain) => [chain.chainId, chain.name] as const)),
     [supportedChains],
   );
 
+  useEffect(() => {
+    setCachedPortfolio(null);
+  }, [walletAddress]);
+
+  useEffect(() => {
+    if (!walletAddress) return;
+    const cacheKey = `wallet-portfolio:v1:${walletAddress.toLowerCase()}`;
+    if (data) {
+      void writeCache<WalletPortfolioResponse>(
+        cacheStores.query,
+        cacheKey,
+        data,
+        WALLET_PORTFOLIO_CACHE_TTL_MS,
+      );
+      return;
+    }
+    void readCache<WalletPortfolioResponse>(cacheStores.query, cacheKey).then((value) => {
+      if (!value) return;
+      setCachedPortfolio(value);
+    });
+  }, [data, walletAddress]);
+
   const holdings = useMemo<WalletHoldingListItem[]>(() => {
-    if (!data) {
+    if (!portfolioData) {
       return [];
     }
 
-    const merged = data.mergedHoldings ?? [];
+    const merged = portfolioData.mergedHoldings ?? [];
     if (merged.length > 0) {
       return [...merged]
         .sort((a, b) => Number(b.total_value_usd ?? 0) - Number(a.total_value_usd ?? 0))
@@ -220,7 +249,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         });
     }
 
-    const grouped = [...data.holdings].reduce<Map<string, { totalValueUsd: number; variants: SimEvmBalance[] }>>(
+    const grouped = [...portfolioData.holdings].reduce<Map<string, { totalValueUsd: number; variants: SimEvmBalance[] }>>(
       (acc, asset) => {
         const key = normalizeAssetId(asset.asset_id) ?? `${asset.chain_id}:${asset.address?.toLowerCase() ?? ''}`;
         const current = acc.get(key);
@@ -286,7 +315,10 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
       })
       .filter((item): item is WalletHoldingListItem => Boolean(item))
       .sort((a, b) => b.valueUsd - a.valueUsd);
-  }, [chainNameById, data, t]);
+  }, [chainNameById, portfolioData, t]);
+
+  const shouldShowLoading = isLoading && !portfolioData;
+  const shouldShowError = isError && !portfolioData;
 
   useEffect(
     () => () => {
@@ -401,7 +433,17 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         balanceLabel={t('wallet.balance')}
         totalBalance={totalBalance}
         locale={i18n.language}
-        rightAction={<SettingsDropdown onLogout={onLogout} />}
+        rightAction={(
+          <div className="flex items-center gap-2">
+            {isFetching && (
+              <span className="inline-flex items-center gap-1 text-xs text-base-content/60" aria-live="polite">
+                <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                {t('wallet.refreshing')}
+              </span>
+            )}
+            <SettingsDropdown onLogout={onLogout} />
+          </div>
+        )}
       />
 
       <section className="grid grid-cols-3 gap-3 mt-6">
@@ -439,15 +481,19 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           </button>
         </div>
 
-        {isLoading && (
-          <div className="border border-base-400 bg-base-100 p-4 text-xl">{t('wallet.loadingAssets')}</div>
+        {shouldShowLoading && (
+          <div className="flex flex-col gap-1" aria-label={t('wallet.loadingAssets')}>
+            {Array.from({ length: 6 }).map((_, index) => (
+              <SkeletonAssetListItem key={`wallet-skeleton-${index}`} className="bg-base-100 py-4" />
+            ))}
+          </div>
         )}
-        {isError && (
+        {shouldShowError && (
           <div className="border border-error bg-error/10 p-4 text-xl text-error">
             {t('wallet.failedToLoadAssets', { message: (error as Error).message })}
           </div>
         )}
-        {!isLoading && !isError && holdings.length === 0 && (
+        {!shouldShowLoading && !shouldShowError && holdings.length === 0 && (
           <div className="bg-base-200 p-4 text-base">{t('wallet.noAssetsFound')}</div>
         )}
         {holdings.map((asset) => (

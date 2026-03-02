@@ -23,7 +23,7 @@ export function AssetListItem({
   const hasRightText = Boolean(rightPrimary) || Boolean(rightSecondary);
   const hasLeft = Boolean(leftIcon) || hasLeftText;
   const interactiveClassName = onClick
-    ? 'w-full cursor-pointer text-left transition-colors hover:bg-base-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
+    ? 'w-full cursor-pointer text-start transition-colors hover:bg-base-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
     : '';
   const rootClassName = [className, interactiveClassName].filter(Boolean).join(' ');
 
@@ -51,7 +51,7 @@ export function AssetListItem({
         ) : null}
 
         {hasRightText ? (
-          <div className="shrink-0 text-right">
+          <div className="shrink-0 text-end">
             {rightPrimary ? (
               <p className="m-0 whitespace-nowrap text-base font-semibold tabular-nums">
                 {rightPrimary}
