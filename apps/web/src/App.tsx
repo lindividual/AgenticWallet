@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCanGoBack, useLocation, useMatch, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
@@ -20,9 +21,11 @@ import {
 const ARTICLE_EXIT_MS = 220;
 const TOKEN_EXIT_MS = 220;
 const MARKET_EXIT_MS = 220;
+const TOKEN_ROUTE_PREVIEW_QUERY_KEY = 'trade-token-route-preview';
 
 export function App() {
   const { i18n } = useTranslation();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const location = useLocation();
@@ -172,12 +175,18 @@ export function App() {
   }
 
   function handleOpenToken(token: TopMarketAsset, _shelfId: string) {
-    handleOpenTokenByRoute(token.chain, token.contract);
+    handleOpenTokenByRoute(token.chain, token.contract, token);
   }
 
-  function handleOpenTokenByRoute(chain: string, contract: string) {
+  function handleOpenTokenByRoute(chain: string, contract: string, tokenPreview?: TopMarketAsset) {
     const normalizedChain = chain.trim();
     const normalizedContract = contract.trim();
+    if (tokenPreview) {
+      queryClient.setQueryData(
+        [TOKEN_ROUTE_PREVIEW_QUERY_KEY, normalizedChain.toLowerCase(), normalizedContract.toLowerCase()],
+        tokenPreview,
+      );
+    }
     const routeContractParam = encodeTokenContractParam(normalizedContract);
     if (tokenExitTimerRef.current) {
       clearTimeout(tokenExitTimerRef.current);

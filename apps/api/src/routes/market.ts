@@ -10,7 +10,11 @@ import {
   normalizeTopAssetSource,
 } from '../services/marketTopAssets';
 import { fetchMarketShelves } from '../services/marketShelves';
-import { fetchTradeBrowse } from '../services/tradeBrowse';
+import {
+  fetchTradeBrowse,
+  fetchTradeMarketKline,
+  normalizeTradeMarketDetailType,
+} from '../services/tradeBrowse';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
@@ -102,6 +106,38 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json(
         {
           error: 'trade_browse_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/market/trade-kline', async (c) => {
+    const type = normalizeTradeMarketDetailType(c.req.query('type'));
+    const id = (c.req.query('id') ?? '').trim();
+    const period = (c.req.query('period') ?? '1h').trim();
+    const optionTokenId = (c.req.query('optionTokenId') ?? '').trim() || null;
+    const sizeRaw = Number(c.req.query('size'));
+    const size = Number.isFinite(sizeRaw) ? sizeRaw : 60;
+
+    if (!type || !id) {
+      return c.json({ error: 'invalid_trade_kline_query' }, 400);
+    }
+
+    try {
+      const candles = await fetchTradeMarketKline(c.env, {
+        type,
+        id,
+        period,
+        size,
+        optionTokenId,
+      });
+      return c.json({ type, id, period, candles });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'trade_market_kline_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,

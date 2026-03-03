@@ -273,7 +273,15 @@ export type TradeBrowsePredictionItem = {
   probability: number | null;
   volume24h: number | null;
   url: string | null;
+  options: TradeBrowsePredictionOption[];
   source: 'polymarket';
+};
+
+export type TradeBrowsePredictionOption = {
+  id: string;
+  label: string;
+  tokenId: string | null;
+  probability: number | null;
 };
 
 export type TradeBrowseResponse = {
@@ -284,6 +292,8 @@ export type TradeBrowseResponse = {
   perps: TradeBrowseMarketItem[];
   predictions: TradeBrowsePredictionItem[];
 };
+
+export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
 
 export type WatchlistAsset = {
   id: string;
@@ -529,6 +539,25 @@ export async function getTokenKline(
   query.set('period', period);
   query.set('size', String(size));
   const response = await getJson<{ candles: KlineCandle[] }>(`/v1/market/kline?${query.toString()}`, true);
+  return response.candles;
+}
+
+export async function getTradeMarketKline(
+  type: TradeMarketDetailType,
+  id: string,
+  period: KlinePeriod = '1h',
+  size = 60,
+  optionTokenId?: string | null,
+): Promise<KlineCandle[]> {
+  const query = new URLSearchParams();
+  query.set('type', type);
+  query.set('id', id.trim());
+  query.set('period', period);
+  query.set('size', String(size));
+  if (optionTokenId) {
+    query.set('optionTokenId', optionTokenId.trim());
+  }
+  const response = await getJson<{ candles: KlineCandle[] }>(`/v1/market/trade-kline?${query.toString()}`, true);
   return response.candles;
 }
 

@@ -46,6 +46,7 @@ const KLINE_CANDLE_WIDTH_SECONDS: Record<KlinePeriod, number> = {
   '1d': 86_400,
   '1w': 604_800,
 };
+const TOKEN_ROUTE_PREVIEW_QUERY_KEY = 'trade-token-route-preview';
 
 function formatPct(value: number | null | undefined): string {
   if (!Number.isFinite(Number(value))) return '--';
@@ -148,6 +149,15 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       );
     return token ?? null;
   }, [normalizedChain, normalizedContract, shelfData]);
+  const routePreview = useMemo<TopMarketAsset | null>(
+    () =>
+      queryClient.getQueryData<TopMarketAsset>([
+        TOKEN_ROUTE_PREVIEW_QUERY_KEY,
+        normalizedChain,
+        normalizedContract,
+      ]) ?? null,
+    [normalizedChain, normalizedContract, queryClient],
+  );
 
   const { data: watchlistData } = useQuery({
     queryKey: ['market-watchlist', 200],
@@ -180,12 +190,12 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
   useEffect(() => {
     ingestAgentEvent('asset_viewed', {
-      asset: (detail?.symbol ?? selected?.symbol)?.toUpperCase(),
+      asset: (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol)?.toUpperCase(),
       chain: normalizedChain,
       contract: normalizedContract,
       source: 'trade_detail',
     }).catch(() => undefined);
-  }, [detail?.symbol, normalizedChain, normalizedContract, selected?.symbol]);
+  }, [detail?.symbol, normalizedChain, normalizedContract, routePreview?.symbol, selected?.symbol]);
 
   const chartCandles = useMemo<CandlePoint[]>(
     () =>
@@ -211,14 +221,15 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const latestChartValue =
     chartLine.length > 0
       ? chartLine[chartLine.length - 1].value
-      : detail?.currentPriceUsd ?? selected?.current_price ?? 0;
+      : detail?.currentPriceUsd ?? routePreview?.current_price ?? selected?.current_price ?? 0;
 
   const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
   const chartWindow = Math.max(candleWidth * Math.min(chartCandles.length || 30, 60), candleWidth * 10);
   const displayContract = (detail?.contract ?? normalizedContract).trim();
   const displayChain = (detail?.chain ?? normalizedChain).trim().toUpperCase();
-  const displayName = detail?.name ?? selected?.name ?? displayContract;
-  const displaySymbol = (detail?.symbol ?? selected?.symbol ?? '').trim();
+  const displayName = detail?.name ?? routePreview?.name ?? selected?.name ?? displayContract;
+  const displaySymbol = (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol ?? '').trim();
+  const displayImage = detail?.image ?? routePreview?.image ?? selected?.image ?? null;
 
   const fallbackPriceChangePct = useMemo(
     () => compute24hChangePctFromHourlyCandles(fallbackChangeKlineData),
@@ -272,14 +283,14 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
           itemId: `${normalizedChain}:${normalizedContract}`,
           chain: normalizedChain,
           contract: normalizedContract,
-          symbol: (detail?.symbol ?? selected?.symbol ?? '').trim() || undefined,
-          name: (detail?.name ?? selected?.name ?? '').trim() || undefined,
-          image: detail?.image ?? selected?.image ?? null,
+          symbol: (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol ?? '').trim() || undefined,
+          name: (detail?.name ?? routePreview?.name ?? selected?.name ?? '').trim() || undefined,
+          image: displayImage,
           source: 'token_detail',
           change24h: priceChangePct ?? null,
         });
         ingestAgentEvent('asset_favorited', {
-          asset: (detail?.symbol ?? selected?.symbol)?.toUpperCase(),
+          asset: (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol)?.toUpperCase(),
           chain: normalizedChain,
           contract: normalizedContract,
           source: 'trade_detail',
@@ -341,9 +352,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         ) : (
           <>
             <div className="flex flex-col items-start gap-3">
-              {detail?.image ?? selected?.image ? (
+              {displayImage ? (
                 <CachedIconImage
-                  src={(detail?.image ?? selected?.image) ?? ''}
+                  src={displayImage}
                   alt={displaySymbol || displayName}
                   className="h-12 w-12 rounded-full bg-base-300 object-cover"
                   loading="lazy"
@@ -363,8 +374,8 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             <div className="mt-4">
               <p className="m-0 text-3xl font-bold">
                 {isPriceLoading
-                  ? Number.isFinite(Number(selected?.current_price))
-                    ? formatUsdAdaptive(Number(selected?.current_price), i18n.language)
+                  ? Number.isFinite(Number(routePreview?.current_price ?? selected?.current_price))
+                    ? formatUsdAdaptive(Number(routePreview?.current_price ?? selected?.current_price), i18n.language)
                     : t('trade.priceUnavailable')
                   : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
                   ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)

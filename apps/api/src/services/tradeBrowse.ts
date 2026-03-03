@@ -26,7 +26,26 @@ export type TradeBrowsePredictionItem = {
   probability: number | null;
   volume24h: number | null;
   url: string | null;
+  options: TradeBrowsePredictionOption[];
   source: 'polymarket';
+};
+
+export type TradeBrowsePredictionOption = {
+  id: string;
+  label: string;
+  tokenId: string | null;
+  probability: number | null;
+};
+
+export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
+
+export type TradeMarketKlineCandle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  turnover: number | null;
 };
 
 export type TradeBrowseResponse = {
@@ -41,7 +60,9 @@ export type TradeBrowseResponse = {
 const TRADE_BROWSE_CACHE_TTL_MS = 20_000;
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_MARKETS_URL = 'https://gamma-api.polymarket.com/markets?active=true&closed=false&order=volume&ascending=false&limit=18';
+const POLYMARKET_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
 const STOCK_CATEGORY_CANDIDATES = ['tokenized-stock', 'tokenized-stocks'];
+const ONDO_STOCK_NAME_HINTS = ['ondo', 'global markets', 'omf'];
 
 const STABLECOIN_SYMBOLS = new Set([
   'USDT',
@@ -76,10 +97,46 @@ const STABLECOIN_NAME_FRAGMENTS = [
 let tradeBrowseCache: { expiresAt: number; value: TradeBrowseResponse } | null = null;
 let tradeBrowseInFlight: Promise<TradeBrowseResponse> | null = null;
 
+const HYPERLIQUID_INTERVAL_BY_KLINE_PERIOD: Record<string, string> = {
+  '15m': '15m',
+  '1h': '1h',
+  '4h': '4h',
+  '1d': '1d',
+};
+
+const HYPERLIQUID_PERIOD_MS_BY_INTERVAL: Record<string, number> = {
+  '15m': 15 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
+  '4h': 4 * 60 * 60 * 1000,
+  '1d': 24 * 60 * 60 * 1000,
+};
+
+const POLYMARKET_INTERVAL_BY_KLINE_PERIOD: Record<string, string> = {
+  '15m': '1h',
+  '1h': '1h',
+  '4h': '6h',
+  '1d': '1d',
+};
+
+const POLYMARKET_FIDELITY_BY_KLINE_PERIOD: Record<string, number> = {
+  '15m': 30,
+  '1h': 60,
+  '4h': 120,
+  '1d': 240,
+};
+
 function normalizeText(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   return value ? value : null;
+}
+
+export function normalizeTradeMarketDetailType(value: unknown): TradeMarketDetailType | null {
+  const normalized = normalizeText(value)?.toLowerCase();
+  if (normalized === 'stock' || normalized === 'perp' || normalized === 'prediction') {
+    return normalized;
+  }
+  return null;
 }
 
 function toFiniteNumber(raw: unknown): number | null {
@@ -106,6 +163,48 @@ function parseNumberArray(raw: unknown): number[] {
   } catch {
     return [];
   }
+}
+
+function parseStringArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => normalizeText(item))
+      .filter((item): item is string => item != null);
+  }
+  const text = normalizeText(raw);
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return Array.isArray(parsed)
+      ? parsed
+        .map((item) => normalizeText(item))
+        .filter((item): item is string => item != null)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function clampProbabilityPercent(value: number | null): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  if (value < 0) return 0;
+  if (value > 100) return 100;
+  return value;
+}
+
+function normalizeProbabilityPercent(raw: unknown): number | null {
+  const value = toFiniteNumber(raw);
+  if (value == null) return null;
+  if (value <= 1) return clampProbabilityPercent(value * 100);
+  if (value <= 100) return clampProbabilityPercent(value);
+  return clampProbabilityPercent(value / 100);
+}
+
+function normalizeTimestampMs(raw: unknown): number | null {
+  const value = toFiniteNumber(raw);
+  if (value == null) return null;
+  if (value < 1e12) return Math.round(value * 1000);
+  return Math.round(value);
 }
 
 function buildAssetUrl(chain: string, contract: string): string | null {
@@ -144,6 +243,24 @@ function mapTopAssetToBrowseItem(
     metaValue: null,
     externalUrl: buildAssetUrl(asset.chain, asset.contract),
   };
+}
+
+function sanitizeCompanyName(raw: string): string {
+  const stripped = raw
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return stripped || raw.trim();
+}
+
+function isOndoStockAsset(asset: MarketTopAsset): boolean {
+  const assetId = (asset.asset_id ?? '').trim().toLowerCase();
+  const name = (asset.name ?? '').trim().toLowerCase();
+  const symbol = (asset.symbol ?? '').trim().toLowerCase();
+  if (!assetId && !name && !symbol) return false;
+  return ONDO_STOCK_NAME_HINTS.some(
+    (hint) => assetId.includes(hint) || name.includes(hint) || symbol.includes(hint),
+  );
 }
 
 async function fetchTopMovers(env: Bindings): Promise<TradeBrowseMarketItem[]> {
@@ -195,9 +312,15 @@ async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
         category,
       });
       const mapped = assets
-        .filter((asset) => !isStableLikeAsset(asset))
+        .filter((asset) => !isStableLikeAsset(asset) && isOndoStockAsset(asset))
         .slice(0, 10)
-        .map((asset) => mapTopAssetToBrowseItem(asset, 'coingecko'));
+        .map((asset) => {
+          const item = mapTopAssetToBrowseItem(asset, 'coingecko');
+          return {
+            ...item,
+            name: sanitizeCompanyName(item.name),
+          };
+        });
       if (mapped.length > 0) {
         return mapped;
       }
@@ -300,16 +423,29 @@ async function fetchPredictions(): Promise<TradeBrowsePredictionItem[]> {
       ?? toFiniteNumber(row.oneDayVolume)
       ?? toFiniteNumber(row.volume);
 
-    const outcomePrices = parseNumberArray(row.outcomePrices);
-    const probabilityRaw =
-      outcomePrices.length > 0
-        ? Math.max(...outcomePrices)
-        : toFiniteNumber(row.probability) ?? toFiniteNumber(row.lastTradePrice);
-    const probability = probabilityRaw == null
-      ? null
-      : probabilityRaw <= 1
-        ? probabilityRaw * 100
-        : probabilityRaw;
+    const outcomes = parseStringArray(row.outcomes);
+    const outcomePrices = parseNumberArray(row.outcomePrices).map((item) => normalizeProbabilityPercent(item)).filter((item): item is number => item != null);
+    const clobTokenIds = parseStringArray(row.clobTokenIds);
+    const options: TradeBrowsePredictionOption[] = [];
+    const optionCount = Math.max(outcomes.length, outcomePrices.length, clobTokenIds.length);
+    for (let index = 0; index < optionCount; index += 1) {
+      const label = outcomes[index] ?? `Option ${index + 1}`;
+      const tokenId = clobTokenIds[index] ?? null;
+      const probability = outcomePrices[index] ?? null;
+      options.push({
+        id: `${rawId}:${index}`,
+        label,
+        tokenId,
+        probability,
+      });
+    }
+
+    const probability = options
+      .map((option) => option.probability)
+      .filter((item): item is number => item != null)
+      .sort((a, b) => b - a)[0]
+      ?? normalizeProbabilityPercent(row.probability)
+      ?? normalizeProbabilityPercent(row.lastTradePrice);
 
     const directUrl = normalizeText(row.url);
     const slug = normalizeText(row.slug);
@@ -321,6 +457,7 @@ async function fetchPredictions(): Promise<TradeBrowsePredictionItem[]> {
       probability,
       volume24h,
       url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : null),
+      options,
       source: 'polymarket',
     });
   }
@@ -328,6 +465,193 @@ async function fetchPredictions(): Promise<TradeBrowsePredictionItem[]> {
   return output
     .sort((a, b) => (b.volume24h ?? Number.NEGATIVE_INFINITY) - (a.volume24h ?? Number.NEGATIVE_INFINITY))
     .slice(0, 10);
+}
+
+function normalizeTradeKlinePeriod(value: unknown): string {
+  const normalized = normalizeText(value)?.toLowerCase();
+  if (normalized === '15m' || normalized === '1h' || normalized === '4h' || normalized === '1d') {
+    return normalized;
+  }
+  return '1h';
+}
+
+function sanitizeKlineSize(value: unknown): number {
+  const numberValue = toFiniteNumber(value);
+  if (numberValue == null) return 60;
+  const rounded = Math.round(numberValue);
+  if (!Number.isFinite(rounded)) return 60;
+  return Math.max(10, Math.min(rounded, 240));
+}
+
+function parsePerpSymbolFromId(id: string): string | null {
+  const normalized = normalizeText(id);
+  if (!normalized) return null;
+  if (normalized.startsWith('hyperliquid:')) {
+    return normalizeText(normalized.slice('hyperliquid:'.length))?.toUpperCase() ?? null;
+  }
+  return normalized.toUpperCase();
+}
+
+function selectPredictionTokenId(
+  item: TradeBrowsePredictionItem | null | undefined,
+  preferredTokenId?: string | null,
+): string | null {
+  const preferred = normalizeText(preferredTokenId);
+  if (preferred && item?.options.some((option) => option.tokenId === preferred)) {
+    return preferred;
+  }
+
+  const sorted = (item?.options ?? [])
+    .filter((option) => Boolean(option.tokenId))
+    .slice()
+    .sort((a, b) => (b.probability ?? Number.NEGATIVE_INFINITY) - (a.probability ?? Number.NEGATIVE_INFINITY));
+  return sorted[0]?.tokenId ?? null;
+}
+
+async function fetchHyperliquidPerpKlines(
+  symbol: string,
+  period: string,
+  size: number,
+): Promise<TradeMarketKlineCandle[]> {
+  const interval = HYPERLIQUID_INTERVAL_BY_KLINE_PERIOD[period] ?? '1h';
+  const periodMs = HYPERLIQUID_PERIOD_MS_BY_INTERVAL[interval] ?? HYPERLIQUID_PERIOD_MS_BY_INTERVAL['1h'];
+  const now = Date.now();
+  const endTime = now;
+  const startTime = Math.max(0, endTime - (size + 2) * periodMs);
+
+  const response = await fetch(HYPERLIQUID_INFO_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'candleSnapshot',
+      req: {
+        coin: symbol,
+        interval,
+        startTime,
+        endTime,
+      },
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`hyperliquid_candle_http_${response.status}:${detail.slice(0, 200)}`);
+  }
+
+  const payload = (await response.json()) as unknown;
+  if (!Array.isArray(payload)) return [];
+
+  return payload
+    .map((entry) => {
+      const row = asRecord(entry);
+      if (!row) return null;
+      const time = normalizeTimestampMs(row.t ?? row.T);
+      const open = toFiniteNumber(row.o);
+      const high = toFiniteNumber(row.h);
+      const low = toFiniteNumber(row.l);
+      const close = toFiniteNumber(row.c);
+      if (time == null || open == null || high == null || low == null || close == null) return null;
+      return {
+        time,
+        open,
+        high,
+        low,
+        close,
+        turnover: toFiniteNumber(row.v),
+      } satisfies TradeMarketKlineCandle;
+    })
+    .filter((item): item is TradeMarketKlineCandle => item != null)
+    .sort((a, b) => a.time - b.time)
+    .slice(-size);
+}
+
+async function fetchPolymarketPredictionKlines(
+  tokenId: string,
+  period: string,
+  size: number,
+): Promise<TradeMarketKlineCandle[]> {
+  const interval = POLYMARKET_INTERVAL_BY_KLINE_PERIOD[period] ?? '1h';
+  const fidelity = POLYMARKET_FIDELITY_BY_KLINE_PERIOD[period] ?? 60;
+  const query = new URLSearchParams({
+    market: tokenId,
+    interval,
+    fidelity: String(fidelity),
+  });
+  const response = await fetch(`${POLYMARKET_PRICES_HISTORY_URL}?${query.toString()}`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`polymarket_prices_history_http_${response.status}:${detail.slice(0, 200)}`);
+  }
+
+  const payload = (await response.json()) as unknown;
+  const root = asRecord(payload);
+  const history = Array.isArray(root?.history) ? root.history : [];
+  if (!history.length) return [];
+
+  const points = history
+    .map((entry) => {
+      const row = asRecord(entry);
+      if (!row) return null;
+      const time = normalizeTimestampMs(row.t);
+      const value = normalizeProbabilityPercent(row.p);
+      if (time == null || value == null) return null;
+      return { time, value };
+    })
+    .filter((item): item is { time: number; value: number } => item != null)
+    .sort((a, b) => a.time - b.time);
+
+  const candles = points.map((point, index) => {
+    const previous = points[index - 1] ?? point;
+    const open = previous.value;
+    const close = point.value;
+    return {
+      time: point.time,
+      open,
+      high: Math.max(open, close),
+      low: Math.min(open, close),
+      close,
+      turnover: null,
+    } satisfies TradeMarketKlineCandle;
+  });
+
+  return candles.slice(-size);
+}
+
+export async function fetchTradeMarketKline(
+  env: Bindings,
+  options: {
+    type: TradeMarketDetailType;
+    id: string;
+    period?: string;
+    size?: number;
+    optionTokenId?: string | null;
+  },
+): Promise<TradeMarketKlineCandle[]> {
+  const period = normalizeTradeKlinePeriod(options.period);
+  const size = sanitizeKlineSize(options.size);
+
+  if (options.type === 'perp') {
+    const symbol = parsePerpSymbolFromId(options.id);
+    if (!symbol) return [];
+    return fetchHyperliquidPerpKlines(symbol, period, size);
+  }
+
+  if (options.type === 'prediction') {
+    const browse = await fetchTradeBrowse(env);
+    const item = browse.predictions.find((prediction) => prediction.id === options.id) ?? null;
+    const tokenId = selectPredictionTokenId(item, options.optionTokenId);
+    if (!tokenId) return [];
+    return fetchPolymarketPredictionKlines(tokenId, period, size);
+  }
+
+  return [];
 }
 
 async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {

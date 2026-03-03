@@ -1,26 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type TouchEvent } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
-  addMarketWatchlistAsset,
-  getMarketWatchlist,
-  removeMarketWatchlistAsset,
   getTradeBrowse,
   type TopMarketAsset,
   type TradeBrowseMarketItem,
   type TradeBrowsePredictionItem,
   type TradeBrowseResponse,
 } from '../../api';
-import { useToast } from '../../contexts/ToastContext';
 import { CachedIconImage } from '../CachedIconImage';
 import { SkeletonBlock } from '../Skeleton';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
-import {
-  normalizeWatchlistItemId,
-  type TradeMarketDetailType,
-} from '../../utils/tradeMarketDetail';
+import { type TradeMarketDetailType } from '../../utils/tradeMarketDetail';
 
 type TradeScreenProps = {
   onOpenToken: (token: TopMarketAsset, shelfId: string) => void;
@@ -33,8 +26,6 @@ const PULL_REFRESH_MAX_PX = 120;
 const MANUAL_REFRESH_COOLDOWN_MS = 5_000;
 const TRADE_BROWSE_CACHE_KEY = 'trade-browse:v2';
 const TRADE_BROWSE_CACHE_TTL_MS = 10 * 60 * 1000;
-const WATCHLIST_CACHE_KEY = ['market-watchlist', 200] as const;
-type WatchCategory = 'stock' | 'perps' | 'prediction';
 
 function formatPct(value: number | null | undefined): string {
   if (!Number.isFinite(Number(value))) return '--';
@@ -87,10 +78,6 @@ function toTopMarketAsset(item: TradeBrowseMarketItem & { chain: string; contrac
   };
 }
 
-function toGenericWatchKey(type: WatchCategory, itemId: string): string {
-  return `${type}:${normalizeWatchlistItemId(itemId) ?? ''}`;
-}
-
 function pctClassname(value: number | null | undefined): string {
   if (!Number.isFinite(Number(value))) return 'text-base-content/55';
   const numberValue = Number(value);
@@ -140,14 +127,11 @@ function IconAvatar({
 
 export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: TradeScreenProps) {
   const { t, i18n } = useTranslation();
-  const queryClient = useQueryClient();
-  const { showError, showSuccess } = useToast();
   const pullStartYRef = useRef<number | null>(null);
   const lastManualRefreshAtRef = useRef(0);
   const [pullDistance, setPullDistance] = useState(0);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const [cachedPayload, setCachedPayload] = useState<TradeBrowseResponse | null>(null);
-  const [watchlistBusyKey, setWatchlistBusyKey] = useState<string | null>(null);
 
   const {
     data,
@@ -164,24 +148,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
   });
 
   const payload = data ?? cachedPayload;
-
-  const { data: watchlistResponse } = useQuery({
-    queryKey: WATCHLIST_CACHE_KEY,
-    queryFn: () => getMarketWatchlist({ limit: 200 }),
-    staleTime: 15_000,
-  });
-  const watchlistAssets = watchlistResponse?.assets ?? [];
-  const genericWatchlistLookup = useMemo(() => {
-    const lookup = new Map<string, string>();
-    for (const asset of watchlistAssets) {
-      const type = asset.watch_type;
-      if (type !== 'stock' && type !== 'perps' && type !== 'prediction') continue;
-      const itemId = asset.item_id?.trim();
-      if (!itemId) continue;
-      lookup.set(toGenericWatchKey(type, itemId), asset.id);
-    }
-    return lookup;
-  }, [watchlistAssets]);
 
   const hasAnySectionData = useMemo(() => {
     if (!payload) return false;
@@ -260,46 +226,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
   function handleOpenToken(item: TradeBrowseMarketItem, section: string): void {
     if (!canOpenToken(item)) return;
     onOpenToken(toTopMarketAsset(item), section);
-  }
-
-  async function toggleGenericWatch(
-    type: WatchCategory,
-    item: TradeBrowseMarketItem | TradeBrowsePredictionItem,
-  ): Promise<void> {
-    const itemId = item.id.trim();
-    if (!itemId) return;
-    const normalizedItemId = normalizeWatchlistItemId(itemId);
-    if (!normalizedItemId) return;
-    const key = toGenericWatchKey(type, normalizedItemId);
-    if (watchlistBusyKey) return;
-    setWatchlistBusyKey(key);
-    try {
-      const watchlistId = genericWatchlistLookup.get(key);
-      if (watchlistId) {
-        await removeMarketWatchlistAsset({ id: watchlistId });
-        showSuccess(t('trade.watchRemoved'));
-      } else {
-        const isPrediction = type === 'prediction';
-        await addMarketWatchlistAsset({
-          watchType: type,
-          itemId,
-          symbol: isPrediction ? (item as TradeBrowsePredictionItem).title.slice(0, 24) : (item as TradeBrowseMarketItem).symbol,
-          name: isPrediction ? (item as TradeBrowsePredictionItem).title : (item as TradeBrowseMarketItem).name,
-          image: item.image ?? null,
-          source: `trade_${type}`,
-          change24h: isPrediction ? null : (item as TradeBrowseMarketItem).change24h ?? null,
-          externalUrl: isPrediction
-            ? (item as TradeBrowsePredictionItem).url ?? null
-            : (item as TradeBrowseMarketItem).externalUrl ?? null,
-        });
-        showSuccess(t('trade.watchAdded'));
-      }
-      await queryClient.invalidateQueries({ queryKey: ['market-watchlist'] });
-    } catch (error) {
-      showError(`${t('common.error')}: ${(error as Error).message}`);
-    } finally {
-      setWatchlistBusyKey(null);
-    }
   }
 
   return (
@@ -468,9 +394,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
               )}
               {payload.stocks.map((item) => {
                 const changeClass = pctClassname(item.change24h);
-                const watchKey = toGenericWatchKey('stock', item.id);
-                const isWatched = genericWatchlistLookup.has(watchKey);
-                const isWatchBusy = watchlistBusyKey === watchKey;
                 return (
                   <div
                     key={item.id}
@@ -493,14 +416,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                         <p className={`m-0 mt-0.5 text-base font-semibold ${changeClass}`}>{formatPct(item.change24h)}</p>
                       </div>
                     </button>
-                    <button
-                      type="button"
-                      className={`btn btn-xs ml-2 border-0 ${isWatched ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => void toggleGenericWatch('stock', item)}
-                      disabled={isWatchBusy}
-                    >
-                      {isWatchBusy ? <span className="loading loading-spinner loading-xs" /> : isWatched ? t('trade.watching') : t('trade.watch')}
-                    </button>
                   </div>
                 );
               })}
@@ -514,27 +429,24 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                 <div className="px-4 py-4 text-sm text-base-content/65">{t('trade.noSectionData')}</div>
               )}
               {payload.perps.map((item) => {
-                const watchKey = toGenericWatchKey('perps', item.id);
-                const isWatched = genericWatchlistLookup.has(watchKey);
-                const isWatchBusy = watchlistBusyKey === watchKey;
                 return (
                   <div
                     key={item.id}
-                    className="flex items-center justify-between gap-3 border-b border-base-content/10 px-4 py-3 last:border-b-0"
+                    className="flex items-start justify-between gap-3 border-b border-base-content/10 px-4 py-3 last:border-b-0"
                   >
                     <button
                       type="button"
-                      className="flex min-w-0 flex-1 items-center justify-between gap-3 text-inherit no-underline transition-colors hover:bg-base-200/70"
+                      className="flex min-w-0 flex-1 items-start justify-between gap-3 text-inherit no-underline text-left transition-colors hover:bg-base-200/70"
                       onClick={() => onOpenMarketDetail('perp', item.id)}
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1 text-left">
                         <p className="m-0 text-sm font-semibold">{item.symbol}</p>
                         <p className="m-0 mt-0.5 text-xs text-base-content/60">
                           {t('trade.volumeShort')}: {formatCompactUsd(item.volume24h, i18n.language)}
                           {item.metaValue != null ? `  ${t('trade.openInterestShort')}: ${formatCompactUsd(item.metaValue, i18n.language)}` : ''}
                         </p>
                       </div>
-                      <div className="text-right">
+                      <div className="shrink-0 text-right">
                         <p className="m-0 text-sm text-base-content/70">
                           {item.currentPrice != null ? formatUsdAdaptive(item.currentPrice, i18n.language) : '--'}
                         </p>
@@ -542,14 +454,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                           {formatPct(item.change24h)}
                         </p>
                       </div>
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn btn-xs ml-2 border-0 ${isWatched ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => void toggleGenericWatch('perps', item)}
-                      disabled={isWatchBusy}
-                    >
-                      {isWatchBusy ? <span className="loading loading-spinner loading-xs" /> : isWatched ? t('trade.watching') : t('trade.watch')}
                     </button>
                   </div>
                 );
@@ -564,9 +468,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                 <div className="px-4 py-4 text-sm text-base-content/65">{t('trade.noSectionData')}</div>
               )}
               {payload.predictions.map((market: TradeBrowsePredictionItem) => {
-                const watchKey = toGenericWatchKey('prediction', market.id);
-                const isWatched = genericWatchlistLookup.has(watchKey);
-                const isWatchBusy = watchlistBusyKey === watchKey;
                 return (
                   <div
                     key={market.id}
@@ -574,29 +475,21 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                   >
                     <button
                       type="button"
-                      className="flex min-w-0 flex-1 items-start justify-between gap-3 text-inherit no-underline transition-colors hover:bg-base-200/70"
+                      className="flex min-w-0 flex-1 items-start justify-between gap-3 text-inherit no-underline text-left transition-colors hover:bg-base-200/70"
                       onClick={() => onOpenMarketDetail('prediction', market.id)}
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1 text-left">
                         <p className="m-0 line-clamp-2 text-sm font-semibold">{market.title}</p>
                         <p className="m-0 mt-1 text-xs text-base-content/60">
                           {t('trade.volumeShort')}: {formatCompactUsd(market.volume24h, i18n.language)}
                         </p>
                       </div>
-                      <div className="text-right">
+                      <div className="shrink-0 text-right">
                         <p className="m-0 rounded-full bg-success/15 px-2 py-0.5 text-sm font-semibold text-success">
                           {market.probability != null ? `${market.probability.toFixed(1)}%` : '--'}
                         </p>
                         <p className="m-0 mt-1 text-xs text-base-content/60">{t('trade.probability')}</p>
                       </div>
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn btn-xs ml-2 border-0 ${isWatched ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => void toggleGenericWatch('prediction', market)}
-                      disabled={isWatchBusy}
-                    >
-                      {isWatchBusy ? <span className="loading loading-spinner loading-xs" /> : isWatched ? t('trade.watching') : t('trade.watch')}
                     </button>
                   </div>
                 );
