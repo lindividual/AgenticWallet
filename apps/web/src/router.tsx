@@ -35,7 +35,13 @@ const tokenRoute = createRoute({
   component: App,
 });
 
-const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, articleRoute, tokenRoute]);
+const marketRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/market/$marketType/$itemId',
+  component: App,
+});
+
+const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, articleRoute, tokenRoute, marketRoute]);
 
 export const router = createRouter({
   routeTree,

@@ -5,6 +5,7 @@ import { getSupportedMarketChains } from '../config/appConfig';
 import {
   buildFallbackRecommendations,
   isoDate,
+  mergePreferredAssets,
   parseLlmRecommendations,
   summarizeEvents,
   tomorrowDate,
@@ -39,6 +40,9 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
 
   const events = deps.getLatestEvents(120);
   const eventSummary = summarizeEvents(events);
+  const watchlistSymbols = (deps.getWatchlistAssets?.(30) ?? [])
+    .map((item) => item.symbol.trim().toUpperCase())
+    .filter(Boolean);
   const generatedAt = now.toISOString();
   const validUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
@@ -57,7 +61,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
     // Market APIs may be unavailable; continue with empty market data.
   }
 
-  const userTopAssets = eventSummary.topAssets.slice(0, 5);
+  const userTopAssets = mergePreferredAssets(eventSummary.topAssets, watchlistSymbols, 10).slice(0, 5);
   const portfolioHoldings = getPortfolioHoldings(deps.sql, supportedChains);
 
   let rows = buildFallbackRecommendations(userTopAssets, portfolioHoldings, marketAssets);
@@ -80,6 +84,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
             role: 'user',
             content: buildRecommendationUserPrompt(
               eventSummary,
+              watchlistSymbols,
               portfolioContext,
               marketAssets,
               userTopAssets,
@@ -110,6 +115,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
     [
       ...marketAssets.map((asset) => (asset.symbol ?? '').trim().toUpperCase()),
       ...portfolioHoldings.map((holding) => holding.symbol.trim().toUpperCase()),
+      ...watchlistSymbols,
     ].filter(Boolean),
   );
   if (allowedSymbols.size > 0) {
@@ -181,6 +187,7 @@ function buildRecommendationSystemPrompt(language: RecommendationLanguage): stri
 
 function buildRecommendationUserPrompt(
   eventSummary: { counts: Record<string, number>; topAssets: string[] },
+  watchlistSymbols: string[],
   portfolioContext: string,
   marketAssets: MarketTopAsset[],
   userTopAssets: string[],
@@ -206,6 +213,7 @@ function buildRecommendationUserPrompt(
     `--- User Behavior ---`,
     `Recent event counts: ${JSON.stringify(eventSummary.counts)}`,
     `Top interacted assets: ${userTopAssets.join(', ') || 'N/A'}`,
+    `Watchlist assets: ${watchlistSymbols.join(', ') || 'N/A'}`,
     ``,
     `--- Market Trending (CoinGecko + Bitget) ---`,
     marketLines || '  No market data available.',
@@ -221,6 +229,7 @@ function buildRecommendationUserPrompt(
     `- At least 1 coin from market trending data`,
     `- At least 1 coin related to user's existing portfolio`,
     `- At least 1 coin based on user's recent interaction interests`,
+    `- If watchlist assets exist, prioritize at least 1 watchlist coin`,
     `- Diversify across different chains and risk profiles when possible`,
     `- Recommendations should be actionable investment suggestions`,
   ].join('\n');

@@ -82,3 +82,20 @@ export type TransferRow = {
   submitted_at: string | null;
   confirmed_at: string | null;
 };
+
+export type WatchlistAssetRow = {
+  id: string;
+  user_id: string;
+  watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
+  item_id: string | null;
+  chain: string;
+  contract: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  source: string | null;
+  change_24h: number | null;
+  external_url: string | null;
+  created_at: string;
+  updated_at: string;
+};

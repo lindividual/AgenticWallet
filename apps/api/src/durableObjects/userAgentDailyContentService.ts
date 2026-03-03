@@ -6,6 +6,7 @@ import {
   buildArticleR2Key,
   buildFallbackDailyDigestMarkdown,
   isoDate,
+  mergePreferredAssets,
   summarizeEvents,
   tomorrowDate,
 } from './userAgentHelpers';
@@ -45,12 +46,16 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
 
   const recentEvents = deps.getLatestEvents(80);
   const eventSummary = summarizeEvents(recentEvents);
+  const watchlistSymbols = (deps.getWatchlistAssets?.(30) ?? [])
+    .map((item) => item.symbol.trim().toUpperCase())
+    .filter(Boolean);
+  const preferredAssets = mergePreferredAssets(eventSummary.topAssets, watchlistSymbols, 10);
   const preferredLocale = deps.getPreferredLocale?.() ?? null;
   const language = resolveDailyLanguage(preferredLocale);
   const portfolioContext = buildPortfolioContext(deps.sql);
   const llmStatus = getLlmStatus(deps.env);
 
-  const userCoins = eventSummary.topAssets.slice(0, 5);
+  const userCoins = preferredAssets.slice(0, 5);
   const searchKeywords = userCoins.length > 0 ? userCoins : ['bitcoin', 'ethereum', 'crypto'];
 
   const [newsHeadlines, openNewsItems, twitterItems, marketAssets] = await Promise.all([
@@ -60,7 +65,7 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     fetchTopMarketAssets(deps.env, { name: 'topGainers', limit: 10, source: 'auto' }).catch(() => [] as MarketTopAsset[]),
   ]);
 
-  let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary, language.localeCode);
+  let markdown = buildFallbackDailyDigestMarkdown(dateKey, eventSummary, language.localeCode, watchlistSymbols);
   if (llmStatus.enabled && marketAssets.length > 0) {
     try {
       const llmResult = await generateWithLlm(deps.env, {
@@ -75,6 +80,7 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
               dateKey,
               ownerUserId,
               eventSummary,
+              watchlistSymbols,
               newsHeadlines,
               portfolioContext,
               language,
@@ -153,6 +159,7 @@ function buildDailyDigestUserPrompt(
   dateKey: string,
   ownerUserId: string,
   eventSummary: { counts: Record<string, number>; topAssets: string[] },
+  watchlistSymbols: string[],
   newsHeadlines: string[],
   portfolioContext: string,
   language: DailyLanguage,
@@ -213,6 +220,7 @@ function buildDailyDigestUserPrompt(
     `--- User Behavior (recent) ---`,
     eventLines || '  No recent activity recorded.',
     `Top interacted assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
+    `Watchlist assets: ${watchlistSymbols.join(', ') || 'N/A'}`,
   ];
 
   if (marketSection) {

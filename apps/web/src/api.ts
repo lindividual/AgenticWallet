@@ -250,6 +250,58 @@ export type KlineCandle = {
   turnover: number | null;
 };
 
+export type TradeBrowseMarketItem = {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  chain: string | null;
+  contract: string | null;
+  currentPrice: number | null;
+  change24h: number | null;
+  volume24h: number | null;
+  source: 'bitget' | 'coingecko' | 'hyperliquid';
+  metaLabel: string | null;
+  metaValue: number | null;
+  externalUrl: string | null;
+};
+
+export type TradeBrowsePredictionItem = {
+  id: string;
+  title: string;
+  image: string | null;
+  probability: number | null;
+  volume24h: number | null;
+  url: string | null;
+  source: 'polymarket';
+};
+
+export type TradeBrowseResponse = {
+  generatedAt: string;
+  topMovers: TradeBrowseMarketItem[];
+  trendings: TradeBrowseMarketItem[];
+  stocks: TradeBrowseMarketItem[];
+  perps: TradeBrowseMarketItem[];
+  predictions: TradeBrowsePredictionItem[];
+};
+
+export type WatchlistAsset = {
+  id: string;
+  user_id: string;
+  watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
+  item_id: string | null;
+  chain: string;
+  contract: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  source: string | null;
+  change_24h: number | null;
+  external_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AgentRecommendation = {
   id: string;
   kind: string;
@@ -478,6 +530,52 @@ export async function getTokenKline(
   query.set('size', String(size));
   const response = await getJson<{ candles: KlineCandle[] }>(`/v1/market/kline?${query.toString()}`, true);
   return response.candles;
+}
+
+export async function getTradeBrowse(): Promise<TradeBrowseResponse> {
+  return getJson<TradeBrowseResponse>('/v1/market/trade-browse', true);
+}
+
+export async function getMarketWatchlist(params?: {
+  limit?: number;
+}): Promise<{ assets: WatchlistAsset[] }> {
+  const query = new URLSearchParams();
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return getJson<{ assets: WatchlistAsset[] }>(`/v1/market/watchlist${suffix ? `?${suffix}` : ''}`, true);
+}
+
+export async function addMarketWatchlistAsset(input: {
+  watchType?: 'crypto' | 'perps' | 'stock' | 'prediction';
+  itemId?: string | null;
+  chain?: string | null;
+  contract?: string | null;
+  symbol?: string;
+  name?: string;
+  image?: string | null;
+  source?: string;
+  change24h?: number | null;
+  externalUrl?: string | null;
+}): Promise<WatchlistAsset> {
+  const response = await postJson<{ ok: true; asset: WatchlistAsset }>(
+    '/v1/market/watchlist',
+    input,
+    true,
+  );
+  return response.asset;
+}
+
+export async function removeMarketWatchlistAsset(input: {
+  id?: string | null;
+  chain?: string | null;
+  contract?: string | null;
+}): Promise<boolean> {
+  const response = await postJson<{ ok: true; removed: boolean }>(
+    '/v1/market/watchlist/remove',
+    input,
+    true,
+  );
+  return response.removed;
 }
 
 export async function getAgentRecommendations(): Promise<{ recommendations: AgentRecommendation[] }> {

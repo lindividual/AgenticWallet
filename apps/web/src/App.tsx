@@ -5,15 +5,21 @@ import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
 import { HomeScreen } from './components/screens/HomeScreen';
+import { MarketDetailScreen } from './components/screens/MarketDetailScreen';
 import { TokenDetailScreen } from './components/screens/TokenDetailScreen';
 import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
 import { setAgentPreferredLocale, type TopMarketAsset } from './api';
 import { useWalletApp } from './hooks/useWalletApp';
 import { decodeTokenContractParam, encodeTokenContractParam } from './utils/tokenRoute';
+import {
+  normalizeTradeMarketDetailType,
+  type TradeMarketDetailType,
+} from './utils/tradeMarketDetail';
 
 const ARTICLE_EXIT_MS = 220;
 const TOKEN_EXIT_MS = 220;
+const MARKET_EXIT_MS = 220;
 
 export function App() {
   const { i18n } = useTranslation();
@@ -22,6 +28,7 @@ export function App() {
   const location = useLocation();
   const articleMatch = useMatch({ from: '/article/$articleId', shouldThrow: false });
   const tokenMatch = useMatch({ from: '/token/$chain/$contract', shouldThrow: false });
+  const marketMatch = useMatch({ from: '/market/$marketType/$itemId', shouldThrow: false });
   const routeArticleId = articleMatch?.params.articleId ?? null;
   const isArticleRoute = Boolean(routeArticleId);
   const routeToken = tokenMatch?.params
@@ -31,6 +38,13 @@ export function App() {
       }
     : null;
   const isTokenRoute = Boolean(routeToken);
+  const routeMarket = marketMatch?.params
+    ? {
+        marketType: normalizeTradeMarketDetailType(marketMatch.params.marketType),
+        itemId: marketMatch.params.itemId.trim(),
+      }
+    : null;
+  const isMarketRoute = Boolean(routeMarket?.marketType && routeMarket.itemId);
 
   const [activeArticleId, setActiveArticleId] = useState<string | null>(routeArticleId);
   const [isArticleExiting, setIsArticleExiting] = useState(false);
@@ -38,6 +52,16 @@ export function App() {
   const [activeTokenRoute, setActiveTokenRoute] = useState(routeToken);
   const [isTokenExiting, setIsTokenExiting] = useState(false);
   const tokenExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [activeMarketRoute, setActiveMarketRoute] = useState<{
+    marketType: TradeMarketDetailType;
+    itemId: string;
+  } | null>(
+    routeMarket?.marketType && routeMarket.itemId
+      ? { marketType: routeMarket.marketType, itemId: routeMarket.itemId }
+      : null,
+  );
+  const [isMarketExiting, setIsMarketExiting] = useState(false);
+  const marketExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     auth,
     authMode,
@@ -55,6 +79,9 @@ export function App() {
       }
       if (tokenExitTimerRef.current) {
         clearTimeout(tokenExitTimerRef.current);
+      }
+      if (marketExitTimerRef.current) {
+        clearTimeout(marketExitTimerRef.current);
       }
     },
     [],
@@ -86,6 +113,19 @@ export function App() {
     setActiveTokenRoute(null);
     setIsTokenExiting(false);
   }, [routeToken?.chain, routeToken?.contract]);
+
+  useEffect(() => {
+    if (routeMarket?.marketType && routeMarket.itemId) {
+      setActiveMarketRoute({
+        marketType: routeMarket.marketType,
+        itemId: routeMarket.itemId,
+      });
+      setIsMarketExiting(false);
+      return;
+    }
+    setActiveMarketRoute(null);
+    setIsMarketExiting(false);
+  }, [routeMarket?.itemId, routeMarket?.marketType]);
 
   if (!auth) {
     return (
@@ -151,6 +191,24 @@ export function App() {
     });
   }
 
+  function handleOpenMarketDetail(marketType: TradeMarketDetailType, itemId: string) {
+    const normalizedItemId = itemId.trim();
+    if (!normalizedItemId) return;
+    if (marketExitTimerRef.current) {
+      clearTimeout(marketExitTimerRef.current);
+      marketExitTimerRef.current = null;
+    }
+    setIsMarketExiting(false);
+    setActiveMarketRoute({ marketType, itemId: normalizedItemId });
+    void navigate({
+      to: '/market/$marketType/$itemId',
+      params: {
+        marketType,
+        itemId: normalizedItemId,
+      },
+    });
+  }
+
   function handleCloseToken() {
     if (!activeTokenRoute || isTokenExiting) return;
     setIsTokenExiting(true);
@@ -165,6 +223,22 @@ export function App() {
       }
       tokenExitTimerRef.current = null;
     }, TOKEN_EXIT_MS);
+  }
+
+  function handleCloseMarket() {
+    if (!activeMarketRoute || isMarketExiting) return;
+    setIsMarketExiting(true);
+    if (marketExitTimerRef.current) {
+      clearTimeout(marketExitTimerRef.current);
+    }
+    marketExitTimerRef.current = setTimeout(() => {
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        void navigate({ to: '/trade' });
+      }
+      marketExitTimerRef.current = null;
+    }, MARKET_EXIT_MS);
   }
 
   function handleTabChange(tab: AppTab) {
@@ -190,7 +264,15 @@ export function App() {
         />
       );
     }
-    if (activeTab === 'trade') return <TradeScreen onOpenToken={handleOpenToken} onLogout={handleLogout} />;
+    if (activeTab === 'trade') {
+      return (
+        <TradeScreen
+          onOpenToken={handleOpenToken}
+          onOpenMarketDetail={handleOpenMarketDetail}
+          onLogout={handleLogout}
+        />
+      );
+    }
     return <WalletScreen auth={authenticatedState} onLogout={handleLogout} />;
   }
 
@@ -209,11 +291,21 @@ export function App() {
               onBack={handleCloseToken}
             />
           </div>
+        ) : isMarketRoute && activeMarketRoute ? (
+          <div className={isMarketExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
+            <MarketDetailScreen
+              marketType={activeMarketRoute.marketType}
+              itemId={activeMarketRoute.itemId}
+              onBack={handleCloseMarket}
+            />
+          </div>
         ) : (
           renderBaseScreen()
         )}
       </div>
-      {!activeArticleId && !isTokenRoute && <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />}
+      {!activeArticleId && !isTokenRoute && !isMarketRoute && (
+        <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />
+      )}
     </>
   );
 }

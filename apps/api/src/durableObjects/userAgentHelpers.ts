@@ -12,6 +12,23 @@ export type RecommendationDraft = {
   score: number;
 };
 
+export function mergePreferredAssets(
+  eventAssets: string[],
+  watchlistAssets: string[] = [],
+  limit = 10,
+): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const asset of [...watchlistAssets, ...eventAssets]) {
+    const normalized = asset.trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    output.push(normalized);
+    if (output.length >= limit) break;
+  }
+  return output;
+}
+
 export function normalizeSqlString(value: unknown): string | null {
   if (typeof value === 'string') return value;
   if (typeof value === 'number') return String(value);
@@ -102,14 +119,20 @@ export function summarizeEvents(events: Array<{ event_type: string; payload_json
   };
 }
 
-export function buildFallbackDailyDigestMarkdown(date: string, eventSummary: EventSummary, localeCode: 'zh' | 'en' | 'ar' = 'zh'): string {
+export function buildFallbackDailyDigestMarkdown(
+  date: string,
+  eventSummary: EventSummary,
+  localeCode: 'zh' | 'en' | 'ar' = 'zh',
+  watchlistAssets: string[] = [],
+): string {
   const items = Object.entries(eventSummary.counts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([key, count]) => `- ${key}: ${count}`)
     .join('\n');
 
-  const assets = eventSummary.topAssets.length ? eventSummary.topAssets.join(' / ') : '';
+  const mergedAssets = mergePreferredAssets(eventSummary.topAssets, watchlistAssets, 10);
+  const assets = mergedAssets.length ? mergedAssets.join(' / ') : '';
 
   if (localeCode === 'ar') {
     return [
@@ -161,8 +184,15 @@ export function buildFallbackDailyDigestMarkdown(date: string, eventSummary: Eve
   ].join('\n');
 }
 
-export function buildFallbackTopicMarkdown(date: string, topic: string, eventSummary: EventSummary, localeCode: 'zh' | 'en' | 'ar' = 'zh'): string {
-  const topAssets = eventSummary.topAssets.slice(0, 5).join(' / ') || '';
+export function buildFallbackTopicMarkdown(
+  date: string,
+  topic: string,
+  eventSummary: EventSummary,
+  localeCode: 'zh' | 'en' | 'ar' = 'zh',
+  watchlistAssets: string[] = [],
+): string {
+  const mergedAssets = mergePreferredAssets(eventSummary.topAssets, watchlistAssets, 10);
+  const topAssets = mergedAssets.slice(0, 5).join(' / ') || '';
   const majorEvents = Object.entries(eventSummary.counts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)

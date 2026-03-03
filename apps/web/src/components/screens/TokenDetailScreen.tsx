@@ -4,13 +4,17 @@ import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
+  addMarketWatchlistAsset,
   getCoinDetail,
   getMarketShelves,
+  getMarketWatchlist,
   getTokenKline,
   ingestAgentEvent,
+  removeMarketWatchlistAsset,
   type KlinePeriod,
   type TopMarketAsset,
 } from '../../api';
+import { useToast } from '../../contexts/ToastContext';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { CachedIconImage } from '../CachedIconImage';
 import { SkeletonBlock } from '../Skeleton';
@@ -90,13 +94,19 @@ function compute24hChangePctFromHourlyCandles(
   return ((latestClose - baseClose) / baseClose) * 100;
 }
 
+function toWatchlistKey(chain: string, contract: string): string {
+  return `${chain.trim().toLowerCase()}:${contract.trim().toLowerCase()}`;
+}
+
 export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
+  const { showError, showSuccess } = useToast();
   const queryClient = useQueryClient();
   const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>('1h');
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
+  const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
 
   const normalizedChain = chain.trim().toLowerCase();
   const normalizedContract = contract.trim().toLowerCase();
@@ -138,6 +148,24 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       );
     return token ?? null;
   }, [normalizedChain, normalizedContract, shelfData]);
+
+  const { data: watchlistData } = useQuery({
+    queryKey: ['market-watchlist', 200],
+    queryFn: () => getMarketWatchlist({ limit: 200 }),
+    staleTime: 15_000,
+  });
+
+  const watchlistKeySet = useMemo(
+    () =>
+      new Set(
+        (watchlistData?.assets ?? []).map((item) =>
+          toWatchlistKey(item.chain, item.contract),
+        ),
+      ),
+    [watchlistData?.assets],
+  );
+  const currentWatchKey = toWatchlistKey(normalizedChain, normalizedContract);
+  const isInWatchlist = watchlistKeySet.has(currentWatchKey);
 
   const rawPriceChangePct = detail?.priceChange24h ?? selected?.price_change_percentage_24h;
   const shouldUseKlineChangeFallback = !Number.isFinite(Number(rawPriceChangePct));
@@ -228,9 +256,47 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     }
   }
 
+  async function toggleWatchlist(): Promise<void> {
+    if (isWatchlistToggling) return;
+    setIsWatchlistToggling(true);
+    try {
+      if (isInWatchlist) {
+        await removeMarketWatchlistAsset({
+          chain: normalizedChain,
+          contract: normalizedContract,
+        });
+        showSuccess(t('trade.watchRemoved'));
+      } else {
+        await addMarketWatchlistAsset({
+          watchType: 'crypto',
+          itemId: `${normalizedChain}:${normalizedContract}`,
+          chain: normalizedChain,
+          contract: normalizedContract,
+          symbol: (detail?.symbol ?? selected?.symbol ?? '').trim() || undefined,
+          name: (detail?.name ?? selected?.name ?? '').trim() || undefined,
+          image: detail?.image ?? selected?.image ?? null,
+          source: 'token_detail',
+          change24h: priceChangePct ?? null,
+        });
+        ingestAgentEvent('asset_favorited', {
+          asset: (detail?.symbol ?? selected?.symbol)?.toUpperCase(),
+          chain: normalizedChain,
+          contract: normalizedContract,
+          source: 'trade_detail',
+        }).catch(() => undefined);
+        showSuccess(t('trade.watchAdded'));
+      }
+      await queryClient.invalidateQueries({ queryKey: ['market-watchlist'] });
+    } catch (error) {
+      showError(`${t('common.error')}: ${(error as Error).message}`);
+    } finally {
+      setIsWatchlistToggling(false);
+    }
+  }
+
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-44">
-      <header className="mt-4 flex items-center">
+      <header className="mt-4 flex items-center justify-between gap-3">
         <button
           type="button"
           className="btn btn-sm btn-ghost border-0 px-2"
@@ -240,6 +306,20 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M15 18l-6-6 6-6" />
           </svg>
+        </button>
+        <button
+          type="button"
+          className={`btn btn-sm border-0 px-3 ${isInWatchlist ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => void toggleWatchlist()}
+          disabled={isWatchlistToggling}
+        >
+          {isWatchlistToggling ? (
+            <span className="loading loading-spinner loading-xs" />
+          ) : isInWatchlist ? (
+            t('trade.watching')
+          ) : (
+            t('trade.watch')
+          )}
         </button>
       </header>
 

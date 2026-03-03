@@ -10,6 +10,8 @@ import {
   normalizeTopAssetSource,
 } from '../services/marketTopAssets';
 import { fetchMarketShelves } from '../services/marketShelves';
+import { fetchTradeBrowse } from '../services/tradeBrowse';
+import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/market/tokens/ingest/run', async (c) => {
@@ -88,6 +90,120 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,
+      );
+    }
+  });
+
+  app.get('/v1/market/trade-browse', async (c) => {
+    try {
+      const payload = await fetchTradeBrowse(c.env);
+      return c.json(payload);
+    } catch (error) {
+      return c.json(
+        {
+          error: 'trade_browse_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/market/watchlist', async (c) => {
+    const userId = c.get('userId');
+    const limitRaw = Number(c.req.query('limit'));
+    const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+    const assets = await listUserWatchlistAssets(c.env, userId, limit ?? 50);
+    return c.json({ assets });
+  });
+
+  app.post('/v1/market/watchlist', async (c) => {
+    const userId = c.get('userId');
+    const body = await c.req
+      .json<{
+        watchType?: string;
+        itemId?: string;
+        chain?: string;
+        contract?: string;
+        symbol?: string;
+        name?: string;
+        image?: string;
+        source?: string;
+        change24h?: number;
+        externalUrl?: string;
+      }>()
+      .catch(() => null);
+
+    if (!body) {
+      return c.json({ error: 'invalid_watchlist_payload' }, 400);
+    }
+
+    try {
+      const asset = await upsertUserWatchlistAsset(c.env, userId, {
+        watchType: body.watchType ?? null,
+        itemId: body.itemId ?? null,
+        chain: body.chain ?? null,
+        contract: body.contract ?? null,
+        symbol: body.symbol ?? null,
+        name: body.name ?? null,
+        image: body.image ?? null,
+        source: body.source ?? null,
+        change24h: body.change24h ?? null,
+        externalUrl: body.externalUrl ?? null,
+      });
+      return c.json({ ok: true, asset });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      if (
+        message === 'invalid_watchlist_type'
+        || message === 'invalid_watchlist_item'
+        || message === 'invalid_watchlist_chain'
+        || message === 'invalid_watchlist_contract'
+      ) {
+        return c.json({ error: message }, 400);
+      }
+      return c.json(
+        {
+          error: 'watchlist_upsert_failed',
+          message,
+        },
+        500,
+      );
+    }
+  });
+
+  app.post('/v1/market/watchlist/remove', async (c) => {
+    const userId = c.get('userId');
+    const body = await c.req
+      .json<{
+        id?: string;
+        chain?: string;
+        contract?: string;
+      }>()
+      .catch(() => null);
+
+    if (!body) {
+      return c.json({ error: 'invalid_watchlist_payload' }, 400);
+    }
+
+    try {
+      const removed = await removeUserWatchlistAsset(c.env, userId, {
+        id: body.id ?? null,
+        chain: body.chain ?? null,
+        contract: body.contract ?? null,
+      });
+      return c.json({ ok: true, removed });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      if (message === 'invalid_watchlist_remove_target') {
+        return c.json({ error: message }, 400);
+      }
+      return c.json(
+        {
+          error: 'watchlist_remove_failed',
+          message,
+        },
+        500,
       );
     }
   });
@@ -268,6 +384,13 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       strategy: {
         topAssets: 'coingecko_first_with_bitget_fallback',
         shelves: 'configured_multi_shelf_with_coingecko_priority',
+        tradeBrowse: {
+          topMovers: 'bitget_primary',
+          trendings: 'coingecko_top_volume_without_stablecoins',
+          stocks: 'coingecko_tokenized_stock_category',
+          perps: 'hyperliquid_info_api',
+          prediction: 'polymarket_gamma_api',
+        },
         tokenDetail: 'bitget_wallet_tob',
         klines: 'bitget_wallet_tob',
       },

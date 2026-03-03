@@ -197,4 +197,50 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   sql.exec(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_transfers_idempotency_key ON transfers(idempotency_key) WHERE idempotency_key IS NOT NULL',
   );
+
+  sql.exec(
+    `CREATE TABLE IF NOT EXISTS user_watchlist_assets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      watch_type TEXT NOT NULL DEFAULT 'crypto',
+      item_id TEXT,
+      chain TEXT NOT NULL,
+      contract TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      name TEXT NOT NULL,
+      image TEXT,
+      source TEXT,
+      change_24h REAL,
+      external_url TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(user_id, chain, contract)
+    )`,
+  );
+  try {
+    sql.exec('ALTER TABLE user_watchlist_assets ADD COLUMN watch_type TEXT NOT NULL DEFAULT \'crypto\'');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE user_watchlist_assets ADD COLUMN item_id TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE user_watchlist_assets ADD COLUMN change_24h REAL');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE user_watchlist_assets ADD COLUMN external_url TEXT');
+  } catch {
+    // Column already exists.
+  }
+  sql.exec(
+    'CREATE INDEX IF NOT EXISTS idx_user_watchlist_assets_updated_at ON user_watchlist_assets(updated_at DESC)',
+  );
+  sql.exec(
+    'CREATE INDEX IF NOT EXISTS idx_user_watchlist_assets_type_updated_at ON user_watchlist_assets(watch_type, updated_at DESC)',
+  );
 }
