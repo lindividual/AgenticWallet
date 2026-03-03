@@ -107,7 +107,13 @@
     "tradeFlipPair": "Flip Pair",
     "tradeApprovalRequired": "Approval is required and will be included before swap.",
     "tradeSubmitFailed": "Trade failed on chain.",
-    "tradeChainNotSupported": "Trade is not supported for this chain yet."
+    "tradeChainNotSupported": "Trade is not supported for this chain yet.",
+    "balanceChart": "Balance trend",
+    "balanceChartLoading": "Loading balance chart...",
+    "balanceChartEmpty": "No balance history yet.",
+    "balanceChartPeriod24h": "24h",
+    "balanceChartPeriod7d": "7d",
+    "balanceChartPeriod30d": "30d"
   },
   "settings": {
     "language": "Language",

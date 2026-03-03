@@ -99,6 +99,18 @@ export type WalletPortfolioResponse = {
   mergedHoldings?: WalletMergedHolding[];
 };
 
+export type PortfolioSnapshotPeriod = '24h' | '7d' | '30d';
+
+export type PortfolioSnapshotPoint = {
+  ts: string;
+  total_usd: number;
+};
+
+export type WalletPortfolioSnapshotsResponse = {
+  period: string;
+  points: PortfolioSnapshotPoint[];
+};
+
 export type WalletMergedHoldingVariant = SimEvmBalance & {
   market_chain: string;
   contract_key: string;
@@ -456,6 +468,17 @@ export async function getJson<T>(path: string, withAuth = false): Promise<T> {
 
 export async function getWalletPortfolio(): Promise<WalletPortfolioResponse> {
   return getJson<WalletPortfolioResponse>('/v1/wallet/portfolio', true);
+}
+
+export async function getWalletPortfolioSnapshots(
+  period: PortfolioSnapshotPeriod = '24h',
+): Promise<WalletPortfolioSnapshotsResponse> {
+  const query = new URLSearchParams();
+  query.set('period', period);
+  return getJson<WalletPortfolioSnapshotsResponse>(
+    `/v1/wallet/portfolio/snapshots?${query.toString()}`,
+    true,
+  );
 }
 
 export async function logout(): Promise<{ ok: true }> {

@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Liveline } from 'liveline';
+import type { LivelinePoint } from 'liveline';
 import {
   getAppConfig,
   getCoinDetailsBatch,
   getMarketShelves,
   getWalletPortfolio,
+  getWalletPortfolioSnapshots,
+  type PortfolioSnapshotPeriod,
   type SimEvmBalance,
   type TopMarketAsset,
   type TransferRecord,
@@ -18,6 +22,7 @@ import { TopUpContent } from '../modals/TopUpContent';
 import { TransferContent } from '../modals/TransferContent';
 import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { useToast } from '../../contexts/ToastContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { AssetListItem } from '../AssetListItem';
 import { BalanceHeader } from '../BalanceHeader';
@@ -160,6 +165,37 @@ function pickPreferredSymbolAsset(
   return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
 }
 
+const BALANCE_CHART_PERIOD_OPTIONS: Array<{
+  value: PortfolioSnapshotPeriod;
+  labelKey: string;
+}> = [
+  { value: '24h', labelKey: 'wallet.balanceChartPeriod24h' },
+  { value: '7d', labelKey: 'wallet.balanceChartPeriod7d' },
+  { value: '30d', labelKey: 'wallet.balanceChartPeriod30d' },
+];
+
+function snapshotsToLivelinePoints(
+  points: Array<{ ts: string; total_usd: number }> | undefined,
+): LivelinePoint[] {
+  if (!points || points.length === 0) return [];
+  return points.map((p) => {
+    let time = Date.parse(p.ts);
+    if (!Number.isFinite(time)) time = 0;
+    if (time >= 1e11) time = Math.round(time / 1000);
+    return { time, value: p.total_usd };
+  });
+}
+
+function resolveThemeColor(variable: string, fallback: string): string {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback;
+  const probe = document.createElement('span');
+  probe.style.color = `var(${variable})`;
+  document.body.appendChild(probe);
+  const resolved = getComputedStyle(probe).color.trim();
+  probe.remove();
+  return resolved || fallback;
+}
+
 const STABLE_ASSET_IDS = new Set(['coingecko:usd-coin', 'coingecko:tether']);
 const STABLE_SYMBOLS = new Set(['USDC', 'USDT']);
 const PRICE_CHANGE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -213,7 +249,9 @@ function TokenAvatar({
 
 export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
+  const { resolvedTheme } = useTheme();
   const { showError, showSuccess } = useToast();
+  const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeModalContent, setActiveModalContent] = useState<ActiveModalContent>('topUp');
   const [modalVisible, setModalVisible] = useState(false);
@@ -243,6 +281,17 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
+  const [balanceChartPeriod, setBalanceChartPeriod] = useState<PortfolioSnapshotPeriod>('24h');
+  const [pendingChartPeriod, setPendingChartPeriod] = useState<PortfolioSnapshotPeriod | null>(null);
+
+  const { data: snapshotData, isLoading: isSnapshotLoading } = useQuery({
+    queryKey: ['wallet-portfolio-snapshots', balanceChartPeriod],
+    queryFn: () => getWalletPortfolioSnapshots(balanceChartPeriod),
+    enabled: Boolean(walletAddress),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+
   const { data: shelfData } = useQuery({
     queryKey: ['wallet-market-shelves', 120],
     queryFn: () =>
@@ -459,6 +508,43 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     const cryptosUsd = cryptoHoldings.reduce((sum, item) => sum + Number(item.valueUsd ?? 0), 0);
     return { stableHoldings, cryptoHoldings, stablesUsd, cryptosUsd };
   }, [holdings]);
+
+  const chartLine = useMemo<LivelinePoint[]>(
+    () => snapshotsToLivelinePoints(snapshotData?.points),
+    [snapshotData?.points],
+  );
+
+  const latestChartValue = chartLine.length > 0
+    ? chartLine[chartLine.length - 1].value
+    : totalBalance;
+
+  const chartColor = useMemo(
+    () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
+    [resolvedTheme],
+  );
+
+  const chartWindow = useMemo(() => {
+    if (chartLine.length < 2) return 86_400;
+    const timeRange = chartLine[chartLine.length - 1].time - chartLine[0].time;
+    return Math.max(timeRange, 3600);
+  }, [chartLine]);
+
+  const isChartLoading = isSnapshotLoading && chartLine.length === 0;
+
+  async function switchBalanceChartPeriod(nextPeriod: PortfolioSnapshotPeriod): Promise<void> {
+    if (nextPeriod === balanceChartPeriod || pendingChartPeriod) return;
+    setPendingChartPeriod(nextPeriod);
+    try {
+      await queryClient.fetchQuery({
+        queryKey: ['wallet-portfolio-snapshots', nextPeriod],
+        queryFn: () => getWalletPortfolioSnapshots(nextPeriod),
+        staleTime: 60_000,
+      });
+      setBalanceChartPeriod(nextPeriod);
+    } finally {
+      setPendingChartPeriod(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -721,6 +807,70 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           </div>
         )}
       />
+
+      <section className="p-0">
+        <div className="flex flex-wrap gap-2">
+          {BALANCE_CHART_PERIOD_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`btn btn-xs border-0 px-3 ${balanceChartPeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => void switchBalanceChartPeriod(option.value)}
+              disabled={pendingChartPeriod != null}
+            >
+              {pendingChartPeriod === option.value ? (
+                <span className="loading loading-spinner loading-xs" />
+              ) : (
+                t(option.labelKey)
+              )}
+            </button>
+          ))}
+        </div>
+        {isChartLoading ? (
+          <div className="mt-3">
+            <div className="h-48 overflow-hidden rounded-lg bg-base-200/30 px-2 py-2">
+              <svg viewBox="0 0 640 150" className="h-full w-full" role="img" aria-label={t('wallet.balanceChartLoading')}>
+                <defs>
+                  <linearGradient id="loading-balance-line" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="currentColor" stopOpacity="0.3" />
+                    <stop offset="50%" stopColor="currentColor" stopOpacity="0.9" />
+                    <stop offset="100%" stopColor="currentColor" stopOpacity="0.3" />
+                  </linearGradient>
+                </defs>
+                <line
+                  x1="24"
+                  y1="75"
+                  x2="616"
+                  y2="75"
+                  stroke="url(#loading-balance-line)"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  className="text-base-content/70"
+                />
+              </svg>
+            </div>
+          </div>
+        ) : chartLine.length === 0 ? (
+          <p className="m-0 mt-3 text-sm text-base-content/60">{t('wallet.balanceChartEmpty')}</p>
+        ) : (
+          <div className="mt-2 h-48 overflow-hidden p-0">
+            <Liveline
+              data={chartLine}
+              value={latestChartValue}
+              theme={resolvedTheme}
+              color={chartColor}
+              badge={false}
+              window={chartWindow}
+              formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
+              formatTime={() => ''}
+              grid={false}
+              scrub
+              fill
+              padding={{ top: 6, right: 6, bottom: 6, left: 6 }}
+            />
+          </div>
+        )}
+      </section>
 
       <section className="grid grid-cols-3 gap-3 mt-6">
         <button
