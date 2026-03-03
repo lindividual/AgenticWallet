@@ -3,6 +3,7 @@ import {
   buildArticleR2Key,
   buildFallbackTopicMarkdown,
   isoDate,
+  mergePreferredAssets,
   summarizeEvents,
 } from './userAgentHelpers';
 import { buildPortfolioContext, resolveDailyLanguage } from './userAgentContentHelpers';
@@ -23,10 +24,14 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
   const dateKey = isoDate(now);
   const recentEvents = deps.getLatestEvents(100);
   const eventSummary = summarizeEvents(recentEvents);
+  const watchlistSymbols = (deps.getWatchlistAssets?.(30) ?? [])
+    .map((item) => item.symbol.trim().toUpperCase())
+    .filter(Boolean);
+  const preferredAssets = mergePreferredAssets(eventSummary.topAssets, watchlistSymbols, 10);
   const llmStatus = getLlmStatus(deps.env);
   const portfolioContext = buildPortfolioContext(deps.sql);
 
-  let markdown = buildFallbackTopicMarkdown(dateKey, topic, eventSummary, language.localeCode);
+  let markdown = buildFallbackTopicMarkdown(dateKey, topic, eventSummary, language.localeCode, watchlistSymbols);
   if (llmStatus.enabled) {
     try {
       const llmResult = await generateWithLlm(deps.env, {
@@ -49,7 +54,8 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
               `Portfolio context:`,
               portfolioContext,
               ``,
-              `Top assets: ${eventSummary.topAssets.join(', ') || 'N/A'}`,
+              `Top assets: ${preferredAssets.join(', ') || 'N/A'}`,
+              `Watchlist assets: ${watchlistSymbols.join(', ') || 'N/A'}`,
               `Event counts: ${JSON.stringify(eventSummary.counts)}`,
               ``,
               language.localeCode === 'zh'

@@ -1,5 +1,5 @@
 import type { Bindings } from '../types';
-import type { EventRow } from './userAgentTypes';
+import type { EventRow, WatchlistAssetRow } from './userAgentTypes';
 
 export type SqlStorage = {
   exec: (query: string, ...bindings: unknown[]) => { toArray(): unknown[] };
@@ -11,4 +11,5 @@ export type ContentDeps = {
   getOwnerUserId: () => string | null;
   getPreferredLocale?: () => string | null;
   getLatestEvents: (limit?: number) => EventRow[];
+  getWatchlistAssets?: (limit?: number) => WatchlistAssetRow[];
 };

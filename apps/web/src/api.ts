@@ -172,6 +172,51 @@ export type TransferRecord = {
   confirmedAt: string | null;
 };
 
+export type TradeQuoteRequest = {
+  chainId: number;
+  sellTokenAddress: string;
+  buyTokenAddress: string;
+  sellAmount: string;
+  sellTokenSymbol?: string;
+  buyTokenSymbol?: string;
+  sellTokenDecimals?: number;
+  buyTokenDecimals?: number;
+  slippageBps?: number;
+};
+
+export type TradeQuoteResponse = {
+  chainId: number;
+  fromAddress: string;
+  sellTokenAddress: string;
+  sellTokenSymbol: string | null;
+  sellTokenDecimals: number;
+  buyTokenAddress: string;
+  buyTokenSymbol: string | null;
+  buyTokenDecimals: number;
+  sellAmountInput: string;
+  sellAmountRaw: string;
+  expectedBuyAmountRaw: string;
+  price: number | null;
+  slippageBps: number;
+  allowanceTarget: string | null;
+  needsApproval: boolean;
+  estimatedFeeWei: string | null;
+  estimatedGas: {
+    preVerificationGas: string | null;
+    verificationGasLimit: string | null;
+    callGasLimit: string | null;
+    maxFeePerGas: string | null;
+    maxPriorityFeePerGas: string | null;
+  };
+  provider: '0x';
+};
+
+export type TradeSubmitResponse = {
+  txHash: string;
+  status: 'confirmed' | 'failed' | 'pending';
+  quote: TradeQuoteResponse;
+};
+
 export type MarketToken = {
   chain_id: number;
   address: string;
@@ -248,6 +293,68 @@ export type KlineCandle = {
   low: number;
   close: number;
   turnover: number | null;
+};
+
+export type TradeBrowseMarketItem = {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  chain: string | null;
+  contract: string | null;
+  currentPrice: number | null;
+  change24h: number | null;
+  volume24h: number | null;
+  source: 'bitget' | 'coingecko' | 'hyperliquid';
+  metaLabel: string | null;
+  metaValue: number | null;
+  externalUrl: string | null;
+};
+
+export type TradeBrowsePredictionItem = {
+  id: string;
+  title: string;
+  image: string | null;
+  probability: number | null;
+  volume24h: number | null;
+  url: string | null;
+  options: TradeBrowsePredictionOption[];
+  source: 'polymarket';
+};
+
+export type TradeBrowsePredictionOption = {
+  id: string;
+  label: string;
+  tokenId: string | null;
+  probability: number | null;
+};
+
+export type TradeBrowseResponse = {
+  generatedAt: string;
+  topMovers: TradeBrowseMarketItem[];
+  trendings: TradeBrowseMarketItem[];
+  stocks: TradeBrowseMarketItem[];
+  perps: TradeBrowseMarketItem[];
+  predictions: TradeBrowsePredictionItem[];
+};
+
+export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
+
+export type WatchlistAsset = {
+  id: string;
+  user_id: string;
+  watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
+  item_id: string | null;
+  chain: string;
+  contract: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  source: string | null;
+  change_24h: number | null;
+  external_url: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type AgentRecommendation = {
@@ -365,6 +472,16 @@ export async function submitTransfer(
   return postJson<{ transfer: TransferRecord; deduped: boolean }>('/v1/transfer/submit', request, true);
 }
 
+export async function quoteTrade(request: TradeQuoteRequest): Promise<TradeQuoteResponse> {
+  return postJson<TradeQuoteResponse>('/v1/trade/quote', request, true);
+}
+
+export async function submitTrade(
+  request: TradeQuoteRequest & { idempotencyKey?: string },
+): Promise<TradeSubmitResponse> {
+  return postJson<TradeSubmitResponse>('/v1/trade/submit', request, true);
+}
+
 export async function getTransferHistory(params?: {
   limit?: number;
   status?: TransferRecord['status'];
@@ -478,6 +595,85 @@ export async function getTokenKline(
   query.set('size', String(size));
   const response = await getJson<{ candles: KlineCandle[] }>(`/v1/market/kline?${query.toString()}`, true);
   return response.candles;
+}
+
+export async function getTradeMarketKline(
+  type: TradeMarketDetailType,
+  id: string,
+  period: KlinePeriod = '1h',
+  size = 60,
+  optionTokenId?: string | null,
+): Promise<KlineCandle[]> {
+  const query = new URLSearchParams();
+  query.set('type', type);
+  query.set('id', id.trim());
+  query.set('period', period);
+  query.set('size', String(size));
+  if (optionTokenId) {
+    query.set('optionTokenId', optionTokenId.trim());
+  }
+  const response = await getJson<{ candles: KlineCandle[] }>(`/v1/market/trade-kline?${query.toString()}`, true);
+  return response.candles;
+}
+
+export async function getTradeMarketDetail(
+  type: TradeMarketDetailType,
+  id: string,
+): Promise<TradeBrowseMarketItem | TradeBrowsePredictionItem> {
+  const query = new URLSearchParams();
+  query.set('type', type);
+  query.set('id', id.trim());
+  const response = await getJson<{ detail: TradeBrowseMarketItem | TradeBrowsePredictionItem }>(
+    `/v1/market/trade-detail?${query.toString()}`,
+    true,
+  );
+  return response.detail;
+}
+
+export async function getTradeBrowse(): Promise<TradeBrowseResponse> {
+  return getJson<TradeBrowseResponse>('/v1/market/trade-browse', true);
+}
+
+export async function getMarketWatchlist(params?: {
+  limit?: number;
+}): Promise<{ assets: WatchlistAsset[] }> {
+  const query = new URLSearchParams();
+  if (params?.limit) query.set('limit', String(params.limit));
+  const suffix = query.toString();
+  return getJson<{ assets: WatchlistAsset[] }>(`/v1/market/watchlist${suffix ? `?${suffix}` : ''}`, true);
+}
+
+export async function addMarketWatchlistAsset(input: {
+  watchType?: 'crypto' | 'perps' | 'stock' | 'prediction';
+  itemId?: string | null;
+  chain?: string | null;
+  contract?: string | null;
+  symbol?: string;
+  name?: string;
+  image?: string | null;
+  source?: string;
+  change24h?: number | null;
+  externalUrl?: string | null;
+}): Promise<WatchlistAsset> {
+  const response = await postJson<{ ok: true; asset: WatchlistAsset }>(
+    '/v1/market/watchlist',
+    input,
+    true,
+  );
+  return response.asset;
+}
+
+export async function removeMarketWatchlistAsset(input: {
+  id?: string | null;
+  chain?: string | null;
+  contract?: string | null;
+}): Promise<boolean> {
+  const response = await postJson<{ ok: true; removed: boolean }>(
+    '/v1/market/watchlist/remove',
+    input,
+    true,
+  );
+  return response.removed;
 }
 
 export async function getAgentRecommendations(): Promise<{ recommendations: AgentRecommendation[] }> {

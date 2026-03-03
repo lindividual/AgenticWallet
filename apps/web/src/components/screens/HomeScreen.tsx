@@ -2,7 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Newspaper } from 'lucide-react';
-import { getAgentArticles, getAgentRecommendations, getAgentTodayDaily, getMarketShelves, getWalletPortfolio, type TopMarketAsset, type WalletPortfolioResponse } from '../../api';
+import {
+  getAgentArticles,
+  getAgentRecommendations,
+  getAgentTodayDaily,
+  getMarketShelves,
+  getMarketWatchlist,
+  getWalletPortfolio,
+  type TopMarketAsset,
+  type WalletPortfolioResponse,
+  type WatchlistAsset,
+} from '../../api';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { BalanceHeader } from '../BalanceHeader';
 import { AssetListItem } from '../AssetListItem';
@@ -41,6 +51,16 @@ type RecommendationDisplayAsset = {
   contract: string | null;
 };
 
+type WatchlistCategory = 'crypto' | 'perps' | 'stock' | 'prediction';
+
+function isOpenableCryptoWatch(asset: WatchlistAsset): boolean {
+  if (asset.watch_type !== 'crypto') return false;
+  if (asset.chain.startsWith('watch:')) return false;
+  if (!asset.chain || !asset.contract) return false;
+  if (asset.contract.toLowerCase() === 'native') return false;
+  return /^0x[a-fA-F0-9]{40}$/.test(asset.contract);
+}
+
 function pickPreferredSymbolAsset(
   assets: TopMarketAsset[],
   preferredChain: string | null,
@@ -71,6 +91,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const { t, i18n } = useTranslation();
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
+  const [watchlistCategory, setWatchlistCategory] = useState<WatchlistCategory>('crypto');
 
   const { data: portfolio, isFetching: isPortfolioFetching, isPending: isPortfolioPending } = useQuery({
     queryKey: ['wallet-portfolio', walletAddress],
@@ -107,6 +128,13 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     queryKey: ['home-agent-recommendations'],
     queryFn: getAgentRecommendations,
     staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: watchlistData, isLoading: isWatchlistLoading } = useQuery({
+    queryKey: ['home-watchlist', 200],
+    queryFn: () => getMarketWatchlist({ limit: 200 }),
+    staleTime: 15_000,
     refetchOnWindowFocus: true,
   });
 
@@ -187,6 +215,9 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
       })
       .filter((item) => Boolean(item.symbol || item.name));
   }, [recommendationsData, shelfData]);
+  const filteredWatchlist = useMemo(() => {
+    return (watchlistData?.assets ?? []).filter((asset) => asset.watch_type === watchlistCategory);
+  }, [watchlistCategory, watchlistData?.assets]);
   const daily = dailyToday?.article ?? null;
   const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
   const topics = topicData?.articles ?? [];
@@ -195,6 +226,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
   const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
   const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isShelfLoading);
+  const shouldShowWatchlistSkeleton = filteredWatchlist.length === 0 && isWatchlistLoading;
   const dailyArticleToOpen = daily ?? lastReadyDaily;
 
   const dailySummary = daily
@@ -290,6 +322,87 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
             </div>
           </div>
         )}
+      </section>
+
+      <section className="bg-base-100 mt-2">
+        <h2 className="m-0 text-lg font-bold">{t('home.watchlistTitle')}</h2>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(['crypto', 'perps', 'stock', 'prediction'] as WatchlistCategory[]).map((category) => (
+            <button
+              key={category}
+              type="button"
+              className={`btn btn-xs border-0 px-3 ${watchlistCategory === category ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setWatchlistCategory(category)}
+            >
+              {t(`home.watchlistCategory.${category}`)}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-col gap-1">
+          {shouldShowWatchlistSkeleton && (
+            <>
+              {Array.from({ length: 3 }).map((_, index) => (
+                <SkeletonAssetListItem key={`home-watch-skeleton-${index}`} className="bg-base-100 py-3" />
+              ))}
+            </>
+          )}
+          {!shouldShowWatchlistSkeleton && filteredWatchlist.length === 0 && (
+            <p className="m-0 text-base text-base-content/70">{t('home.watchlistEmpty')}</p>
+          )}
+          {filteredWatchlist.map((asset) => {
+            const content = (
+              <AssetListItem
+                className="bg-base-100 py-3"
+                leftIcon={
+                  asset.image ? (
+                    <CachedIconImage
+                      src={asset.image}
+                      alt={asset.symbol}
+                      className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                      {getRecommendationInitial(asset.symbol || asset.name)}
+                    </div>
+                  )
+                }
+                leftPrimary={(asset.symbol ?? '').toUpperCase()}
+                leftSecondary={asset.name}
+                rightSecondary={formatPct(asset.change_24h)}
+              />
+            );
+
+            if (isOpenableCryptoWatch(asset)) {
+              return (
+                <button
+                  key={asset.id}
+                  type="button"
+                  className="w-full cursor-pointer text-start transition-colors hover:bg-base-200/60"
+                  onClick={() => onOpenToken(asset.chain, asset.contract)}
+                >
+                  {content}
+                </button>
+              );
+            }
+
+            if (asset.external_url) {
+              return (
+                <a
+                  key={asset.id}
+                  href={asset.external_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-inherit no-underline"
+                >
+                  {content}
+                </a>
+              );
+            }
+
+            return <div key={asset.id}>{content}</div>;
+          })}
+        </div>
       </section>
 
       <section className="bg-base-100 mt-2">

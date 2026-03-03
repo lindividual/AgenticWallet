@@ -31,6 +31,9 @@ export type Bindings = {
   OPENNEWS_TOKEN?: string;
   TWITTER_TOKEN?: string;
   TOPIC_SPECIAL_ADMIN_TOKEN?: string;
+  TRADE_AGGREGATOR_BASE_URL?: string;
+  TRADE_AGGREGATOR_API_KEY?: string;
+  TRADE_DEFAULT_SLIPPAGE_BPS?: string;
 };
 
 export type Variables = {
@@ -123,5 +126,48 @@ export type TransferQuoteResponse = {
 };
 
 export type TransferSubmitRequest = TransferQuoteRequest & {
+  idempotencyKey?: string;
+};
+
+export type TradeQuoteRequest = {
+  chainId: number;
+  sellTokenAddress: string;
+  buyTokenAddress: string;
+  sellAmount: string;
+  sellTokenSymbol?: string;
+  buyTokenSymbol?: string;
+  sellTokenDecimals?: number;
+  buyTokenDecimals?: number;
+  slippageBps?: number;
+};
+
+export type TradeQuoteResponse = {
+  chainId: number;
+  fromAddress: string;
+  sellTokenAddress: string;
+  sellTokenSymbol: string | null;
+  sellTokenDecimals: number;
+  buyTokenAddress: string;
+  buyTokenSymbol: string | null;
+  buyTokenDecimals: number;
+  sellAmountInput: string;
+  sellAmountRaw: string;
+  expectedBuyAmountRaw: string;
+  price: number | null;
+  slippageBps: number;
+  allowanceTarget: string | null;
+  needsApproval: boolean;
+  estimatedFeeWei: string | null;
+  estimatedGas: {
+    preVerificationGas: string | null;
+    verificationGasLimit: string | null;
+    callGasLimit: string | null;
+    maxFeePerGas: string | null;
+    maxPriorityFeePerGas: string | null;
+  };
+  provider: '0x';
+};
+
+export type TradeSubmitRequest = TradeQuoteRequest & {
   idempotencyKey?: string;
 };

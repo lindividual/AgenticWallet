@@ -34,6 +34,7 @@ import type {
   RecommendationRow,
   TransferRow,
   TodayDailyStatus,
+  WatchlistAssetRow,
 } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
 import { ensureTopicSpecialSchema } from '../services/topicSpecials';
@@ -45,6 +46,22 @@ const HOURLY_SNAPSHOT_RETENTION_HOURS = 72;
 const DAILY_SNAPSHOT_RETENTION_DAYS = 180;
 const TOPIC_SPECIAL_FETCH_MULTIPLIER = 3;
 const TOPIC_SPECIAL_MIN_FETCH = 24;
+const MAX_WATCHLIST_SIZE = 500;
+
+type WatchlistType = 'crypto' | 'perps' | 'stock' | 'prediction';
+
+type WatchlistAssetUpsertInput = {
+  watchType?: string | null;
+  itemId?: string | null;
+  chain?: string | null;
+  contract?: string | null;
+  symbol?: string | null;
+  name?: string | null;
+  image?: string | null;
+  source?: string | null;
+  change24h?: number | null;
+  externalUrl?: string | null;
+};
 
 type TopicSpecialArticleIndexRow = {
   id: string;
@@ -348,6 +365,32 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return { transfers: this.listTransfers(limit) };
   }
 
+  async listWatchlistAssetsRpc(
+    userId: string,
+    limit = 50,
+  ): Promise<{ assets: WatchlistAssetRow[] }> {
+    this.ensureOwner(userId);
+    return { assets: this.getWatchlistAssets(limit) };
+  }
+
+  async upsertWatchlistAssetRpc(
+    userId: string,
+    input: WatchlistAssetUpsertInput,
+  ): Promise<{ asset: WatchlistAssetRow }> {
+    this.ensureOwner(userId);
+    const asset = this.upsertWatchlistAsset(userId, input);
+    return { asset };
+  }
+
+  async removeWatchlistAssetRpc(
+    userId: string,
+    input: { id?: string | null; chain?: string | null; contract?: string | null },
+  ): Promise<{ removed: boolean }> {
+    this.ensureOwner(userId);
+    const removed = this.removeWatchlistAsset(userId, input.id ?? null, input.chain ?? null, input.contract ?? null);
+    return { removed };
+  }
+
   async alarm(): Promise<void> {
     await runDueJobs({
       sql: this.ctx.storage.sql,
@@ -401,6 +444,26 @@ export class UserAgentDO extends DurableObject<Bindings> {
       event.occurredAt,
       event.receivedAt,
     );
+
+    if (event.type === 'asset_favorited') {
+      const payload = event.payload ?? {};
+      const chain = typeof payload.chain === 'string' ? payload.chain : '';
+      const contract = typeof payload.contract === 'string' ? payload.contract : '';
+      try {
+        this.upsertWatchlistAsset(event.userId, {
+          watchType: 'crypto',
+          chain,
+          contract,
+          itemId: chain && contract ? `${chain.trim().toLowerCase()}:${contract.trim().toLowerCase()}` : null,
+          symbol: typeof payload.asset === 'string' ? payload.asset : typeof payload.symbol === 'string' ? payload.symbol : null,
+          name: typeof payload.name === 'string' ? payload.name : null,
+          image: typeof payload.image === 'string' ? payload.image : null,
+          source: typeof payload.source === 'string' ? payload.source : 'event_asset_favorited',
+        });
+      } catch {
+        // Ignore malformed payloads from event ingestion.
+      }
+    }
 
     if (isRecommendationTriggerEvent(event.type)) {
       const today = isoDate(new Date());
@@ -521,6 +584,231 @@ export class UserAgentDO extends DurableObject<Bindings> {
         sanitizeLimit(limit, 1, 100),
       )
       .toArray() as EventRow[];
+  }
+
+  private getWatchlistAssets(limit = 50): WatchlistAssetRow[] {
+    return this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          user_id,
+          watch_type,
+          item_id,
+          chain,
+          contract,
+          symbol,
+          name,
+          image,
+          source,
+          change_24h,
+          external_url,
+          created_at,
+          updated_at
+         FROM user_watchlist_assets
+         ORDER BY updated_at DESC
+         LIMIT ?`,
+        sanitizeLimit(limit, 1, MAX_WATCHLIST_SIZE),
+      )
+      .toArray() as WatchlistAssetRow[];
+  }
+
+  private getWatchlistSymbols(limit = 12): string[] {
+    const assets = this.getWatchlistAssets(limit);
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const asset of assets) {
+      const symbol = this.normalizeAssetSymbol(asset.symbol);
+      if (!symbol || seen.has(symbol)) continue;
+      seen.add(symbol);
+      deduped.push(symbol);
+    }
+    return deduped;
+  }
+
+  private upsertWatchlistAsset(userId: string, input: WatchlistAssetUpsertInput): WatchlistAssetRow {
+    const watchType = this.normalizeWatchType(input.watchType);
+    if (!watchType) {
+      throw new Error('invalid_watchlist_type');
+    }
+    const itemId = this.normalizeWatchlistItemId(input.itemId);
+    let chain: string;
+    let contract: string;
+
+    if (watchType === 'crypto') {
+      const normalizedChain = this.normalizeWatchlistChain(input.chain);
+      const normalizedContract = this.normalizeWatchlistContract(input.contract);
+      if (normalizedChain && normalizedContract) {
+        chain = normalizedChain;
+        contract = normalizedContract;
+      } else {
+        const syntheticKey = this.normalizeWatchlistItemId(input.itemId)
+          ?? this.normalizeWatchlistItemId(input.symbol)
+          ?? this.normalizeWatchlistItemId(input.name);
+        if (!syntheticKey) {
+          throw new Error('invalid_watchlist_item');
+        }
+        chain = 'watch:crypto';
+        contract = `item:${syntheticKey}`;
+      }
+    } else {
+      const syntheticKey = this.normalizeWatchlistItemId(input.itemId)
+        ?? this.normalizeWatchlistItemId(input.symbol)
+        ?? this.normalizeWatchlistItemId(input.name);
+      if (!syntheticKey) {
+        throw new Error('invalid_watchlist_item');
+      }
+      chain = `watch:${watchType}`;
+      contract = `item:${syntheticKey}`;
+    }
+
+    const symbolValue = this.normalizeWatchSymbol(input.symbol);
+    const nameValue = this.normalizeLabel(input.name, 80);
+    const symbol = symbolValue
+      ?? (nameValue ? nameValue.slice(0, 24).toUpperCase() : contract.slice(0, 24).toUpperCase());
+    const name = nameValue ?? symbol;
+    const image = this.normalizeOptional(input.image, 512);
+    const source = this.normalizeOptional(input.source, 64);
+    const externalUrl = this.normalizeOptional(input.externalUrl, 1024);
+    const change24h = this.normalizeWatchChange(input.change24h);
+    const now = new Date().toISOString();
+
+    this.ctx.storage.sql.exec(
+      `INSERT INTO user_watchlist_assets (
+         id,
+         user_id,
+         watch_type,
+         item_id,
+         chain,
+         contract,
+         symbol,
+         name,
+         image,
+         source,
+         change_24h,
+         external_url,
+         created_at,
+         updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, chain, contract) DO UPDATE SET
+         watch_type = excluded.watch_type,
+         item_id = COALESCE(excluded.item_id, user_watchlist_assets.item_id),
+         symbol = excluded.symbol,
+         name = excluded.name,
+         image = excluded.image,
+         source = excluded.source,
+         change_24h = COALESCE(excluded.change_24h, user_watchlist_assets.change_24h),
+         external_url = COALESCE(excluded.external_url, user_watchlist_assets.external_url),
+         updated_at = excluded.updated_at`,
+      crypto.randomUUID(),
+      userId,
+      watchType,
+      itemId,
+      chain,
+      contract,
+      symbol,
+      name,
+      image,
+      source,
+      change24h,
+      externalUrl,
+      now,
+      now,
+    );
+
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          user_id,
+          watch_type,
+          item_id,
+          chain,
+          contract,
+          symbol,
+          name,
+          image,
+          source,
+          change_24h,
+          external_url,
+          created_at,
+          updated_at
+         FROM user_watchlist_assets
+         WHERE user_id = ?
+           AND chain = ?
+           AND contract = ?
+         LIMIT 1`,
+        userId,
+        chain,
+        contract,
+      )
+      .toArray()[0] as WatchlistAssetRow | undefined;
+    if (!row) {
+      throw new Error('watchlist_upsert_failed');
+    }
+    return row;
+  }
+
+  private removeWatchlistAsset(
+    userId: string,
+    idRaw: string | null,
+    chainRaw: string | null,
+    contractRaw: string | null,
+  ): boolean {
+    const id = this.normalizeLabel(idRaw, 80);
+    if (id) {
+      const row = this.ctx.storage.sql
+        .exec(
+          `SELECT id
+           FROM user_watchlist_assets
+           WHERE user_id = ?
+             AND id = ?
+           LIMIT 1`,
+          userId,
+          id,
+        )
+        .toArray()[0] as { id?: string } | undefined;
+      if (!row?.id) return false;
+      this.ctx.storage.sql.exec(
+        `DELETE FROM user_watchlist_assets
+         WHERE user_id = ?
+           AND id = ?`,
+        userId,
+        id,
+      );
+      return true;
+    }
+
+    const chain = this.normalizeWatchlistChain(chainRaw);
+    const contract = this.normalizeWatchlistContract(contractRaw);
+    if (!chain || !contract) {
+      throw new Error('invalid_watchlist_remove_target');
+    }
+
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT id
+         FROM user_watchlist_assets
+         WHERE user_id = ?
+           AND chain = ?
+           AND contract = ?
+         LIMIT 1`,
+        userId,
+        chain,
+        contract,
+      )
+      .toArray()[0] as { id?: string } | undefined;
+    if (!row?.id) return false;
+
+    this.ctx.storage.sql.exec(
+      `DELETE FROM user_watchlist_assets
+       WHERE user_id = ?
+         AND chain = ?
+         AND contract = ?`,
+      userId,
+      chain,
+      contract,
+    );
+    return true;
   }
 
   private getRecommendations(limit = 10): RecommendationRow[] {
@@ -659,14 +947,20 @@ export class UserAgentDO extends DurableObject<Bindings> {
     for (let index = 0; index < eventAssets.length; index += 1) {
       eventWeight.set(eventAssets[index], Math.max(1, 12 - index));
     }
+    const watchlistAssets = this.getWatchlistSymbols(16);
+    const watchlistWeight = new Map<string, number>();
+    for (let index = 0; index < watchlistAssets.length; index += 1) {
+      watchlistWeight.set(watchlistAssets[index], Math.max(1, 16 - index));
+    }
     const holdingAssets = new Set(this.getUserTopHoldingAssets(12));
 
     const scored = topicRows.map((row, index) => {
       const relatedAssets = this.parseRelatedAssets(row.related_assets_json);
       const affinityScore = relatedAssets.reduce((score, asset) => {
         const eventScore = (eventWeight.get(asset) ?? 0) * 2;
+        const watchlistScore = (watchlistWeight.get(asset) ?? 0) * 3;
         const holdingScore = holdingAssets.has(asset) ? 3 : 0;
-        return score + eventScore + holdingScore;
+        return score + eventScore + watchlistScore + holdingScore;
       }, 0);
       const ageMs = Date.now() - Date.parse(row.generated_at);
       const ageHours = Number.isFinite(ageMs) ? ageMs / (60 * 60 * 1000) : 999;
@@ -745,6 +1039,65 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (!normalized) return null;
     if (normalized.length < 2 || normalized.length > 16) return null;
     return normalized;
+  }
+
+  private normalizeWatchType(value: unknown): WatchlistType | null {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : 'crypto';
+    if (normalized === 'crypto' || normalized === 'perps' || normalized === 'stock' || normalized === 'prediction') {
+      return normalized;
+    }
+    return null;
+  }
+
+  private normalizeWatchlistChain(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase().slice(0, 32);
+    return normalized || null;
+  }
+
+  private normalizeWatchlistContract(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase().slice(0, 96);
+    if (normalized === 'native') return normalized;
+    if (/^0x[a-f0-9]{40}$/.test(normalized)) return normalized;
+    return null;
+  }
+
+  private normalizeWatchlistItemId(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9:_-]/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 80);
+    return normalized || null;
+  }
+
+  private normalizeWatchSymbol(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const compact = value.trim().slice(0, 24);
+    if (!compact) return null;
+    return compact.toUpperCase();
+  }
+
+  private normalizeLabel(value: unknown, max: number): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().slice(0, max);
+    return normalized || null;
+  }
+
+  private normalizeOptional(value: unknown, max: number): string | null {
+    return this.normalizeLabel(value, max);
+  }
+
+  private normalizeWatchChange(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
   }
 
   private parseRelatedAssets(raw: string): string[] {
@@ -1020,6 +1373,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       getOwnerUserId: () => this.getOwnerUserId(),
       getPreferredLocale: () => this.getEffectiveLocale(),
       getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
+      getWatchlistAssets: (limit = 20) => this.getWatchlistAssets(limit),
     });
   }
 
@@ -1030,6 +1384,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       getOwnerUserId: () => this.getOwnerUserId(),
       getPreferredLocale: () => this.getEffectiveLocale(),
       getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
+      getWatchlistAssets: (limit = 20) => this.getWatchlistAssets(limit),
     });
   }
 
@@ -1040,6 +1395,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       getOwnerUserId: () => this.getOwnerUserId(),
       getPreferredLocale: () => this.getEffectiveLocale(),
       getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
+      getWatchlistAssets: (limit = 20) => this.getWatchlistAssets(limit),
     });
   }
 

@@ -85,6 +85,23 @@ export type AgentTransfer = {
   confirmed_at: string | null;
 };
 
+export type AgentWatchlistAsset = {
+  id: string;
+  user_id: string;
+  watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
+  item_id: string | null;
+  chain: string;
+  contract: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  source: string | null;
+  change_24h: number | null;
+  external_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type UserAgentRpcStub = DurableObjectStub & {
   ingestEventRpc(event: AgentEventRecord): Promise<AgentEventIngestResult>;
   setUserLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
@@ -159,6 +176,30 @@ type UserAgentRpcStub = DurableObjectStub & {
       status?: AgentTransfer['status'];
     },
   ): Promise<{ transfers: AgentTransfer[] }>;
+  listWatchlistAssetsRpc(userId: string, limit?: number): Promise<{ assets: AgentWatchlistAsset[] }>;
+  upsertWatchlistAssetRpc(
+    userId: string,
+    input: {
+      watchType?: string | null;
+      itemId?: string | null;
+      chain?: string | null;
+      contract?: string | null;
+      symbol?: string | null;
+      name?: string | null;
+      image?: string | null;
+      source?: string | null;
+      change24h?: number | null;
+      externalUrl?: string | null;
+    },
+  ): Promise<{ asset: AgentWatchlistAsset }>;
+  removeWatchlistAssetRpc(
+    userId: string,
+    input: {
+      id?: string | null;
+      chain?: string | null;
+      contract?: string | null;
+    },
+  ): Promise<{ removed: boolean }>;
 };
 
 function getUserAgentStub(env: Bindings, userId: string): UserAgentRpcStub {
@@ -340,4 +381,53 @@ export async function listUserTransfers(
   } catch {
     return [];
   }
+}
+
+export async function listUserWatchlistAssets(
+  env: Bindings,
+  userId: string,
+  limit = 50,
+): Promise<AgentWatchlistAsset[]> {
+  const stub = getUserAgentStub(env, userId);
+  try {
+    const data = await stub.listWatchlistAssetsRpc(userId, limit);
+    return data.assets ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function upsertUserWatchlistAsset(
+  env: Bindings,
+  userId: string,
+  input: {
+    watchType?: string | null;
+    itemId?: string | null;
+    chain?: string | null;
+    contract?: string | null;
+    symbol?: string | null;
+    name?: string | null;
+    image?: string | null;
+    source?: string | null;
+    change24h?: number | null;
+    externalUrl?: string | null;
+  },
+): Promise<AgentWatchlistAsset> {
+  const stub = getUserAgentStub(env, userId);
+  const data = await stub.upsertWatchlistAssetRpc(userId, input);
+  return data.asset;
+}
+
+export async function removeUserWatchlistAsset(
+  env: Bindings,
+  userId: string,
+  input: {
+    id?: string | null;
+    chain?: string | null;
+    contract?: string | null;
+  },
+): Promise<boolean> {
+  const stub = getUserAgentStub(env, userId);
+  const data = await stub.removeWatchlistAssetRpc(userId, input);
+  return data.removed === true;
 }

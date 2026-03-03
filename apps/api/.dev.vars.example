@@ -14,6 +14,12 @@ BICONOMY_BUNDLER_URL=
 MEE_ENABLE_SIMULATION=true
 # Optional, manual call gas limit for MEE ERC20 transfer instruction when simulation is disabled (defaults to 35000)
 MEE_TRANSFER_CALL_GAS_LIMIT=35000
+# Optional trade swap quote provider (0x). Defaults to https://api.0x.org
+TRADE_AGGREGATOR_BASE_URL=
+# Optional 0x API key (recommended for higher limits)
+TRADE_AGGREGATOR_API_KEY=
+# Optional default slippage in bps (1% = 100, defaults to 100)
+TRADE_DEFAULT_SLIPPAGE_BPS=100
 
 # Optional LLM integration (Phase 1 content/recommendation generation)
 LLM_PROVIDER=openai
