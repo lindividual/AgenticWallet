@@ -709,6 +709,25 @@ export async function setAgentPreferredLocale(locale: string): Promise<{ ok: tru
   );
 }
 
+export type AgentChatMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export type AgentChatResponse = {
+  reply: string;
+  sessionId: string;
+};
+
+export async function agentChat(request: {
+  sessionId: string;
+  page: string;
+  pageContext?: Record<string, string>;
+  messages: AgentChatMessage[];
+}): Promise<AgentChatResponse> {
+  return postJson<AgentChatResponse>('/v1/agent/chat', request, true);
+}
+
 export async function ingestAgentEvent(
   type: AgentEventType,
   payload?: Record<string, unknown>,

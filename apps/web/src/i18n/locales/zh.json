@@ -172,6 +172,22 @@
     "zeroBalanceTitle": "开始你的链上金融之旅",
     "zeroBalanceSubtitle": "投资加密货币、股票，用稳定币支付或理财"
   },
+  "agent": {
+    "helpPromptHome": "需要帮你发现投资机会或查看投资组合吗？",
+    "helpPromptTrade": "想找交易机会？我可以帮你分析市场。",
+    "helpPromptWallet": "需要帮你管理资产或发起转账吗？",
+    "helpPromptToken": "要我帮你分析这个代币吗？",
+    "helpPromptArticle": "对这篇文章有疑问吗？",
+    "helpPromptMarket": "要我帮你解读这个市场数据吗？",
+    "dismiss": "不需要",
+    "chatAction": "和 Agent 聊聊",
+    "chatTitle": "Agent",
+    "chatPlaceholder": "输入消息...",
+    "chatSend": "发送",
+    "chatThinking": "思考中...",
+    "chatClose": "关闭对话",
+    "chatError": "获取回复失败，请重试。"
+  },
   "trade": {
     "title": "交易",
     "browse": "市场浏览",

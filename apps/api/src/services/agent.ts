@@ -102,6 +102,18 @@ export type AgentWatchlistAsset = {
   updated_at: string;
 };
 
+export type AgentChatRequest = {
+  sessionId: string;
+  page: string;
+  pageContext?: Record<string, string>;
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+};
+
+export type AgentChatResponse = {
+  reply: string;
+  sessionId: string;
+};
+
 type UserAgentRpcStub = DurableObjectStub & {
   ingestEventRpc(event: AgentEventRecord): Promise<AgentEventIngestResult>;
   setUserLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
@@ -200,6 +212,10 @@ type UserAgentRpcStub = DurableObjectStub & {
       contract?: string | null;
     },
   ): Promise<{ removed: boolean }>;
+  chatRpc(
+    userId: string,
+    request: AgentChatRequest,
+  ): Promise<AgentChatResponse>;
 };
 
 function getUserAgentStub(env: Bindings, userId: string): UserAgentRpcStub {
@@ -430,4 +446,13 @@ export async function removeUserWatchlistAsset(
   const stub = getUserAgentStub(env, userId);
   const data = await stub.removeWatchlistAssetRpc(userId, input);
   return data.removed === true;
+}
+
+export async function chatWithUserAgent(
+  env: Bindings,
+  userId: string,
+  request: AgentChatRequest,
+): Promise<AgentChatResponse> {
+  const stub = getUserAgentStub(env, userId);
+  return stub.chatRpc(userId, request);
 }

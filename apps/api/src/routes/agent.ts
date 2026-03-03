@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import { buildAgentEventRecord, isAgentEventType, type AgentEventIngestRequest } from '../agent/events';
 import {
+  chatWithUserAgent,
   enqueueUserAgentJob,
   getUserAgentArticleDetail,
   getUserTodayDaily,
@@ -179,6 +180,44 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     const locale = typeof body.locale === 'string' ? body.locale.trim().toLowerCase().slice(0, 32) : '';
     await syncUserAgentPreferredLocale(c.env, userId, locale || null);
     return c.json({ ok: true });
+  });
+
+  app.post('/v1/agent/chat', async (c) => {
+    const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
+    let body: {
+      sessionId?: string;
+      page?: string;
+      pageContext?: Record<string, string>;
+      messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    } | null = null;
+    try {
+      body = await c.req.json();
+    } catch {
+      body = null;
+    }
+
+    if (!body || !body.sessionId || !body.page || !Array.isArray(body.messages) || body.messages.length === 0) {
+      return c.json({ error: 'invalid_chat_request' }, 400);
+    }
+
+    try {
+      const result = await chatWithUserAgent(c.env, userId, {
+        sessionId: body.sessionId,
+        page: body.page,
+        pageContext: isRecord(body.pageContext) ? (body.pageContext as Record<string, string>) : {},
+        messages: body.messages,
+      });
+      return c.json(result);
+    } catch (error) {
+      return c.json(
+        {
+          error: 'agent_chat_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
   });
 
   app.get('/v1/agent/llm/status', async (c) => {
