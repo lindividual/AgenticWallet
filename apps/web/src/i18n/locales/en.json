@@ -145,7 +145,7 @@
     "watchlistCategory": {
       "crypto": "Crypto",
       "perps": "Perps",
-      "stock": "Stock",
+      "stock": "Spot",
       "prediction": "Prediction"
     },
     "topicRecommendationsTitle": "Topic Recommendations",
@@ -184,7 +184,12 @@
     "remove": "Remove",
     "topMovers": "Top movers",
     "trending": "Trending",
-    "stocks": "Stocks",
+    "stocks": "Spot",
+    "spot": "Spot",
+    "search": "Search",
+    "searchPlaceholder": "Search tokens (e.g. BTC, ETH)",
+    "searchNoResults": "No matching tokens found.",
+    "searchHint": "Enter a token symbol to search Binance market.",
     "perps": "Perps",
     "prediction": "Prediction",
     "noSectionData": "No market data available right now. Pull to refresh and try again.",

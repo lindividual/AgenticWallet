@@ -145,7 +145,7 @@
     "watchlistCategory": {
       "crypto": "Crypto",
       "perps": "合约",
-      "stock": "股票",
+      "stock": "现货",
       "prediction": "预测"
     },
     "topicRecommendationsTitle": "专题推荐",
@@ -184,7 +184,12 @@
     "remove": "移除",
     "topMovers": "涨幅榜",
     "trending": "热门趋势",
-    "stocks": "股票",
+    "stocks": "现货",
+    "spot": "现货",
+    "search": "搜索",
+    "searchPlaceholder": "搜索币种（如 BTC、ETH）",
+    "searchNoResults": "未找到匹配的币种。",
+    "searchHint": "输入币种符号搜索 Binance 市场。",
     "perps": "合约",
     "prediction": "预测市场",
     "noSectionData": "当前暂无可用市场数据，请下拉刷新重试。",

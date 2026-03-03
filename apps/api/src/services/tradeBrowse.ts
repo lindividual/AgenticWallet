@@ -1,6 +1,7 @@
 import type { Bindings } from '../types';
 import { fetchBitgetTopMarketAssets, type MarketTopAsset } from './bitgetWallet';
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
+import { fetchBinanceTopSpotTokens, fetchBinanceSpotDetail, fetchBinanceKlines } from './binance';
 import { getSupportedMarketChains } from '../config/appConfig';
 
 export type TradeBrowseMarketItem = {
@@ -13,7 +14,7 @@ export type TradeBrowseMarketItem = {
   currentPrice: number | null;
   change24h: number | null;
   volume24h: number | null;
-  source: 'bitget' | 'coingecko' | 'hyperliquid';
+  source: 'bitget' | 'coingecko' | 'hyperliquid' | 'binance';
   metaLabel: string | null;
   metaValue: number | null;
   externalUrl: string | null;
@@ -301,34 +302,30 @@ async function fetchTrendings(env: Bindings): Promise<TradeBrowseMarketItem[]> {
     .map((asset) => mapTopAssetToBrowseItem(asset, 'coingecko'));
 }
 
-async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
-  const chains = getSupportedMarketChains();
-  for (const category of STOCK_CATEGORY_CANDIDATES) {
-    try {
-      const assets = await fetchCoinGeckoTopMarketAssets(env, {
-        name: 'marketCap',
-        limit: 20,
-        chains,
-        category,
-      });
-      const mapped = assets
-        .filter((asset) => !isStableLikeAsset(asset) && isOndoStockAsset(asset))
-        .slice(0, 10)
-        .map((asset) => {
-          const item = mapTopAssetToBrowseItem(asset, 'coingecko');
-          return {
-            ...item,
-            name: sanitizeCompanyName(item.name),
-          };
-        });
-      if (mapped.length > 0) {
-        return mapped;
-      }
-    } catch {
-      // Continue trying other category aliases.
-    }
+async function fetchStocks(_env: Bindings): Promise<TradeBrowseMarketItem[]> {
+  try {
+    const items = await fetchBinanceTopSpotTokens(15);
+    return items
+      .filter((item) => !STABLECOIN_SYMBOLS.has(item.baseAsset.toUpperCase()))
+      .slice(0, 10)
+      .map((item) => ({
+        id: item.id,
+        symbol: item.baseAsset,
+        name: `${item.baseAsset}/${item.quoteAsset}`,
+        image: null,
+        chain: null,
+        contract: null,
+        currentPrice: item.currentPrice,
+        change24h: item.change24h,
+        volume24h: item.volume24h,
+        source: 'binance' as const,
+        metaLabel: null,
+        metaValue: null,
+        externalUrl: `https://www.binance.com/trade/${item.baseAsset}_${item.quoteAsset}`,
+      }));
+  } catch {
+    return [];
   }
-  return [];
 }
 
 async function fetchPerps(): Promise<TradeBrowseMarketItem[]> {
@@ -522,6 +519,29 @@ export async function fetchTradeMarketDetail(
   if (!id) return null;
 
   if (options.type === 'stock') {
+    const rawId = id.startsWith('binance:') ? id.slice('binance:'.length) : id;
+    if (rawId) {
+      try {
+        const detail = await fetchBinanceSpotDetail(rawId);
+        if (detail) {
+          return {
+            id: detail.id,
+            symbol: detail.baseAsset,
+            name: `${detail.baseAsset}/${detail.quoteAsset}`,
+            image: null,
+            chain: null,
+            contract: null,
+            currentPrice: detail.currentPrice,
+            change24h: detail.change24h,
+            volume24h: detail.volume24h,
+            source: 'binance' as const,
+            metaLabel: null,
+            metaValue: null,
+            externalUrl: `https://www.binance.com/trade/${detail.baseAsset}_${detail.quoteAsset}`,
+          };
+        }
+      } catch { /* fall through to browse list */ }
+    }
     const stocks = await fetchStocks(env);
     return stocks.find((item) => item.id === id) ?? null;
   }
@@ -739,6 +759,18 @@ export async function fetchTradeMarketKline(
 ): Promise<TradeMarketKlineCandle[]> {
   const period = normalizeTradeKlinePeriod(options.period);
   const size = sanitizeKlineSize(options.size);
+
+  if (options.type === 'stock') {
+    const rawId = options.id.startsWith('binance:') ? options.id.slice('binance:'.length) : options.id;
+    if (rawId) {
+      try {
+        return await fetchBinanceKlines(rawId, period, size);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
 
   if (options.type === 'perp') {
     const symbol = parsePerpSymbolFromId(options.id);

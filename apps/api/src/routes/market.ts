@@ -16,6 +16,7 @@ import {
   fetchTradeMarketKline,
   normalizeTradeMarketDetailType,
 } from '../services/tradeBrowse';
+import { searchBinanceSpotTokens } from '../services/binance';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
@@ -463,6 +464,39 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     }
   });
 
+  app.get('/v1/market/search', async (c) => {
+    const q = (c.req.query('q') ?? '').trim();
+    const limitRaw = Number(c.req.query('limit'));
+    const limit = Number.isFinite(limitRaw) ? Math.min(limitRaw, 50) : 20;
+    if (!q) {
+      return c.json({ results: [] });
+    }
+
+    try {
+      const items = await searchBinanceSpotTokens(q, limit);
+      const results = items.map((item) => ({
+        id: item.id,
+        symbol: item.baseAsset,
+        name: `${item.baseAsset}/${item.quoteAsset}`,
+        image: null,
+        currentPrice: item.currentPrice,
+        change24h: item.change24h,
+        volume24h: item.volume24h,
+        source: 'binance',
+        externalUrl: `https://www.binance.com/trade/${item.baseAsset}_${item.quoteAsset}`,
+      }));
+      return c.json({ results });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'binance_search_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
   app.get('/v1/market/sources', (c) => {
     return c.json({
       realtime: {
@@ -504,14 +538,14 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         tradeBrowse: {
           topMovers: 'bitget_primary',
           trendings: 'coingecko_top_volume_without_stablecoins',
-          stocks: 'coingecko_tokenized_stock_category',
+          stocks: 'binance_spot_top_volume',
           perps: 'hyperliquid_info_api',
           prediction: 'polymarket_gamma_api',
         },
         tokenDetail: 'bitget_wallet_tob',
         klines: 'bitget_wallet_tob',
       },
-      note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Kline and token detail remain from Bitget.',
+      note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Stocks use Binance spot data. Kline and token detail remain from Bitget with Binance fallback.',
     });
   });
 }
