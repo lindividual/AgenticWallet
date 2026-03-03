@@ -123,8 +123,23 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     const size = Number.isFinite(sizeRaw) ? sizeRaw : 60;
 
     if (!type || !id) {
+      console.warn('[trade-kline-debug][invalid_query]', {
+        type,
+        id,
+        period,
+        size,
+        optionTokenId,
+      });
       return c.json({ error: 'invalid_trade_kline_query' }, 400);
     }
+
+    console.info('[trade-kline-debug][request]', {
+      type,
+      id,
+      period,
+      size,
+      optionTokenId,
+    });
 
     try {
       const candles = await fetchTradeMarketKline(c.env, {
@@ -134,8 +149,26 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         size,
         optionTokenId,
       });
+      console.info('[trade-kline-debug][response]', {
+        type,
+        id,
+        period,
+        size,
+        optionTokenId,
+        candles: candles.length,
+        firstTs: candles[0]?.time ?? null,
+        lastTs: candles[candles.length - 1]?.time ?? null,
+      });
       return c.json({ type, id, period, candles });
     } catch (error) {
+      console.error('[trade-kline-debug][error]', {
+        type,
+        id,
+        period,
+        size,
+        optionTokenId,
+        message: error instanceof Error ? error.message : String(error),
+      });
       return c.json(
         {
           error: 'trade_market_kline_failed',
@@ -150,16 +183,39 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     const type = normalizeTradeMarketDetailType(c.req.query('type'));
     const id = (c.req.query('id') ?? '').trim();
     if (!type || !id) {
+      console.warn('[trade-detail-debug][invalid_query]', {
+        type,
+        id,
+      });
       return c.json({ error: 'invalid_trade_detail_query' }, 400);
     }
+
+    console.info('[trade-detail-debug][request]', {
+      type,
+      id,
+    });
 
     try {
       const detail = await fetchTradeMarketDetail(c.env, { type, id });
       if (!detail) {
+        console.warn('[trade-detail-debug][not_found]', {
+          type,
+          id,
+        });
         return c.json({ error: 'trade_detail_not_found' }, 404);
       }
+      console.info('[trade-detail-debug][response]', {
+        type,
+        id,
+        source: 'source' in detail ? detail.source : null,
+      });
       return c.json({ type, id, detail });
     } catch (error) {
+      console.error('[trade-detail-debug][error]', {
+        type,
+        id,
+        message: error instanceof Error ? error.message : String(error),
+      });
       return c.json(
         {
           error: 'trade_market_detail_failed',

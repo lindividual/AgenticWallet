@@ -200,10 +200,10 @@ function normalizeProbabilityPercent(raw: unknown): number | null {
   return clampProbabilityPercent(value / 100);
 }
 
-function normalizeTimestampMs(raw: unknown): number | null {
+function normalizeTimestampSeconds(raw: unknown): number | null {
   const value = toFiniteNumber(raw);
   if (value == null) return null;
-  if (value < 1e12) return Math.round(value * 1000);
+  if (value >= 1e11) return Math.round(value / 1000);
   return Math.round(value);
 }
 
@@ -608,13 +608,21 @@ async function fetchHyperliquidPerpKlines(
   }
 
   const payload = (await response.json()) as unknown;
-  if (!Array.isArray(payload)) return [];
+  if (!Array.isArray(payload)) {
+    console.warn('[trade-kline-debug][hyperliquid][unexpected_payload]', {
+      symbol,
+      period,
+      size,
+      payloadType: typeof payload,
+    });
+    return [];
+  }
 
-  return payload
+  const candles = payload
     .map((entry) => {
       const row = asRecord(entry);
       if (!row) return null;
-      const time = normalizeTimestampMs(row.t ?? row.T);
+      const time = normalizeTimestampSeconds(row.t ?? row.T);
       const open = toFiniteNumber(row.o);
       const high = toFiniteNumber(row.h);
       const low = toFiniteNumber(row.l);
@@ -632,6 +640,15 @@ async function fetchHyperliquidPerpKlines(
     .filter((item): item is TradeMarketKlineCandle => item != null)
     .sort((a, b) => a.time - b.time)
     .slice(-size);
+  if (candles.length === 0) {
+    console.warn('[trade-kline-debug][hyperliquid][empty]', {
+      symbol,
+      period,
+      size,
+      payloadCount: payload.length,
+    });
+  }
+  return candles;
 }
 
 async function fetchPolymarketPredictionKlines(
@@ -660,13 +677,23 @@ async function fetchPolymarketPredictionKlines(
   const payload = (await response.json()) as unknown;
   const root = asRecord(payload);
   const history = Array.isArray(root?.history) ? root.history : [];
-  if (!history.length) return [];
+  if (!history.length) {
+    console.warn('[trade-kline-debug][polymarket][empty_history]', {
+      tokenId,
+      period,
+      size,
+      interval,
+      fidelity,
+      rootKeys: root ? Object.keys(root).slice(0, 12) : [],
+    });
+    return [];
+  }
 
   const points = history
     .map((entry) => {
       const row = asRecord(entry);
       if (!row) return null;
-      const time = normalizeTimestampMs(row.t);
+      const time = normalizeTimestampSeconds(row.t);
       const value = normalizeProbabilityPercent(row.p);
       if (time == null || value == null) return null;
       return { time, value };
@@ -688,7 +715,16 @@ async function fetchPolymarketPredictionKlines(
     } satisfies TradeMarketKlineCandle;
   });
 
-  return candles.slice(-size);
+  const output = candles.slice(-size);
+  if (!output.length) {
+    console.warn('[trade-kline-debug][polymarket][empty_output]', {
+      tokenId,
+      period,
+      size,
+      points: points.length,
+    });
+  }
+  return output;
 }
 
 export async function fetchTradeMarketKline(
@@ -723,6 +759,13 @@ export async function fetchTradeMarketKline(
       const candles = await fetchPolymarketPredictionKlines(tokenId, period, size);
       if (candles.length > 0) return candles;
     }
+    console.warn('[trade-kline-debug][prediction][all_candidates_empty]', {
+      id: options.id,
+      period,
+      size,
+      preferred,
+      candidateCount: candidates.length,
+    });
     return [];
   }
 

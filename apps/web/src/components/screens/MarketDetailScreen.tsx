@@ -19,6 +19,7 @@ import {
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
 import {
   normalizeTradeMarketDetailType,
   normalizeWatchlistItemId,
@@ -188,7 +189,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       ? normalizedItemId.startsWith('hyperliquid:')
       : Boolean(activePredictionItem) && Boolean(selectedPredictionTokenId);
 
-  const { data: klineData, isLoading: isKlineLoading } = useQuery({
+  const {
+    data: klineData,
+    isLoading: isKlineLoading,
+    isError: isKlineError,
+    error: klineError,
+  } = useQuery({
     queryKey: [
       'trade-market-kline',
       normalizedType,
@@ -228,22 +234,11 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
   const isInWatchlist = Boolean(activeWatchAsset);
   const chartCandles = useMemo<CandlePoint[]>(
-    () =>
-      (klineData ?? []).map((item) => ({
-        time: item.time,
-        open: item.open,
-        high: item.high,
-        low: item.low,
-        close: item.close,
-      })),
+    () => normalizeCandlesForLiveline(klineData),
     [klineData],
   );
   const chartLine = useMemo<LivelinePoint[]>(
-    () =>
-      chartCandles.map((item) => ({
-        time: item.time,
-        value: item.close,
-      })),
+    () => toLivelinePoints(chartCandles),
     [chartCandles],
   );
   const latestChartValue = chartLine.length > 0
@@ -267,6 +262,40 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       source: 'trade_market_detail',
     }).catch(() => undefined);
   }, [displayName, displaySymbol, normalizedItemId, normalizedType]);
+
+  useEffect(() => {
+    console.log('[trade-kline-debug][web][state]', {
+      type: normalizedType,
+      id: normalizedItemId,
+      hasKlineSupport,
+      selectedPredictionTokenId,
+      klinePeriod,
+    });
+  }, [hasKlineSupport, klinePeriod, normalizedItemId, normalizedType, selectedPredictionTokenId]);
+
+  useEffect(() => {
+    if (!klineData) return;
+    console.log('[trade-kline-debug][web][kline_data]', {
+      type: normalizedType,
+      id: normalizedItemId,
+      period: klinePeriod,
+      candles: klineData.length,
+      firstTs: klineData[0]?.time ?? null,
+      lastTs: klineData[klineData.length - 1]?.time ?? null,
+      firstRenderTs: chartCandles[0]?.time ?? null,
+      lastRenderTs: chartCandles[chartCandles.length - 1]?.time ?? null,
+    });
+  }, [chartCandles, klineData, klinePeriod, normalizedItemId, normalizedType]);
+
+  useEffect(() => {
+    if (!isKlineError) return;
+    console.error('[trade-kline-debug][web][kline_error]', {
+      type: normalizedType,
+      id: normalizedItemId,
+      period: klinePeriod,
+      message: klineError instanceof Error ? klineError.message : String(klineError),
+    });
+  }, [isKlineError, klineError, klinePeriod, normalizedItemId, normalizedType]);
 
   useEffect(() => {
     if (normalizedType !== 'prediction') {

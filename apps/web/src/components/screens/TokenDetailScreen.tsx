@@ -17,6 +17,7 @@ import {
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
 import { cloneTradeToken, getChainIdByMarketChain, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { CachedIconImage } from '../CachedIconImage';
 import { Modal } from '../modals/Modal';
@@ -210,23 +211,12 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   }, [detail?.symbol, normalizedChain, normalizedContract, routePreview?.symbol, selected?.symbol]);
 
   const chartCandles = useMemo<CandlePoint[]>(
-    () =>
-      (klineData ?? []).map((item) => ({
-        time: item.time,
-        open: item.open,
-        high: item.high,
-        low: item.low,
-        close: item.close,
-      })),
+    () => normalizeCandlesForLiveline(klineData),
     [klineData],
   );
 
   const chartLine = useMemo<LivelinePoint[]>(
-    () =>
-      chartCandles.map((item) => ({
-        time: item.time,
-        value: item.close,
-      })),
+    () => toLivelinePoints(chartCandles),
     [chartCandles],
   );
 
@@ -242,9 +232,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const displayName = detail?.name ?? routePreview?.name ?? selected?.name ?? displayContract;
   const displaySymbol = (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol ?? '').trim();
   const displayImage = detail?.image ?? routePreview?.image ?? selected?.image ?? null;
-  const tradeChainId = getChainIdByMarketChain(normalizedChain);
+  const tradeMarketChain = (detail?.chain ?? selected?.chain ?? normalizedChain).trim().toLowerCase();
+  const tradeContract = (detail?.contract ?? normalizedContract).trim();
+  const tradeChainId = getChainIdByMarketChain(tradeMarketChain);
   const tradeTokenConfig = tradeChainId ? getTradeTokenConfig(tradeChainId) : null;
-  const canTradeToken = Boolean(tradeChainId && tradeTokenConfig && /^0x[a-fA-F0-9]{40}$/.test(normalizedContract));
+  const canTradeToken = Boolean(tradeChainId && tradeTokenConfig && /^0x[a-fA-F0-9]{40}$/.test(tradeContract));
 
   const fallbackPriceChangePct = useMemo(
     () => compute24hChangePctFromHourlyCandles(fallbackChangeKlineData),
@@ -327,7 +319,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     }
 
     const tokenPreset = {
-      address: normalizedContract,
+      address: tradeContract,
       symbol: displaySymbol || t('wallet.token'),
     };
     const preset: TradePreset =
@@ -594,7 +586,6 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             type="button"
             className="btn btn-success border-0"
             onClick={() => openTrade('buy')}
-            disabled={!canTradeToken}
           >
             {t('trade.buy')}
           </button>
@@ -602,7 +593,6 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             type="button"
             className="btn btn-error border-0"
             onClick={() => openTrade('sell')}
-            disabled={!canTradeToken}
           >
             {t('trade.sell')}
           </button>

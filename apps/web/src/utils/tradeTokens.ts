@@ -66,8 +66,14 @@ const TRADE_TOKENS_BY_CHAIN: Record<number, TradeTokenConfig> = {
 
 const MARKET_CHAIN_TO_CHAIN_ID: Record<string, number> = {
   eth: 1,
+  ethereum: 1,
+  mainnet: 1,
   base: 8453,
   bnb: 56,
+  bsc: 56,
+  'bnb chain': 56,
+  bnbchain: 56,
+  'binance smart chain': 56,
 };
 
 export function getTradeTokenConfig(chainId: number): TradeTokenConfig | null {
