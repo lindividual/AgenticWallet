@@ -12,6 +12,7 @@ import {
 import { fetchMarketShelves } from '../services/marketShelves';
 import {
   fetchTradeBrowse,
+  fetchTradeMarketDetail,
   fetchTradeMarketKline,
   normalizeTradeMarketDetailType,
 } from '../services/tradeBrowse';
@@ -138,6 +139,30 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json(
         {
           error: 'trade_market_kline_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/market/trade-detail', async (c) => {
+    const type = normalizeTradeMarketDetailType(c.req.query('type'));
+    const id = (c.req.query('id') ?? '').trim();
+    if (!type || !id) {
+      return c.json({ error: 'invalid_trade_detail_query' }, 400);
+    }
+
+    try {
+      const detail = await fetchTradeMarketDetail(c.env, { type, id });
+      if (!detail) {
+        return c.json({ error: 'trade_detail_not_found' }, 404);
+      }
+      return c.json({ type, id, detail });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'trade_market_detail_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,

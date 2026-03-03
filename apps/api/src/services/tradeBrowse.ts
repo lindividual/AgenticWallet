@@ -59,7 +59,7 @@ export type TradeBrowseResponse = {
 
 const TRADE_BROWSE_CACHE_TTL_MS = 20_000;
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
-const POLYMARKET_MARKETS_URL = 'https://gamma-api.polymarket.com/markets?active=true&closed=false&order=volume&ascending=false&limit=18';
+const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
 const POLYMARKET_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
 const STOCK_CATEGORY_CANDIDATES = ['tokenized-stock', 'tokenized-stocks'];
 const ONDO_STOCK_NAME_HINTS = ['ondo', 'global markets', 'omf'];
@@ -388,12 +388,73 @@ async function fetchPerps(): Promise<TradeBrowseMarketItem[]> {
   }
 
   return output
-    .sort((a, b) => (b.volume24h ?? Number.NEGATIVE_INFINITY) - (a.volume24h ?? Number.NEGATIVE_INFINITY))
-    .slice(0, 10);
+    .sort((a, b) => (b.volume24h ?? Number.NEGATIVE_INFINITY) - (a.volume24h ?? Number.NEGATIVE_INFINITY));
 }
 
-async function fetchPredictions(): Promise<TradeBrowsePredictionItem[]> {
-  const response = await fetch(POLYMARKET_MARKETS_URL, {
+function parsePredictionItemFromRow(row: Record<string, unknown>): TradeBrowsePredictionItem | null {
+  const rawId = normalizeText(row.id) ?? normalizeText(row.slug) ?? normalizeText(row.conditionId);
+  const title = normalizeText(row.question) ?? normalizeText(row.title);
+  if (!rawId || !title) return null;
+
+  const image = normalizeText(row.icon) ?? normalizeText(row.image);
+  const volume24h =
+    toFiniteNumber(row.volume24hr)
+    ?? toFiniteNumber(row.volume24h)
+    ?? toFiniteNumber(row.oneDayVolume)
+    ?? toFiniteNumber(row.volume);
+
+  const outcomes = parseStringArray(row.outcomes);
+  const outcomePrices = parseNumberArray(row.outcomePrices).map((item) => normalizeProbabilityPercent(item)).filter((item): item is number => item != null);
+  const clobTokenIds = parseStringArray(row.clobTokenIds);
+  const options: TradeBrowsePredictionOption[] = [];
+  const optionCount = Math.max(outcomes.length, outcomePrices.length, clobTokenIds.length);
+  for (let index = 0; index < optionCount; index += 1) {
+    const label = outcomes[index] ?? `Option ${index + 1}`;
+    const tokenId = clobTokenIds[index] ?? null;
+    const probability = outcomePrices[index] ?? null;
+    options.push({
+      id: `${rawId}:${index}`,
+      label,
+      tokenId,
+      probability,
+    });
+  }
+
+  const probability = options
+    .map((option) => option.probability)
+    .filter((item): item is number => item != null)
+    .sort((a, b) => b - a)[0]
+    ?? normalizeProbabilityPercent(row.probability)
+    ?? normalizeProbabilityPercent(row.lastTradePrice);
+
+  const directUrl = normalizeText(row.url);
+  const slug = normalizeText(row.slug);
+
+  return {
+    id: `polymarket:${rawId}`,
+    title,
+    image,
+    probability,
+    volume24h,
+    url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : null),
+    options,
+    source: 'polymarket',
+  };
+}
+
+function buildPolymarketMarketsUrl(limit: number): string {
+  const query = new URLSearchParams({
+    active: 'true',
+    closed: 'false',
+    order: 'volume',
+    ascending: 'false',
+    limit: String(Math.max(10, Math.min(limit, 500))),
+  });
+  return `${POLYMARKET_MARKETS_BASE_URL}?${query.toString()}`;
+}
+
+async function fetchPredictions(limit = 10): Promise<TradeBrowsePredictionItem[]> {
+  const response = await fetch(buildPolymarketMarketsUrl(Math.max(limit * 2, 40)), {
     method: 'GET',
     headers: {
       Accept: 'application/json',
@@ -411,60 +472,66 @@ async function fetchPredictions(): Promise<TradeBrowsePredictionItem[]> {
   for (const entry of payload) {
     const row = asRecord(entry);
     if (!row) continue;
-
-    const rawId = normalizeText(row.id) ?? normalizeText(row.slug) ?? normalizeText(row.conditionId);
-    const title = normalizeText(row.question) ?? normalizeText(row.title);
-    if (!rawId || !title) continue;
-
-    const image = normalizeText(row.icon) ?? normalizeText(row.image);
-    const volume24h =
-      toFiniteNumber(row.volume24hr)
-      ?? toFiniteNumber(row.volume24h)
-      ?? toFiniteNumber(row.oneDayVolume)
-      ?? toFiniteNumber(row.volume);
-
-    const outcomes = parseStringArray(row.outcomes);
-    const outcomePrices = parseNumberArray(row.outcomePrices).map((item) => normalizeProbabilityPercent(item)).filter((item): item is number => item != null);
-    const clobTokenIds = parseStringArray(row.clobTokenIds);
-    const options: TradeBrowsePredictionOption[] = [];
-    const optionCount = Math.max(outcomes.length, outcomePrices.length, clobTokenIds.length);
-    for (let index = 0; index < optionCount; index += 1) {
-      const label = outcomes[index] ?? `Option ${index + 1}`;
-      const tokenId = clobTokenIds[index] ?? null;
-      const probability = outcomePrices[index] ?? null;
-      options.push({
-        id: `${rawId}:${index}`,
-        label,
-        tokenId,
-        probability,
-      });
-    }
-
-    const probability = options
-      .map((option) => option.probability)
-      .filter((item): item is number => item != null)
-      .sort((a, b) => b - a)[0]
-      ?? normalizeProbabilityPercent(row.probability)
-      ?? normalizeProbabilityPercent(row.lastTradePrice);
-
-    const directUrl = normalizeText(row.url);
-    const slug = normalizeText(row.slug);
-
-    output.push({
-      id: `polymarket:${rawId}`,
-      title,
-      image,
-      probability,
-      volume24h,
-      url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : null),
-      options,
-      source: 'polymarket',
-    });
+    const parsed = parsePredictionItemFromRow(row);
+    if (!parsed) continue;
+    output.push(parsed);
   }
 
   return output
     .sort((a, b) => (b.volume24h ?? Number.NEGATIVE_INFINITY) - (a.volume24h ?? Number.NEGATIVE_INFINITY))
-    .slice(0, 10);
+    .slice(0, limit);
+}
+
+async function fetchPredictionById(id: string): Promise<TradeBrowsePredictionItem | null> {
+  const normalized = normalizeText(id);
+  if (!normalized) return null;
+  const rawId = normalized.startsWith('polymarket:') ? normalized.slice('polymarket:'.length) : normalized;
+  if (!rawId) return null;
+
+  try {
+    const response = await fetch(`${POLYMARKET_MARKETS_BASE_URL}/${encodeURIComponent(rawId)}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+    if (response.ok) {
+      const payload = (await response.json()) as unknown;
+      const row = asRecord(payload);
+      if (row) {
+        const parsed = parsePredictionItemFromRow(row);
+        if (parsed) return parsed;
+      }
+    }
+  } catch {
+    // Fallback to list lookup.
+  }
+
+  const list = await fetchPredictions(240);
+  return list.find((item) => item.id === (normalized.startsWith('polymarket:') ? normalized : `polymarket:${rawId}`)) ?? null;
+}
+
+export async function fetchTradeMarketDetail(
+  env: Bindings,
+  options: {
+    type: TradeMarketDetailType;
+    id: string;
+  },
+): Promise<TradeBrowseMarketItem | TradeBrowsePredictionItem | null> {
+  const id = normalizeText(options.id);
+  if (!id) return null;
+
+  if (options.type === 'stock') {
+    const stocks = await fetchStocks(env);
+    return stocks.find((item) => item.id === id) ?? null;
+  }
+
+  if (options.type === 'perp') {
+    const perps = await fetchPerps();
+    return perps.find((item) => item.id === id) ?? null;
+  }
+
+  return fetchPredictionById(id);
 }
 
 function normalizeTradeKlinePeriod(value: unknown): string {
@@ -644,11 +711,19 @@ export async function fetchTradeMarketKline(
   }
 
   if (options.type === 'prediction') {
-    const browse = await fetchTradeBrowse(env);
-    const item = browse.predictions.find((prediction) => prediction.id === options.id) ?? null;
-    const tokenId = selectPredictionTokenId(item, options.optionTokenId);
-    if (!tokenId) return [];
-    return fetchPolymarketPredictionKlines(tokenId, period, size);
+    const item = await fetchPredictionById(options.id);
+    const preferred = selectPredictionTokenId(item, options.optionTokenId);
+    const candidates = [
+      preferred,
+      ...(item?.options ?? [])
+        .map((option) => option.tokenId)
+        .filter((tokenId): tokenId is string => Boolean(tokenId)),
+    ].filter((tokenId, index, array): tokenId is string => Boolean(tokenId) && array.indexOf(tokenId) === index);
+    for (const tokenId of candidates) {
+      const candles = await fetchPolymarketPredictionKlines(tokenId, period, size);
+      if (candles.length > 0) return candles;
+    }
+    return [];
   }
 
   return [];
@@ -677,8 +752,8 @@ export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseRespon
       safeFetch(() => fetchTopMovers(env), []),
       safeFetch(() => fetchTrendings(env), []),
       safeFetch(() => fetchStocks(env), []),
-      safeFetch(() => fetchPerps(), []),
-      safeFetch(() => fetchPredictions(), []),
+      safeFetch(() => fetchPerps().then((items) => items.slice(0, 10)), []),
+      safeFetch(() => fetchPredictions(10), []),
     ]);
 
     const value: TradeBrowseResponse = {

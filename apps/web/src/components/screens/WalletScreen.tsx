@@ -13,6 +13,7 @@ import {
 } from '../../api';
 import { Modal } from '../modals/Modal';
 import { ReceiveCryptoContent } from '../modals/ReceiveCryptoContent';
+import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { TopUpContent } from '../modals/TopUpContent';
 import { TransferContent } from '../modals/TransferContent';
 import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
@@ -26,13 +27,14 @@ import { formatUsdAdaptive } from '../../utils/currency';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 import { buildChainAssetId } from '../../utils/assetIdentity';
+import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 
 type WalletScreenProps = {
   auth: AuthState;
   onLogout: () => void;
 };
 
-type ActiveModalContent = 'topUp' | 'receive' | 'transfer';
+type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
 type TransferPresetAsset = {
   chainId: number;
   tokenAddress: string;
@@ -217,6 +219,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   const [modalVisible, setModalVisible] = useState(false);
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
+  const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
   const [detailPriceChangeByHoldingKey, setDetailPriceChangeByHoldingKey] = useState<Record<string, number | null>>({});
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -586,11 +589,54 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   }
 
   function openTopUpModal() {
+    setTradePreset(null);
     setActiveModalContent('topUp');
     showModal(snapshotRect(topUpButtonRef.current));
   }
 
+  function buildTradePreset(mode: 'buy' | 'stableSwap'): TradePreset | null {
+    const chainId = supportedChains[0]?.chainId ?? 1;
+    const tokenConfig = getTradeTokenConfig(chainId);
+    if (!tokenConfig) {
+      showError(t('wallet.tradeChainNotSupported'));
+      return null;
+    }
+
+    if (mode === 'stableSwap') {
+      return {
+        mode: 'stableSwap',
+        chainId,
+        sellToken: cloneTradeToken(tokenConfig.usdc),
+        buyToken: cloneTradeToken(tokenConfig.usdt),
+      };
+    }
+
+    return {
+      mode: 'buy',
+      chainId,
+      sellToken: cloneTradeToken(tokenConfig.usdc),
+      buyToken: cloneTradeToken(tokenConfig.defaultBuy),
+      assetSymbolForEvent: tokenConfig.defaultBuy.symbol,
+    };
+  }
+
+  function openTradeModal(mode: 'buy' | 'stableSwap') {
+    const preset = buildTradePreset(mode);
+    if (!preset) return;
+    setTradePreset(preset);
+    setActiveModalContent('trade');
+    showModal(snapshotRect(topUpButtonRef.current));
+  }
+
+  function openTradeFromTopUp(mode: 'buy' | 'stableSwap') {
+    const preset = buildTradePreset(mode);
+    if (!preset) return;
+    setTradePreset(preset);
+    setActiveModalContent('trade');
+  }
+
   function openTransferModal() {
+    setTradePreset(null);
     setPresetTransferAsset(null);
     setActiveModalContent('transfer');
     showModal(snapshotRect(transferButtonRef.current));
@@ -612,6 +658,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           }
         : null,
     );
+    setTradePreset(null);
     setActiveModalContent('transfer');
     showModal(null);
   }
@@ -643,6 +690,14 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
       status: transfer.status,
       txHash: transfer.txHash,
       chainId: transfer.chainId,
+    });
+    void refetch();
+  }
+
+  function handleTradeSubmitted(result: { txHash: string; status: 'confirmed' | 'failed' | 'pending' }) {
+    console.log('[wallet-ui] trade_submitted', {
+      txHash: result.txHash,
+      status: result.status,
     });
     void refetch();
   }
@@ -684,7 +739,11 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         >
           {t('wallet.transfer')}
         </button>
-        <button type="button" className="btn btn-primary text-base font-semibold">
+        <button
+          type="button"
+          className="btn btn-primary text-base font-semibold"
+          onClick={() => openTradeModal('buy')}
+        >
           {t('wallet.trade')}
         </button>
       </section>
@@ -786,6 +845,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
               <TopUpContent
                 active={activeModalContent === 'topUp'}
                 onOpenReceive={openReceiveModal}
+                onOpenTrade={openTradeFromTopUp}
                 onClose={closeActiveModal}
               />
             </div>
@@ -820,6 +880,22 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
                 onBack={closeActiveModal}
                 onClose={closeActiveModal}
                 onSubmitted={handleTransferSubmitted}
+              />
+            </div>
+            <div
+              className={`absolute inset-0 transition-all duration-300 ${
+                activeModalContent === 'trade'
+                  ? 'translate-x-0 opacity-100'
+                  : 'pointer-events-none translate-x-4 opacity-0'
+              }`}
+            >
+              <TradeContent
+                active={activeModalContent === 'trade'}
+                preset={tradePreset}
+                supportedChains={supportedChains}
+                onBack={backToTopUp}
+                onClose={closeActiveModal}
+                onSubmitted={handleTradeSubmitted}
               />
             </div>
           </div>

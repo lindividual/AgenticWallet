@@ -5,6 +5,7 @@ import { Liveline } from 'liveline';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   addMarketWatchlistAsset,
+  getAppConfig,
   getCoinDetail,
   getMarketShelves,
   getMarketWatchlist,
@@ -16,7 +17,10 @@ import {
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
 import { formatUsdAdaptive } from '../../utils/currency';
+import { cloneTradeToken, getChainIdByMarketChain, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { CachedIconImage } from '../CachedIconImage';
+import { Modal } from '../modals/Modal';
+import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { SkeletonBlock } from '../Skeleton';
 import { useTheme } from '../../contexts/ThemeContext';
 
@@ -108,6 +112,8 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
   const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
+  const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
+  const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
 
   const normalizedChain = chain.trim().toLowerCase();
   const normalizedContract = contract.trim().toLowerCase();
@@ -163,6 +169,12 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     queryKey: ['market-watchlist', 200],
     queryFn: () => getMarketWatchlist({ limit: 200 }),
     staleTime: 15_000,
+  });
+  const { data: appConfig } = useQuery({
+    queryKey: ['app-config'],
+    queryFn: getAppConfig,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const watchlistKeySet = useMemo(
@@ -230,6 +242,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const displayName = detail?.name ?? routePreview?.name ?? selected?.name ?? displayContract;
   const displaySymbol = (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol ?? '').trim();
   const displayImage = detail?.image ?? routePreview?.image ?? selected?.image ?? null;
+  const tradeChainId = getChainIdByMarketChain(normalizedChain);
+  const tradeTokenConfig = tradeChainId ? getTradeTokenConfig(tradeChainId) : null;
+  const canTradeToken = Boolean(tradeChainId && tradeTokenConfig && /^0x[a-fA-F0-9]{40}$/.test(normalizedContract));
 
   const fallbackPriceChangePct = useMemo(
     () => compute24hChangePctFromHourlyCandles(fallbackChangeKlineData),
@@ -303,6 +318,37 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     } finally {
       setIsWatchlistToggling(false);
     }
+  }
+
+  function openTrade(mode: 'buy' | 'sell'): void {
+    if (!tradeChainId || !tradeTokenConfig || !canTradeToken) {
+      showError(t('wallet.tradeChainNotSupported'));
+      return;
+    }
+
+    const tokenPreset = {
+      address: normalizedContract,
+      symbol: displaySymbol || t('wallet.token'),
+    };
+    const preset: TradePreset =
+      mode === 'buy'
+        ? {
+            mode: 'buy',
+            chainId: tradeChainId,
+            sellToken: cloneTradeToken(tradeTokenConfig.usdc),
+            buyToken: tokenPreset,
+            assetSymbolForEvent: displaySymbol || undefined,
+          }
+        : {
+            mode: 'sell',
+            chainId: tradeChainId,
+            sellToken: tokenPreset,
+            buyToken: cloneTradeToken(tradeTokenConfig.usdc),
+            assetSymbolForEvent: displaySymbol || undefined,
+          };
+
+    setTradePreset(preset);
+    setIsTradeModalOpen(true);
   }
 
   return (
@@ -544,14 +590,35 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
       <div className="fixed bottom-5 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 px-5">
         <div className="grid grid-cols-2 gap-3">
-          <button type="button" className="btn btn-success border-0">
+          <button
+            type="button"
+            className="btn btn-success border-0"
+            onClick={() => openTrade('buy')}
+            disabled={!canTradeToken}
+          >
             {t('trade.buy')}
           </button>
-          <button type="button" className="btn btn-error border-0">
+          <button
+            type="button"
+            className="btn btn-error border-0"
+            onClick={() => openTrade('sell')}
+            disabled={!canTradeToken}
+          >
             {t('trade.sell')}
           </button>
         </div>
       </div>
+      {isTradeModalOpen && tradePreset ? (
+        <Modal visible originRect={null} onClose={() => setIsTradeModalOpen(false)}>
+          <TradeContent
+            active={isTradeModalOpen}
+            preset={tradePreset}
+            supportedChains={appConfig?.supportedChains ?? []}
+            onBack={() => setIsTradeModalOpen(false)}
+            onClose={() => setIsTradeModalOpen(false)}
+          />
+        </Modal>
+      ) : null}
     </section>
   );
 }

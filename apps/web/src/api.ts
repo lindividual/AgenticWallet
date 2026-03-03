@@ -172,6 +172,51 @@ export type TransferRecord = {
   confirmedAt: string | null;
 };
 
+export type TradeQuoteRequest = {
+  chainId: number;
+  sellTokenAddress: string;
+  buyTokenAddress: string;
+  sellAmount: string;
+  sellTokenSymbol?: string;
+  buyTokenSymbol?: string;
+  sellTokenDecimals?: number;
+  buyTokenDecimals?: number;
+  slippageBps?: number;
+};
+
+export type TradeQuoteResponse = {
+  chainId: number;
+  fromAddress: string;
+  sellTokenAddress: string;
+  sellTokenSymbol: string | null;
+  sellTokenDecimals: number;
+  buyTokenAddress: string;
+  buyTokenSymbol: string | null;
+  buyTokenDecimals: number;
+  sellAmountInput: string;
+  sellAmountRaw: string;
+  expectedBuyAmountRaw: string;
+  price: number | null;
+  slippageBps: number;
+  allowanceTarget: string | null;
+  needsApproval: boolean;
+  estimatedFeeWei: string | null;
+  estimatedGas: {
+    preVerificationGas: string | null;
+    verificationGasLimit: string | null;
+    callGasLimit: string | null;
+    maxFeePerGas: string | null;
+    maxPriorityFeePerGas: string | null;
+  };
+  provider: '0x';
+};
+
+export type TradeSubmitResponse = {
+  txHash: string;
+  status: 'confirmed' | 'failed' | 'pending';
+  quote: TradeQuoteResponse;
+};
+
 export type MarketToken = {
   chain_id: number;
   address: string;
@@ -427,6 +472,16 @@ export async function submitTransfer(
   return postJson<{ transfer: TransferRecord; deduped: boolean }>('/v1/transfer/submit', request, true);
 }
 
+export async function quoteTrade(request: TradeQuoteRequest): Promise<TradeQuoteResponse> {
+  return postJson<TradeQuoteResponse>('/v1/trade/quote', request, true);
+}
+
+export async function submitTrade(
+  request: TradeQuoteRequest & { idempotencyKey?: string },
+): Promise<TradeSubmitResponse> {
+  return postJson<TradeSubmitResponse>('/v1/trade/submit', request, true);
+}
+
 export async function getTransferHistory(params?: {
   limit?: number;
   status?: TransferRecord['status'];
@@ -559,6 +614,20 @@ export async function getTradeMarketKline(
   }
   const response = await getJson<{ candles: KlineCandle[] }>(`/v1/market/trade-kline?${query.toString()}`, true);
   return response.candles;
+}
+
+export async function getTradeMarketDetail(
+  type: TradeMarketDetailType,
+  id: string,
+): Promise<TradeBrowseMarketItem | TradeBrowsePredictionItem> {
+  const query = new URLSearchParams();
+  query.set('type', type);
+  query.set('id', id.trim());
+  const response = await getJson<{ detail: TradeBrowseMarketItem | TradeBrowsePredictionItem }>(
+    `/v1/market/trade-detail?${query.toString()}`,
+    true,
+  );
+  return response.detail;
 }
 
 export async function getTradeBrowse(): Promise<TradeBrowseResponse> {

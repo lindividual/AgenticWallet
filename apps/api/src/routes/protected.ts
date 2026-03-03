@@ -7,6 +7,7 @@ import type { AppEnv } from '../types';
 import { registerAgentRoutes } from './agent';
 import { registerMarketRoutes } from './market';
 import { registerPaymentRoutes } from './payment';
+import { registerTradeRoutes } from './trade';
 import { registerTransferRoutes } from './transfer';
 import { registerWalletRoutes } from './wallet';
 
@@ -30,6 +31,7 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
   registerWalletRoutes(app);
   registerPaymentRoutes(app);
   registerTransferRoutes(app);
+  registerTradeRoutes(app);
   registerMarketRoutes(app);
   registerAgentRoutes(app);
 }
