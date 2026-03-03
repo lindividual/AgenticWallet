@@ -16,7 +16,7 @@ import {
   fetchTradeMarketKline,
   normalizeTradeMarketDetailType,
 } from '../services/tradeBrowse';
-import { searchBinanceSpotTokens } from '../services/binance';
+import { searchBinanceTokens } from '../services/binance';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
@@ -473,17 +473,17 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     }
 
     try {
-      const items = await searchBinanceSpotTokens(q, limit);
+      const items = await searchBinanceTokens(q, limit);
       const results = items.map((item) => ({
         id: item.id,
-        symbol: item.baseAsset,
-        name: `${item.baseAsset}/${item.quoteAsset}`,
-        image: null,
+        symbol: item.stockTicker,
+        name: item.name,
+        image: item.image,
         currentPrice: item.currentPrice,
         change24h: item.change24h,
         volume24h: item.volume24h,
         source: 'binance',
-        externalUrl: `https://www.binance.com/trade/${item.baseAsset}_${item.quoteAsset}`,
+        externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
       }));
       return c.json({ results });
     } catch (error) {

@@ -1,7 +1,7 @@
 import type { Bindings } from '../types';
 import { fetchBitgetTopMarketAssets, type MarketTopAsset } from './bitgetWallet';
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
-import { fetchBinanceTopSpotTokens, fetchBinanceSpotDetail, fetchBinanceKlines } from './binance';
+import { fetchBinanceStockTokens, fetchBinanceStockDetail, fetchBinanceStockKlines } from './binance';
 import { getSupportedMarketChains } from '../config/appConfig';
 
 export type TradeBrowseMarketItem = {
@@ -304,25 +304,22 @@ async function fetchTrendings(env: Bindings): Promise<TradeBrowseMarketItem[]> {
 
 async function fetchStocks(_env: Bindings): Promise<TradeBrowseMarketItem[]> {
   try {
-    const items = await fetchBinanceTopSpotTokens(15);
-    return items
-      .filter((item) => !STABLECOIN_SYMBOLS.has(item.baseAsset.toUpperCase()))
-      .slice(0, 10)
-      .map((item) => ({
-        id: item.id,
-        symbol: item.baseAsset,
-        name: `${item.baseAsset}/${item.quoteAsset}`,
-        image: null,
-        chain: null,
-        contract: null,
-        currentPrice: item.currentPrice,
-        change24h: item.change24h,
-        volume24h: item.volume24h,
-        source: 'binance' as const,
-        metaLabel: null,
-        metaValue: null,
-        externalUrl: `https://www.binance.com/trade/${item.baseAsset}_${item.quoteAsset}`,
-      }));
+    const items = await fetchBinanceStockTokens(15);
+    return items.slice(0, 10).map((item) => ({
+      id: item.id,
+      symbol: item.stockTicker,
+      name: item.name,
+      image: item.image,
+      chain: item.chain || null,
+      contract: item.contract || null,
+      currentPrice: item.currentPrice,
+      change24h: item.change24h,
+      volume24h: item.volume24h,
+      source: 'binance' as const,
+      metaLabel: item.marketCap ? 'MCap' : null,
+      metaValue: item.marketCap,
+      externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
+    }));
   } catch {
     return [];
   }
@@ -519,25 +516,25 @@ export async function fetchTradeMarketDetail(
   if (!id) return null;
 
   if (options.type === 'stock') {
-    const rawId = id.startsWith('binance:') ? id.slice('binance:'.length) : id;
-    if (rawId) {
+    const alphaIdRaw = id.startsWith('binance-stock:') ? id.slice('binance-stock:'.length) : null;
+    if (alphaIdRaw) {
       try {
-        const detail = await fetchBinanceSpotDetail(rawId);
+        const detail = await fetchBinanceStockDetail(alphaIdRaw);
         if (detail) {
           return {
             id: detail.id,
-            symbol: detail.baseAsset,
-            name: `${detail.baseAsset}/${detail.quoteAsset}`,
-            image: null,
-            chain: null,
-            contract: null,
+            symbol: detail.stockTicker,
+            name: detail.name,
+            image: detail.image,
+            chain: detail.chain || null,
+            contract: detail.contract || null,
             currentPrice: detail.currentPrice,
             change24h: detail.change24h,
             volume24h: detail.volume24h,
             source: 'binance' as const,
-            metaLabel: null,
-            metaValue: null,
-            externalUrl: `https://www.binance.com/trade/${detail.baseAsset}_${detail.quoteAsset}`,
+            metaLabel: detail.marketCap ? 'MCap' : null,
+            metaValue: detail.marketCap,
+            externalUrl: `https://www.binance.com/en/alpha/${detail.alphaId}`,
           };
         }
       } catch { /* fall through to browse list */ }
@@ -761,10 +758,12 @@ export async function fetchTradeMarketKline(
   const size = sanitizeKlineSize(options.size);
 
   if (options.type === 'stock') {
-    const rawId = options.id.startsWith('binance:') ? options.id.slice('binance:'.length) : options.id;
-    if (rawId) {
+    const alphaId = options.id.startsWith('binance-stock:')
+      ? options.id.slice('binance-stock:'.length)
+      : null;
+    if (alphaId) {
       try {
-        return await fetchBinanceKlines(rawId, period, size);
+        return await fetchBinanceStockKlines(alphaId, period, size);
       } catch {
         return [];
       }

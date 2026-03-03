@@ -184,7 +184,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const normalizedKlineChain = (displayChain ?? '').trim().toLowerCase();
   const normalizedKlineContract = (displayContract ?? '').trim().toLowerCase();
   const hasKlineSupport = normalizedType === 'stock'
-    ? normalizedItemId.startsWith('binance:') || (Boolean(normalizedKlineChain) && /^0x[a-f0-9]{40}$/.test(normalizedKlineContract))
+    ? normalizedItemId.startsWith('binance-stock:') || (Boolean(normalizedKlineChain) && /^0x[a-f0-9]{40}$/.test(normalizedKlineContract))
     : normalizedType === 'perp'
       ? normalizedItemId.startsWith('hyperliquid:')
       : Boolean(activePredictionItem) && Boolean(selectedPredictionTokenId);
@@ -205,7 +205,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       klinePeriod,
     ],
     queryFn: () => {
-      if (normalizedType === 'stock' && normalizedItemId.startsWith('binance:')) {
+      if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
         return getTradeMarketKline(normalizedType, normalizedItemId, klinePeriod, 60);
       }
       if (normalizedType === 'stock') {
@@ -337,7 +337,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
           nextPeriod,
         ],
         queryFn: () => {
-          if (normalizedType === 'stock' && normalizedItemId.startsWith('binance:')) {
+          if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
             return getTradeMarketKline(normalizedType, normalizedItemId, nextPeriod, 60);
           }
           if (normalizedType === 'stock') {
