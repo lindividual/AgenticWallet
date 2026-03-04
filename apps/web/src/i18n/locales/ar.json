@@ -107,7 +107,13 @@
     "tradeFlipPair": "عكس الزوج",
     "tradeApprovalRequired": "يلزم إجراء موافقة قبل المبادلة وسيتم تنفيذها تلقائياً.",
     "tradeSubmitFailed": "فشلت المعاملة على الشبكة.",
-    "tradeChainNotSupported": "التداول غير مدعوم لهذه الشبكة حالياً."
+    "tradeChainNotSupported": "التداول غير مدعوم لهذه الشبكة حالياً.",
+    "balanceChart": "اتجاه الرصيد",
+    "balanceChartLoading": "جار تحميل مخطط الرصيد...",
+    "balanceChartEmpty": "لا يوجد سجل للرصيد بعد.",
+    "balanceChartPeriod24h": "24س",
+    "balanceChartPeriod7d": "7أيام",
+    "balanceChartPeriod30d": "30يوم"
   },
   "settings": {
     "language": "اللغة",

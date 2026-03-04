@@ -107,7 +107,13 @@
     "tradeFlipPair": "切换币对",
     "tradeApprovalRequired": "本次交易需要先授权，系统会自动一并提交。",
     "tradeSubmitFailed": "链上交易失败。",
-    "tradeChainNotSupported": "当前链暂不支持交易。"
+    "tradeChainNotSupported": "当前链暂不支持交易。",
+    "balanceChart": "余额走势",
+    "balanceChartLoading": "正在加载余额走势...",
+    "balanceChartEmpty": "暂无余额历史数据。",
+    "balanceChartPeriod24h": "24h",
+    "balanceChartPeriod7d": "7d",
+    "balanceChartPeriod30d": "30d"
   },
   "settings": {
     "language": "语言",
