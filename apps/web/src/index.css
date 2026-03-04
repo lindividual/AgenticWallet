@@ -65,9 +65,66 @@
   animation: page-slide-out 220ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
+@keyframes agent-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes agent-bubble-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(16px) scale(0.95);
+  }
+}
+
+@keyframes agent-chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agent-bubble-enter {
+  animation: agent-bubble-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.agent-bubble-exit {
+  animation: agent-bubble-out 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.agent-chat-enter {
+  animation: agent-chat-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.agent-thinking-dots {
+  animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-page-slide-in,
-  .app-page-slide-out {
+  .app-page-slide-out,
+  .agent-bubble-enter,
+  .agent-bubble-exit,
+  .agent-chat-enter {
     animation: none !important;
   }
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCanGoBack, useLocation, useMatch, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
+import { AgentAssistant, type PageContext } from './components/AgentAssistant';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
@@ -285,6 +286,14 @@ export function App() {
     return <WalletScreen auth={authenticatedState} onLogout={handleLogout} />;
   }
 
+  const agentPageContext: PageContext = activeArticleId
+    ? { page: 'article', articleId: activeArticleId }
+    : isTokenRoute && activeTokenRoute
+      ? { page: 'token', tokenChain: activeTokenRoute.chain, tokenContract: activeTokenRoute.contract }
+      : isMarketRoute && activeMarketRoute
+        ? { page: 'market', marketType: activeMarketRoute.marketType, marketItemId: activeMarketRoute.itemId }
+        : { page: activeTab };
+
   return (
     <>
       <div className="min-h-screen overflow-x-hidden">
@@ -315,6 +324,7 @@ export function App() {
       {!activeArticleId && !isTokenRoute && !isMarketRoute && (
         <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />
       )}
+      <AgentAssistant pageContext={agentPageContext} />
     </>
   );
 }

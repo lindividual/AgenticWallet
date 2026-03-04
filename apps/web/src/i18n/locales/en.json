@@ -178,6 +178,22 @@
     "zeroBalanceTitle": "Start your on-chain finance journey",
     "zeroBalanceSubtitle": "Invest in crypto and stocks, use stablecoins for payments or yield."
   },
+  "agent": {
+    "helpPromptHome": "Need help finding opportunities or reviewing your portfolio?",
+    "helpPromptTrade": "Looking for something to trade? I can help you analyze markets.",
+    "helpPromptWallet": "Need help managing your assets or making a transfer?",
+    "helpPromptToken": "Want me to analyze this token for you?",
+    "helpPromptArticle": "Have questions about this article?",
+    "helpPromptMarket": "Want me to explain this market data?",
+    "dismiss": "No thanks",
+    "chatAction": "Chat with Agent",
+    "chatTitle": "Agent",
+    "chatPlaceholder": "Type a message...",
+    "chatSend": "Send",
+    "chatThinking": "Thinking...",
+    "chatClose": "Close chat",
+    "chatError": "Failed to get a response. Please try again."
+  },
   "trade": {
     "title": "Trade",
     "browse": "Browse",
