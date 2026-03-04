@@ -446,7 +446,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
           return c.json({
             detail: {
               ...fallback,
-              image: canonicalLogo ?? fallback.image,
+              image: fallback.image ?? canonicalLogo,
             },
           });
         }
@@ -464,7 +464,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json({
         detail: {
           ...detail,
-          image: canonicalLogo ?? detail.image,
+          image: detail.image ?? canonicalLogo,
         },
       });
     } catch (error) {
@@ -517,7 +517,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
           Number.isFinite(chainId) && contractAddress
             ? logoByKey.get(`${chainId}:${contractAddress}`) ?? null
             : null;
-        if (!logo) return item;
+        if (normalizeText(detail.image) || !logo) return item;
         return {
           ...item,
           detail: {
@@ -694,6 +694,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         klines: 'bitget_wallet_tob',
       },
       note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Stocks use Binance spot data with icon fallbacks. Token detail uses a native-asset CoinGecko fast path, otherwise Bitget. Kline remains on Bitget.',
+      iconPriority: 'bitget_source_first_then_catalog_fallback',
     });
   });
 }

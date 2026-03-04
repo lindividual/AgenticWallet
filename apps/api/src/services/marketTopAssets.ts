@@ -54,6 +54,8 @@ async function applyCanonicalLogosFromTokenCatalog(env: Bindings, assets: Market
   if (canonicalLogos.size === 0) return assets;
 
   return assets.map((asset) => {
+    // Keep source icon (Bitget/CoinGecko) when present; token catalog only fills missing logos.
+    if (normalizeText(asset.image)) return asset;
     const chainId = getChainIdByMarketChain(asset.chain);
     const contract = normalizeContractAddress(asset.contract);
     if (!Number.isFinite(chainId) || !contract) return asset;
@@ -222,7 +224,8 @@ export async function fetchTopMarketAssets(env: Bindings, options?: FetchTopAsse
       env,
       await fetchBitgetTopMarketAssets(env, { name, limit, chains }),
     );
-    const merged = dedupeAssets([...coingeckoAssets, ...bitgetAssets]);
+    // Prefer Bitget entry on duplicate assets so its icon wins when available.
+    const merged = dedupeAssets([...bitgetAssets, ...coingeckoAssets]);
     if (merged.length > 0) {
       const assets = merged.slice(0, limit);
       topAssetsValueCache.set(cacheKey, {

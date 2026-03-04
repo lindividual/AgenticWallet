@@ -237,6 +237,8 @@ async function applyCanonicalCryptoItemLogos(
   if (logos.size === 0) return items;
 
   return items.map((item) => {
+    // Keep source icon when present; token catalog only fills missing logos.
+    if (normalizeText(item.image)) return item;
     const chainId = item.chain ? getChainIdByMarketChain(item.chain) : null;
     const contract = normalizeContractAddress(item.contract);
     if (!Number.isFinite(chainId) || !contract) return item;
@@ -276,7 +278,7 @@ function mapTopAssetToBrowseItem(
     name: asset.name,
     image: asset.image,
     chain: normalizeText(asset.chain),
-    contract: normalizeText(asset.contract),
+    contract: normalizeText(asset.contract) ?? '',
     currentPrice: asset.current_price,
     change24h: asset.price_change_percentage_24h,
     volume24h: asset.turnover_24h,
