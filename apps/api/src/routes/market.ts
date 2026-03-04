@@ -1,15 +1,16 @@
 import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
-import { getChainIdByMarketChain } from '../config/appConfig';
-import { ingestTokenLists, listTokenCatalog, resolveBestTokenCatalogLogo } from '../services/market';
+import type { BitgetTokenDetail, MarketTopAsset } from '../services/bitgetWallet';
 import { fetchBitgetTokenDetail, fetchBitgetTokenDetails, fetchBitgetTokenKline } from '../services/bitgetWallet';
 import { getCoinGeckoCoinListSyncStatus, syncCoinGeckoCoinListPlatforms } from '../services/coingecko';
 import {
   fetchTopMarketAssets,
+  loadTokenIconLookup,
   normalizeTopAssetListName,
   normalizeTopAssetSource,
+  resolveTokenIconFromLookup,
 } from '../services/marketTopAssets';
-import { fetchMarketShelves } from '../services/marketShelves';
+import { normalizeMarketChain } from '../services/assetIdentity';
 import {
   fetchTradeBrowse,
   fetchTradeMarketDetail,
@@ -19,26 +20,75 @@ import {
 import { searchBinanceTokens } from '../services/binance';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 
+const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
+
+function normalizeText(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value ? value : null;
+}
+
+function normalizeContractAddress(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  if (!value) return null;
+  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
+  return value;
+}
+
+function isNativeLikeContract(raw: unknown): boolean {
+  const value = normalizeText(raw)?.toLowerCase() ?? '';
+  if (!value || value === 'native') return true;
+  if (value === '0x0000000000000000000000000000000000000000') return true;
+  return false;
+}
+
+function getExpectedNativeSymbol(chain: string): string {
+  const normalized = (chain ?? '').trim().toLowerCase();
+  if (normalized === 'bnb') return 'BNB';
+  return 'ETH';
+}
+
+function mapTopAssetToTokenDetail(asset: MarketTopAsset): BitgetTokenDetail {
+  return {
+    asset_id: asset.asset_id,
+    chain_asset_id: asset.chain_asset_id,
+    chain: asset.chain,
+    contract: asset.contract,
+    symbol: asset.symbol,
+    name: asset.name,
+    image: asset.image ?? null,
+    priceChange24h: asset.price_change_percentage_24h ?? null,
+    currentPriceUsd: asset.current_price ?? null,
+    holders: null,
+    totalSupply: null,
+    liquidityUsd: null,
+    top10HolderPercent: null,
+    devHolderPercent: null,
+    lockLpPercent: null,
+  };
+}
+
+async function buildNativeTokenDetailFallback(
+  env: AppEnv['Bindings'],
+  chain: string,
+): Promise<BitgetTokenDetail | null> {
+  const assets = await fetchTopMarketAssets(env, {
+    source: 'coingecko',
+    name: 'marketCap',
+    limit: 120,
+    chains: [chain],
+  });
+  const normalizedChain = chain.trim().toLowerCase();
+  const expectedSymbol = getExpectedNativeSymbol(normalizedChain);
+  const primary =
+    assets.find((asset) => asset.chain === normalizedChain && isNativeLikeContract(asset.contract))
+    ?? assets.find((asset) => (asset.symbol ?? '').trim().toUpperCase() === expectedSymbol && isNativeLikeContract(asset.contract))
+    ?? null;
+  if (!primary) return null;
+  return mapTopAssetToTokenDetail(primary);
+}
+
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
-  app.post('/v1/market/tokens/ingest/run', async (c) => {
-    const result = await ingestTokenLists(c.env);
-    return c.json({ ok: true, ...result });
-  });
-
-  app.get('/v1/market/tokens', async (c) => {
-    const chainIdRaw = c.req.query('chainId');
-    const chainId = chainIdRaw ? Number(chainIdRaw) : undefined;
-    const q = c.req.query('q') ?? undefined;
-    const limitRaw = c.req.query('limit');
-    const limit = limitRaw ? Number(limitRaw) : 50;
-    const tokens = await listTokenCatalog(c.env.DB, {
-      chainId: Number.isFinite(chainId) ? chainId : undefined,
-      q,
-      limit,
-    });
-    return c.json({ tokens });
-  });
-
   app.get('/v1/market/top-assets', async (c) => {
     const limitRaw = Number(c.req.query('limit'));
     const limit = Number.isFinite(limitRaw) ? limitRaw : 30;
@@ -64,35 +114,6 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json(
         {
           error: 'market_top_assets_failed',
-          message: error instanceof Error ? error.message : 'unknown_error',
-        },
-        502,
-      );
-    }
-  });
-
-  app.get('/v1/market/shelves', async (c) => {
-    const idsRaw = c.req.query('ids') ?? '';
-    const shelfIds = idsRaw
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const limitRaw = Number(c.req.query('limitPerShelf'));
-    const limitPerShelf = Number.isFinite(limitRaw) ? limitRaw : undefined;
-
-    try {
-      const shelves = await fetchMarketShelves(c.env, {
-        shelfIds,
-        limitPerShelf,
-      });
-      return c.json({
-        generatedAt: new Date().toISOString(),
-        shelves,
-      });
-    } catch (error) {
-      return c.json(
-        {
-          error: 'market_shelves_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,
@@ -354,25 +375,62 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json({ error: 'invalid_chain' }, 400);
     }
 
+    if (isNativeLikeContract(contract)) {
+      try {
+        const fallback = await buildNativeTokenDetailFallback(c.env, chain);
+        if (fallback) {
+          const iconLookup = await loadTokenIconLookup(c.env, {
+            source: 'auto',
+            name: 'marketCap',
+            limit: 200,
+            chains: [fallback.chain],
+            categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+          });
+          const image = fallback.image ?? resolveTokenIconFromLookup(iconLookup, {
+            chain: fallback.chain,
+            contract: fallback.contract,
+            symbol: fallback.symbol,
+            name: fallback.name,
+          });
+          return c.json({
+            detail: {
+              ...fallback,
+              image,
+            },
+          });
+        }
+      } catch {
+        // Fall through to Bitget lookup if native fallback fails.
+      }
+    }
+
     try {
       const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
       if (!detail) {
         return c.json({ error: 'token_not_found' }, 404);
       }
-      let enrichedDetail = detail;
-      if (!enrichedDetail.image && enrichedDetail.contract) {
-        const chainId = getChainIdByMarketChain(enrichedDetail.chain);
-        if (chainId != null) {
-          const fallbackLogo = await resolveBestTokenCatalogLogo(c.env.DB, chainId, enrichedDetail.contract);
-          if (fallbackLogo) {
-            enrichedDetail = {
-              ...enrichedDetail,
-              image: fallbackLogo,
-            };
-          }
-        }
+      if (normalizeText(detail.image)) {
+        return c.json({ detail });
       }
-      return c.json({ detail: enrichedDetail });
+      const iconLookup = await loadTokenIconLookup(c.env, {
+        source: 'auto',
+        name: 'marketCap',
+        limit: 200,
+        chains: [detail.chain],
+        categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+      });
+      const image = resolveTokenIconFromLookup(iconLookup, {
+        chain: detail.chain,
+        contract: detail.contract,
+        symbol: detail.symbol,
+        name: detail.name,
+      });
+      return c.json({
+        detail: {
+          ...detail,
+          image: image ?? detail.image,
+        },
+      });
     } catch (error) {
       return c.json(
         {
@@ -400,29 +458,44 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
 
     try {
       const details = await fetchBitgetTokenDetails(c.env, tokens);
-      const enriched = await Promise.all(
-        details.map(async (item) => {
-          const detail = item.detail;
-          if (!detail || detail.image || !detail.contract) {
-            return item;
-          }
-          const chainId = getChainIdByMarketChain(detail.chain);
-          if (chainId == null) {
-            return item;
-          }
-          const fallbackLogo = await resolveBestTokenCatalogLogo(c.env.DB, chainId, detail.contract);
-          if (!fallbackLogo) {
-            return item;
-          }
-          return {
-            ...item,
-            detail: {
-              ...detail,
-              image: fallbackLogo,
-            },
-          };
-        }),
-      );
+      const missingImageChains = [
+        ...new Set(
+          details
+            .map((item) => item.detail)
+            .filter((detail): detail is BitgetTokenDetail => detail != null && !normalizeText(detail.image))
+            .map((detail) => detail.chain.trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      ];
+      if (!missingImageChains.length) {
+        return c.json({ details });
+      }
+
+      const iconLookup = await loadTokenIconLookup(c.env, {
+        source: 'auto',
+        name: 'marketCap',
+        limit: 200,
+        chains: missingImageChains,
+        categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+      });
+      const enriched = details.map((item) => {
+        const detail = item.detail;
+        if (!detail || normalizeText(detail.image)) return item;
+        const image = resolveTokenIconFromLookup(iconLookup, {
+          chain: detail.chain,
+          contract: detail.contract,
+          symbol: detail.symbol,
+          name: detail.name,
+        });
+        if (!image) return item;
+        return {
+          ...item,
+          detail: {
+            ...detail,
+            image,
+          },
+        };
+      });
       return c.json({ details: enriched });
     } catch (error) {
       return c.json(
@@ -474,11 +547,30 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
 
     try {
       const items = await searchBinanceTokens(q, limit);
+      const stockIconLookup = await loadTokenIconLookup(c.env, {
+        source: 'auto',
+        name: 'marketCap',
+        limit: 200,
+        categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+      });
+
       const results = items.map((item) => ({
+        ...(function resolveIcon() {
+          const contract = normalizeContractAddress(item.contract);
+          const image = resolveTokenIconFromLookup(
+            stockIconLookup,
+            {
+              symbol: item.stockTicker,
+              name: item.name,
+              chain: normalizeMarketChain(item.chain),
+              contract,
+            },
+          );
+          return { image };
+        })(),
         id: item.id,
         symbol: item.stockTicker,
         name: item.name,
-        image: item.image,
         currentPrice: item.currentPrice,
         change24h: item.change24h,
         volume24h: item.volume24h,
@@ -534,7 +626,6 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       },
       strategy: {
         topAssets: 'coingecko_first_with_bitget_fallback',
-        shelves: 'configured_multi_shelf_with_coingecko_priority',
         tradeBrowse: {
           topMovers: 'bitget_primary',
           trendings: 'coingecko_top_volume_without_stablecoins',
@@ -542,10 +633,11 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
           perps: 'hyperliquid_info_api',
           prediction: 'polymarket_gamma_api',
         },
-        tokenDetail: 'bitget_wallet_tob',
+        tokenDetail: 'native_coingecko_fastpath_else_bitget_wallet_tob',
         klines: 'bitget_wallet_tob',
       },
-      note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Stocks use Binance spot data. Kline and token detail remain from Bitget with Binance fallback.',
+      note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Stocks use Binance spot pricing, with icons mapped from CoinGecko tokenized-stock data. Token detail uses a native-asset CoinGecko fast path, otherwise Bitget. Kline remains on Bitget.',
+      iconPriority: 'stocks_coingecko_tokenized_stock;others_source_icon',
     });
   });
 }

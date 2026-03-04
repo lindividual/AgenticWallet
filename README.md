@@ -95,10 +95,9 @@ Notes:
 - Wallet creation currently uses backend-generated EOA and keeps a placeholder for Biconomy Abstract integration.
 
 ## Market Shelves (Phase 1)
-- `GET /v1/market/shelves` returns multiple market shelves (default: meme + defi + market-cap shelves).
 - `GET /v1/market/top-assets` supports `name` (`topGainers|topLosers|topVolume|marketCap|trending`), `source` (`auto|coingecko|bitget`), and optional `category`.
 - `POST /v1/market/coingecko/platforms/sync` syncs CoinGecko `coins/list?include_platform=true` into local D1 (incremental write: changed rows only).
 - `GET /v1/market/coingecko/platforms/sync-status` returns last sync metadata.
 - Strategy:
-  - Top assets/shelves: CoinGecko first, Bitget fallback (only for list types Bitget supports).
+  - Top assets: CoinGecko first, Bitget fallback (only for list types Bitget supports).
   - Token detail and kline: Bitget.

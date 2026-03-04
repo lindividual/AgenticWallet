@@ -123,19 +123,6 @@ export function useWalletApp() {
     }
   }
 
-  async function mockRecommendation() {
-    setLoading(true);
-
-    try {
-      await postJson('/v1/agent/recommendations/mock', {}, true);
-      showSuccess(t('wallet.mockRecommendationSuccess'));
-    } catch (err) {
-      showError(`${t('common.error')}: ${(err as Error).message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function verifyPaymentPasskey() {
     setLoading(true);
 
@@ -173,7 +160,6 @@ export function useWalletApp() {
     handleLogin,
     handleLogout,
     handleRegister,
-    mockRecommendation,
     verifyPaymentPasskey,
   };
 }

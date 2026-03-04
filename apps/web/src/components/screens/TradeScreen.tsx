@@ -16,6 +16,7 @@ import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 import { TokenSearchModal } from '../TokenSearchModal';
 import { type TradeMarketDetailType } from '../../utils/tradeMarketDetail';
+import { buildChainAssetId } from '../../utils/assetIdentity';
 
 type TradeScreenProps = {
   onOpenToken: (token: TopMarketAsset, shelfId: string) => void;
@@ -52,22 +53,44 @@ function getLabelInitial(symbol: string, name: string): string {
   return label ? label[0].toUpperCase() : '?';
 }
 
-function canOpenToken(item: TradeBrowseMarketItem): item is TradeBrowseMarketItem & { chain: string; contract: string } {
-  const chain = item.chain?.trim();
-  const contract = item.contract?.trim();
-  if (!chain || !contract) return false;
-  if (contract.toLowerCase() === 'native') return false;
-  return /^0x[a-fA-F0-9]{40}$/.test(contract);
+function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; contract: string } | null {
+  const chain = item.chain?.trim().toLowerCase() ?? '';
+  const contract = item.contract?.trim().toLowerCase() ?? '';
+  if (chain) {
+    if (!contract || contract === 'native') {
+      return { chain, contract: '' };
+    }
+    if (/^0x[a-f0-9]{40}$/.test(contract)) {
+      return { chain, contract };
+    }
+  }
+
+  // Fallback for native majors when upstream payload is incomplete.
+  const symbol = item.symbol.trim().toUpperCase();
+  const id = item.id.trim().toLowerCase();
+  const name = item.name.trim().toLowerCase();
+  if (symbol === 'ETH' || id.includes('ethereum') || name === 'ethereum') return { chain: 'eth', contract: '' };
+  if (symbol === 'BNB' || id.includes('binancecoin') || name === 'bnb') return { chain: 'bnb', contract: '' };
+  return null;
 }
 
-function toTopMarketAsset(item: TradeBrowseMarketItem & { chain: string; contract: string }): TopMarketAsset {
-  const chainAssetId = `${item.chain}:${item.contract.toLowerCase()}`;
+function canOpenToken(item: TradeBrowseMarketItem): boolean {
+  return resolveRoutableToken(item) != null;
+}
+
+function toTopMarketAsset(
+  item: TradeBrowseMarketItem,
+  route: { chain: string; contract: string },
+): TopMarketAsset {
+  const chain = route.chain;
+  const contract = route.contract;
+  const chainAssetId = buildChainAssetId(chain, contract);
   return {
     id: item.id,
     asset_id: item.id,
     chain_asset_id: chainAssetId,
-    chain: item.chain,
-    contract: item.contract,
+    chain,
+    contract,
     symbol: item.symbol,
     name: item.name,
     image: item.image,
@@ -227,8 +250,9 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
   }
 
   function handleOpenToken(item: TradeBrowseMarketItem, section: string): void {
-    if (!canOpenToken(item)) return;
-    onOpenToken(toTopMarketAsset(item), section);
+    const route = resolveRoutableToken(item);
+    if (!route) return;
+    onOpenToken(toTopMarketAsset(item, route), section);
   }
 
   function handleSearchSelect(item: MarketSearchResult): void {
@@ -418,7 +442,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
           <section className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <SectionTitle title={t('trade.stocks')} />
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Binance</span>
             </div>
             <div className="overflow-hidden rounded-xl bg-base-200/35">
               {payload.stocks.length === 0 && (

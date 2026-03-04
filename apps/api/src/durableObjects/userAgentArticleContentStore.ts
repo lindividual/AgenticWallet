@@ -1,11 +1,8 @@
 import type { Bindings } from '../types';
 import { normalizeR2Key } from './userAgentHelpers';
-import type { ArticleContentRow } from './userAgentTypes';
-import type { SqlStorage } from './userAgentContentTypes';
 
 export async function putArticleMarkdownContent(
   env: Bindings,
-  sql: SqlStorage,
   articleId: string,
   r2Key: string,
   markdown: string,
@@ -18,19 +15,10 @@ export async function putArticleMarkdownContent(
       articleId,
     },
   });
-
-  sql.exec(
-    `INSERT INTO article_contents (article_id, markdown)
-     VALUES (?, ?)
-     ON CONFLICT(article_id) DO UPDATE SET markdown = excluded.markdown`,
-    articleId,
-    markdown,
-  );
 }
 
 export async function getArticleMarkdownContent(
   env: Bindings,
-  sql: SqlStorage,
   articleId: string,
   r2Key: string,
 ): Promise<string> {
@@ -42,9 +30,5 @@ export async function getArticleMarkdownContent(
       if (text) return text;
     }
   }
-
-  const content = sql
-    .exec('SELECT article_id, markdown FROM article_contents WHERE article_id = ? LIMIT 1', articleId)
-    .toArray()[0] as ArticleContentRow | undefined;
-  return content?.markdown ?? '';
+  return '';
 }

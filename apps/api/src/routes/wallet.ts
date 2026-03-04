@@ -1,9 +1,7 @@
 import type { Hono } from 'hono';
 import {
   buildMergedPortfolioHoldings,
-  enrichMergedHoldingLogosByAssetId,
   fetchWalletPortfolio,
-  upsertTokenMetadataFromPortfolio,
 } from '../services/market';
 import { listUserPortfolioSnapshots, saveUserPortfolioSnapshot } from '../services/agent';
 import { getWallet } from '../services/wallet';
@@ -32,10 +30,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       );
     }
     const holdings = result.holdings;
-    const mergedHoldings = await enrichMergedHoldingLogosByAssetId(
-      c.env,
-      await buildMergedPortfolioHoldings(c.env, holdings),
-    );
+    const mergedHoldings = await buildMergedPortfolioHoldings(c.env, holdings);
     const totalUsd = result.totalUsd;
     const sample = holdings
       .slice(0, 3)
@@ -44,7 +39,6 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
     console.log(
       `[wallet/portfolio] sim_ok filtered=${holdings.length} totalUsd=${totalUsd} sample=${sample || 'none'}`,
     );
-    await upsertTokenMetadataFromPortfolio(c.env, holdings, result.asOf);
     await saveUserPortfolioSnapshot(c.env, userId, {
       totalUsd,
       holdings,
@@ -73,7 +67,6 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       }
 
       const result = await fetchWalletPortfolio(c.env, walletAddress);
-      await upsertTokenMetadataFromPortfolio(c.env, result.holdings, result.asOf);
       await saveUserPortfolioSnapshot(c.env, userId, {
         totalUsd: result.totalUsd,
         holdings: result.holdings,

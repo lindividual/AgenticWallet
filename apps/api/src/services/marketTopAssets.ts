@@ -19,6 +19,208 @@ type FetchTopAssetOptions = {
 const TOP_ASSETS_CACHE_TTL_MS = 20_000;
 const topAssetsValueCache = new Map<string, { expiresAt: number; assets: MarketTopAsset[] }>();
 const topAssetsInFlightCache = new Map<string, Promise<MarketTopAsset[]>>();
+const TOKEN_ICON_LOOKUP_CACHE_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_TOKEN_ICON_LOOKUP_LIMIT = 200;
+const tokenIconLookupValueCache = new Map<string, { expiresAt: number; lookup: TokenIconLookup }>();
+const tokenIconLookupInFlightCache = new Map<string, Promise<TokenIconLookup>>();
+
+export type TokenIconLookup = {
+  byContract: Map<string, string>;
+  bySymbol: Map<string, string>;
+  byName: Map<string, string>;
+};
+
+export type TokenIconInput = {
+  chain?: string | null;
+  contract?: string | null;
+  symbol?: string | null;
+  name?: string | null;
+};
+
+type TokenIconLookupOptions = {
+  source?: TopAssetSource;
+  name?: TopAssetListName;
+  limit?: number;
+  chains?: string[];
+  categories?: string[];
+};
+
+function normalizeText(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value ? value : null;
+}
+
+function normalizeContractAddress(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  if (!value) return null;
+  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
+  return value;
+}
+
+function normalizeSymbolKey(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toUpperCase();
+  if (!value) return null;
+  const key = value.replace(/[^A-Z0-9]+/g, '');
+  return key || null;
+}
+
+function normalizeNameKey(raw: unknown): string | null {
+  const value = normalizeText(raw);
+  if (!value) return null;
+  const key = value
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+  return key || null;
+}
+
+function normalizeCategoryList(raw: string[] | undefined): string[] {
+  return [...new Set((raw ?? []).map((item) => item.trim().toLowerCase()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function createEmptyTokenIconLookup(): TokenIconLookup {
+  return {
+    byContract: new Map<string, string>(),
+    bySymbol: new Map<string, string>(),
+    byName: new Map<string, string>(),
+  };
+}
+
+function buildContractLookupKey(chainRaw: unknown, contractRaw: unknown): string | null {
+  const chain = normalizeText(chainRaw)?.toLowerCase();
+  const contract = normalizeContractAddress(contractRaw);
+  if (!chain || !contract) return null;
+  return `${chain}:${contract}`;
+}
+
+function appendAssetIcon(lookup: TokenIconLookup, asset: MarketTopAsset): void {
+  const image = normalizeText(asset.image);
+  if (!image) return;
+
+  const contractKey = buildContractLookupKey(asset.chain, asset.contract);
+  if (contractKey && !lookup.byContract.has(contractKey)) {
+    lookup.byContract.set(contractKey, image);
+  }
+
+  const symbolKey = normalizeSymbolKey(asset.symbol);
+  if (symbolKey && !lookup.bySymbol.has(symbolKey)) {
+    lookup.bySymbol.set(symbolKey, image);
+  }
+
+  const nameKey = normalizeNameKey(asset.name);
+  if (nameKey && !lookup.byName.has(nameKey)) {
+    lookup.byName.set(nameKey, image);
+  }
+}
+
+function normalizeTokenIconLookupOptions(
+  options?: TokenIconLookupOptions,
+): Required<Pick<TokenIconLookupOptions, 'source' | 'name' | 'limit'>> & {
+  chains: string[];
+  categories: string[];
+} {
+  const source = options?.source ?? 'auto';
+  const name = options?.name ?? 'marketCap';
+  const limit = clampInt(options?.limit ?? DEFAULT_TOKEN_ICON_LOOKUP_LIMIT, 20, 400);
+  const chains = [...new Set((options?.chains ?? []).map((item) => item.trim().toLowerCase()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  const categories = normalizeCategoryList(options?.categories);
+  return {
+    source,
+    name,
+    limit,
+    chains,
+    categories,
+  };
+}
+
+function buildTokenIconLookupCacheKey(options: ReturnType<typeof normalizeTokenIconLookupOptions>): string {
+  return `${options.source}|${options.name}|${options.limit}|${options.chains.join(',')}|${options.categories.join(',')}`;
+}
+
+export async function loadTokenIconLookup(
+  env: Bindings,
+  options?: TokenIconLookupOptions,
+): Promise<TokenIconLookup> {
+  const normalized = normalizeTokenIconLookupOptions(options);
+  const cacheKey = buildTokenIconLookupCacheKey(normalized);
+  const now = Date.now();
+  const cached = tokenIconLookupValueCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.lookup;
+  }
+
+  const inFlight = tokenIconLookupInFlightCache.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const task = (async () => {
+    const lookup = createEmptyTokenIconLookup();
+    const baseAssets = await fetchTopMarketAssets(env, {
+      source: normalized.source,
+      name: normalized.name,
+      limit: normalized.limit,
+      chains: normalized.chains,
+    }).catch(() => []);
+    for (const asset of baseAssets) {
+      appendAssetIcon(lookup, asset);
+    }
+
+    for (const category of normalized.categories) {
+      const categorizedAssets = await fetchTopMarketAssets(env, {
+        source: 'coingecko',
+        name: normalized.name,
+        limit: normalized.limit,
+        chains: normalized.chains,
+        category,
+      }).catch(() => []);
+      for (const asset of categorizedAssets) {
+        appendAssetIcon(lookup, asset);
+      }
+    }
+
+    tokenIconLookupValueCache.set(cacheKey, {
+      expiresAt: Date.now() + TOKEN_ICON_LOOKUP_CACHE_TTL_MS,
+      lookup,
+    });
+    return lookup;
+  })().finally(() => {
+    tokenIconLookupInFlightCache.delete(cacheKey);
+  });
+
+  tokenIconLookupInFlightCache.set(cacheKey, task);
+  return task;
+}
+
+export function resolveTokenIconFromLookup(
+  lookup: TokenIconLookup,
+  input: TokenIconInput,
+): string | null {
+  const contractKey = buildContractLookupKey(input.chain, input.contract);
+  if (contractKey) {
+    const icon = lookup.byContract.get(contractKey);
+    if (icon) return icon;
+  }
+
+  const symbolKey = normalizeSymbolKey(input.symbol);
+  if (symbolKey) {
+    const icon = lookup.bySymbol.get(symbolKey);
+    if (icon) return icon;
+  }
+
+  const nameKey = normalizeNameKey(input.name);
+  if (nameKey) {
+    const icon = lookup.byName.get(nameKey);
+    if (icon) return icon;
+  }
+
+  return null;
+}
 
 function supportsBitgetListName(name: TopAssetListName | undefined): boolean {
   return name === 'topGainers' || name === 'topLosers' || name == null;
@@ -161,7 +363,8 @@ export async function fetchTopMarketAssets(env: Bindings, options?: FetchTopAsse
     }
 
     const bitgetAssets = await fetchBitgetTopMarketAssets(env, { name, limit, chains });
-    const merged = dedupeAssets([...coingeckoAssets, ...bitgetAssets]);
+    // Prefer Bitget entry on duplicate assets so its icon wins when available.
+    const merged = dedupeAssets([...bitgetAssets, ...coingeckoAssets]);
     if (merged.length > 0) {
       const assets = merged.slice(0, limit);
       topAssetsValueCache.set(cacheKey, {

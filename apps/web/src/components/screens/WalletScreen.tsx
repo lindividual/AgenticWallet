@@ -6,12 +6,10 @@ import type { LivelinePoint } from 'liveline';
 import {
   getAppConfig,
   getCoinDetailsBatch,
-  getMarketShelves,
   getWalletPortfolio,
   getWalletPortfolioSnapshots,
   type PortfolioSnapshotPeriod,
   type SimEvmBalance,
-  type TopMarketAsset,
   type TransferRecord,
   type WalletPortfolioResponse,
 } from '../../api';
@@ -141,30 +139,6 @@ function formatDisplayAmount(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
-function pickPreferredSymbolAsset(
-  assets: TopMarketAsset[],
-  preferredChain: string | null,
-): TopMarketAsset | undefined {
-  if (assets.length === 0) return undefined;
-  const normalizedPreferred = (preferredChain ?? '').trim().toLowerCase();
-  const chainPriority = new Map<string, number>([
-    ['eth', 0],
-    ['base', 1],
-    ['bnb', 2],
-  ]);
-  const sorted = [...assets].sort((a, b) => {
-    const aRank = chainPriority.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
-    const bRank = chainPriority.get((b.chain ?? '').trim().toLowerCase()) ?? 9;
-    if (aRank !== bRank) return aRank - bRank;
-    const aMcapRank = Number(a.market_cap_rank ?? Number.POSITIVE_INFINITY);
-    const bMcapRank = Number(b.market_cap_rank ?? Number.POSITIVE_INFINITY);
-    if (aMcapRank !== bMcapRank) return aMcapRank - bMcapRank;
-    return Number(b.market_cap ?? 0) - Number(a.market_cap ?? 0);
-  });
-  if (!normalizedPreferred) return sorted[0];
-  return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
-}
-
 const BALANCE_CHART_PERIOD_OPTIONS: Array<{
   value: PortfolioSnapshotPeriod;
   labelKey: string;
@@ -292,17 +266,6 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     refetchInterval: 120_000,
   });
 
-  const { data: shelfData } = useQuery({
-    queryKey: ['wallet-market-shelves', 120],
-    queryFn: () =>
-      getMarketShelves({
-        limitPerShelf: 120,
-      }),
-    staleTime: 60_000,
-    refetchInterval: 90_000,
-    refetchOnWindowFocus: true,
-  });
-
   const portfolioData = data ?? cachedPortfolio;
   const totalBalance = portfolioData?.totalUsd ?? 0;
   const supportedChains = appConfig?.supportedChains ?? [];
@@ -333,26 +296,6 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
       setCachedPortfolio(value);
     });
   }, [data, walletAddress]);
-
-  const marketChangeLookup = useMemo(() => {
-    const byChainAssetId = new Map<string, TopMarketAsset>();
-    const bySymbol = new Map<string, TopMarketAsset[]>();
-    for (const asset of (shelfData ?? []).flatMap((shelf) => shelf.assets ?? [])) {
-      const chainAssetId = normalizeChainAssetId(asset.chain_asset_id ?? buildChainAssetId(asset.chain, asset.contract));
-      if (chainAssetId && !byChainAssetId.has(chainAssetId)) {
-        byChainAssetId.set(chainAssetId, asset);
-      }
-      const symbol = (asset.symbol ?? '').trim().toUpperCase();
-      if (!symbol) continue;
-      const bucket = bySymbol.get(symbol);
-      if (bucket) {
-        bucket.push(asset);
-      } else {
-        bySymbol.set(symbol, [asset]);
-      }
-    }
-    return { byChainAssetId, bySymbol };
-  }, [shelfData]);
 
   const holdings = useMemo<WalletHoldingListItem[]>(() => {
     if (!portfolioData) {
@@ -391,9 +334,6 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           const chainAssetId = normalizeChainAssetId(
             primary.chain_asset_id ?? buildChainAssetId(primary.market_chain ?? primary.chain, primary.contract_key ?? primary.address),
           );
-          const matchedMarketAsset =
-            (chainAssetId ? marketChangeLookup.byChainAssetId.get(chainAssetId) : undefined)
-            ?? pickPreferredSymbolAsset(marketChangeLookup.bySymbol.get(symbol) ?? [], primary.market_chain ?? primary.chain ?? null);
           const totalAmount = variants.reduce(
             (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
             0,
@@ -415,7 +355,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
               ),
               valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
               amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
-              priceChangePct: matchedMarketAsset?.price_change_percentage_24h ?? null,
+              priceChangePct: null as number | null,
               transferAsset: primary,
             } satisfies WalletHoldingListItem,
           ];
@@ -441,11 +381,11 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     return Array.from(grouped.values())
       .sort((a, b) => b.totalValueUsd - a.totalValueUsd)
       .slice(0, 10)
-      .map((group) => {
+      .flatMap((group) => {
         const variants = [...group.variants].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
         const primary = variants[0];
         if (!primary) {
-          return null;
+          return [];
         }
         const chainLabels = [
           ...new Set(
@@ -469,9 +409,6 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         const chainAssetId = normalizeChainAssetId(
           primary.chain_asset_id ?? buildChainAssetId(primary.chain, primary.address),
         );
-        const matchedMarketAsset =
-          (chainAssetId ? marketChangeLookup.byChainAssetId.get(chainAssetId) : undefined)
-          ?? pickPreferredSymbolAsset(marketChangeLookup.bySymbol.get(symbol) ?? [], primary.chain ?? null);
         const totalAmount = variants.reduce(
           (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
           0,
@@ -490,13 +427,12 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           ),
           valueUsd: group.totalValueUsd,
           amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
-          priceChangePct: matchedMarketAsset?.price_change_percentage_24h ?? null,
+          priceChangePct: null as number | null,
           transferAsset: primary,
         } satisfies WalletHoldingListItem;
       })
-      .filter((item): item is WalletHoldingListItem => Boolean(item))
       .sort((a, b) => b.valueUsd - a.valueUsd);
-  }, [chainNameById, marketChangeLookup.byChainAssetId, marketChangeLookup.bySymbol, portfolioData, t]);
+  }, [chainNameById, portfolioData, t]);
 
   const stableAndCryptos = useMemo(() => {
     const stableHoldings = holdings.filter((asset) => {

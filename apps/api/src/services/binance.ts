@@ -71,6 +71,21 @@ function toFiniteNumber(raw: unknown): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+function normalizeText(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value ? value : null;
+}
+
+function normalizeBinanceIconUrl(raw: unknown): string | null {
+  const value = normalizeText(raw);
+  if (!value) return null;
+  if (value.startsWith('//')) return `https:${value}`;
+  if (value.startsWith('/')) return `${BINANCE_ALPHA_BASE}${value}`;
+  if (/^https?:\/\//i.test(value)) return value;
+  return null;
+}
+
 async function fetchAlphaTokenList(): Promise<BinanceAlphaToken[]> {
   const now = Date.now();
   if (tokenListCache && tokenListCache.expiresAt > now) return tokenListCache.value;
@@ -104,7 +119,7 @@ function mapAlphaTokenToStockItem(token: BinanceAlphaToken): BinanceStockItem {
     symbol: token.symbol,
     stockTicker: ticker,
     name: token.name.replace(/\s*\(Ondo\)\s*$/i, ''),
-    image: token.iconUrl ?? null,
+    image: normalizeBinanceIconUrl(token.iconUrl),
     chain: token.chainName?.toLowerCase() ?? 'bsc',
     contract: token.contractAddress ?? '',
     chainId: token.chainId ?? '',

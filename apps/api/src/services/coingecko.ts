@@ -51,28 +51,6 @@ type ChainMatch = {
   contract: string;
 };
 
-type TokenCatalogRow = {
-  chain_id: number;
-  address: string;
-  symbol: string;
-  name: string | null;
-  source: string;
-  confidence: number | null;
-  updated_at: string | null;
-};
-
-const CHAIN_TO_CHAIN_ID: Record<ChainMatch['chain'], number> = {
-  eth: 1,
-  bnb: 56,
-  base: 8453,
-};
-
-const CHAIN_ID_TO_CHAIN: Record<number, ChainMatch['chain']> = {
-  1: 'eth',
-  56: 'bnb',
-  8453: 'base',
-};
-
 const coinPlatformValueCache = new Map<
   string,
   {
@@ -154,11 +132,6 @@ function parsePlatformsJson(raw: string | null | undefined): Record<string, stri
   } catch {
     return {};
   }
-}
-
-function normalizeNameKey(raw: unknown): string {
-  const value = normalizeText(raw)?.toLowerCase() ?? '';
-  return value.replace(/[^a-z0-9]+/g, '');
 }
 
 function normalizeContractAddress(raw: unknown): string | null {
@@ -263,118 +236,6 @@ function pickNativeChainFallback(
     return { chain: 'bnb', contract: '' };
   }
   return null;
-}
-
-async function resolveChainMatchesFromTokenCatalog(
-  db: D1Database,
-  rows: CoinGeckoMarketRow[],
-  preferredChains: Array<'eth' | 'base' | 'bnb'>,
-): Promise<Map<string, ChainMatch>> {
-  const symbols = [
-    ...new Set(
-      rows
-        .map((row) => normalizeText(row.symbol)?.toUpperCase())
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ];
-  if (symbols.length === 0) return new Map();
-
-  const chainIds = [...new Set(preferredChains.map((chain) => CHAIN_TO_CHAIN_ID[chain]))];
-  if (chainIds.length === 0) return new Map();
-
-  const symbolPlaceholders = symbols.map(() => '?').join(',');
-  const chainPlaceholders = chainIds.map(() => '?').join(',');
-  const sql = `SELECT chain_id, address, symbol, name, source, confidence, updated_at
-    FROM token_catalog
-    WHERE UPPER(symbol) IN (${symbolPlaceholders})
-      AND chain_id IN (${chainPlaceholders})
-      AND source = 'portfolio_api'`;
-
-  let records: TokenCatalogRow[] = [];
-  try {
-    const result = await db
-      .prepare(sql)
-      .bind(...symbols, ...chainIds)
-      .all<TokenCatalogRow>();
-    records = result.results ?? [];
-  } catch {
-    return new Map();
-  }
-
-  const bySymbol = new Map<string, TokenCatalogRow[]>();
-  for (const record of records) {
-    const symbol = normalizeText(record.symbol)?.toUpperCase();
-    if (!symbol) continue;
-    const list = bySymbol.get(symbol);
-    if (list) {
-      list.push(record);
-    } else {
-      bySymbol.set(symbol, [record]);
-    }
-  }
-
-  const chainPriority = new Map(preferredChains.map((chain, index) => [chain, index]));
-  const output = new Map<string, ChainMatch>();
-
-  for (const row of rows) {
-    const coinId = normalizeText(row.id);
-    const symbol = normalizeText(row.symbol)?.toUpperCase();
-    if (!coinId || !symbol) continue;
-
-    const candidates = bySymbol.get(symbol) ?? [];
-    if (candidates.length === 0) continue;
-
-    const rowNameKey = normalizeNameKey(row.name);
-    const strictMatches =
-      rowNameKey.length > 0
-        ? candidates.filter((candidate) => normalizeNameKey(candidate.name) === rowNameKey)
-        : [];
-
-    // If no exact-name match and multiple candidates share this symbol, treat as ambiguous.
-    const scopedCandidates =
-      strictMatches.length > 0 ? strictMatches : candidates.length === 1 ? candidates : [];
-    if (scopedCandidates.length === 0) continue;
-
-    let best: TokenCatalogRow | null = null;
-    for (const candidate of scopedCandidates) {
-      const chain = CHAIN_ID_TO_CHAIN[candidate.chain_id];
-      const address = normalizeText(candidate.address)?.toLowerCase();
-      if (!chain || !address) continue;
-      if (!best) {
-        best = candidate;
-        continue;
-      }
-      const currentPriority = chainPriority.get(chain) ?? Number.MAX_SAFE_INTEGER;
-      const bestChain = CHAIN_ID_TO_CHAIN[best.chain_id];
-      const bestPriority = bestChain != null ? chainPriority.get(bestChain) ?? Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
-      if (currentPriority < bestPriority) {
-        best = candidate;
-        continue;
-      }
-      if (currentPriority > bestPriority) continue;
-
-      const currentConfidence = Number(candidate.confidence ?? 0);
-      const bestConfidence = Number(best.confidence ?? 0);
-      if (currentConfidence > bestConfidence) {
-        best = candidate;
-        continue;
-      }
-      if (currentConfidence < bestConfidence) continue;
-
-      const currentUpdatedAt = normalizeText(candidate.updated_at);
-      const bestUpdatedAt = normalizeText(best.updated_at);
-      if ((currentUpdatedAt ?? '') > (bestUpdatedAt ?? '')) {
-        best = candidate;
-      }
-    }
-
-    if (!best) continue;
-    const chain = CHAIN_ID_TO_CHAIN[best.chain_id];
-    const contract = normalizeText(best.address)?.toLowerCase();
-    if (!chain || !contract) continue;
-    output.set(coinId, { chain, contract });
-  }
-  return output;
 }
 
 async function fetchCoinGeckoJson<T>(env: Bindings, path: string, query?: URLSearchParams): Promise<T> {
@@ -505,28 +366,13 @@ function sortRowsByRankingName(rows: CoinGeckoMarketRow[], name: TopAssetListNam
 
 async function ensureCoinListPlatformSchema(db: D1Database): Promise<void> {
   if (coinListSchemaReady) return;
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS coingecko_coin_platforms (
-        coin_id TEXT PRIMARY KEY,
-        symbol TEXT,
-        name TEXT,
-        platforms_json TEXT NOT NULL DEFAULT '{}',
-        updated_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL
-      )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS coingecko_coin_platform_sync_meta (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        last_sync_at TEXT,
-        total_rows INTEGER NOT NULL DEFAULT 0,
-        changed_rows INTEGER NOT NULL DEFAULT 0
-      )`,
-    )
-    .run();
+  try {
+    await db.prepare('SELECT coin_id FROM coingecko_coin_platforms LIMIT 1').first();
+    await db.prepare('SELECT id FROM coingecko_coin_platform_sync_meta LIMIT 1').first();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`coingecko_platform_schema_missing_run_migrations:${message}`);
+  }
   coinListSchemaReady = true;
 }
 
@@ -900,7 +746,6 @@ export async function fetchCoinGeckoTopMarketAssets(
     coinListPlatformMap = new Map();
   }
 
-  const tokenCatalogMatches = await resolveChainMatchesFromTokenCatalog(env.DB, rows, preferredChains);
   const candidates = rows.slice(0, Math.max(limit * 5, 60));
   const platformCache = new Map<string, Record<string, string | null | undefined> | undefined>();
   const assets: MarketTopAsset[] = [];
@@ -918,13 +763,6 @@ export async function fetchCoinGeckoTopMarketAssets(
             return toMarketTopAsset(row, fromCoinList, start + offset);
           }
         }
-        if (coinId) {
-          const chainFromCatalog = tokenCatalogMatches.get(coinId);
-          if (chainFromCatalog) {
-            return toMarketTopAsset(row, chainFromCatalog, start + offset);
-          }
-        }
-
         const chainFromNative = pickNativeChainFallback(coinId, symbol, preferredChains);
         if (chainFromNative) {
           return toMarketTopAsset(row, chainFromNative, start + offset);

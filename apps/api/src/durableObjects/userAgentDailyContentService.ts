@@ -130,7 +130,7 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     'ready',
   );
 
-  await putArticleMarkdownContent(deps.env, deps.sql, articleId, r2Key, markdown);
+  await putArticleMarkdownContent(deps.env, articleId, r2Key, markdown);
 }
 
 function buildDailyDigestSystemPrompt(language: DailyLanguage): string {

@@ -6,10 +6,10 @@ import {
   getAgentArticles,
   getAgentRecommendations,
   getAgentTodayDaily,
-  getMarketShelves,
+  getCoinDetailsBatch,
   getMarketWatchlist,
   getWalletPortfolio,
-  type TopMarketAsset,
+  type CoinDetail,
   type WalletPortfolioResponse,
   type WatchlistAsset,
 } from '../../api';
@@ -51,20 +51,34 @@ type RecommendationDisplayAsset = {
   contract: string | null;
 };
 
+type WatchlistDisplayAsset = WatchlistAsset & {
+  displaySymbol: string;
+  displayName: string;
+  displayImage: string | null;
+  displayChange24h: number | null;
+};
+
 type WatchlistCategory = 'crypto' | 'perps' | 'stock' | 'prediction';
 
 function isOpenableCryptoWatch(asset: WatchlistAsset): boolean {
   if (asset.watch_type !== 'crypto') return false;
   if (asset.chain.startsWith('watch:')) return false;
-  if (!asset.chain || !asset.contract) return false;
-  if (asset.contract.toLowerCase() === 'native') return false;
-  return /^0x[a-fA-F0-9]{40}$/.test(asset.contract);
+  if (!asset.chain || asset.contract == null) return false;
+  const contract = asset.contract.trim().toLowerCase();
+  if (!contract || contract === 'native') return true;
+  return /^0x[a-f0-9]{40}$/.test(contract);
 }
 
-function pickPreferredSymbolAsset(
-  assets: TopMarketAsset[],
+function normalizeLookupChain(raw: string | null | undefined): string | null {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (!value || value.startsWith('watch:')) return null;
+  return value;
+}
+
+function pickPreferredSymbolDetail(
+  assets: CoinDetail[],
   preferredChain: string | null,
-): TopMarketAsset | undefined {
+): CoinDetail | undefined {
   if (assets.length === 0) return undefined;
   const normalizedPreferred = (preferredChain ?? '').trim().toLowerCase();
   const chainPriority = new Map<string, number>([
@@ -75,11 +89,7 @@ function pickPreferredSymbolAsset(
   const sorted = [...assets].sort((a, b) => {
     const aRank = chainPriority.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
     const bRank = chainPriority.get((b.chain ?? '').trim().toLowerCase()) ?? 9;
-    if (aRank !== bRank) return aRank - bRank;
-    const aMcapRank = Number(a.market_cap_rank ?? Number.POSITIVE_INFINITY);
-    const bMcapRank = Number(b.market_cap_rank ?? Number.POSITIVE_INFINITY);
-    if (aMcapRank !== bMcapRank) return aMcapRank - bMcapRank;
-    return Number(b.market_cap ?? 0) - Number(a.market_cap ?? 0);
+    return aRank - bRank;
   });
   if (!normalizedPreferred) return sorted[0];
   return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
@@ -138,12 +148,35 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     refetchOnWindowFocus: true,
   });
 
-  const { data: shelfData, isLoading: isShelfLoading } = useQuery({
-    queryKey: ['market-shelves', 10],
-    queryFn: () =>
-      getMarketShelves({
-        limitPerShelf: 10,
-      }),
+  const detailLookups = useMemo(() => {
+    const output: Array<{ chain: string; contract: string }> = [];
+    const seen = new Set<string>();
+    const append = (chainRaw: string | null | undefined, contractRaw: string | null | undefined) => {
+      const chain = normalizeLookupChain(chainRaw);
+      if (!chain) return;
+      const contract = (contractRaw ?? '').trim().toLowerCase();
+      const key = buildChainAssetId(chain, contract);
+      if (seen.has(key)) return;
+      seen.add(key);
+      output.push({ chain, contract });
+    };
+
+    for (const asset of watchlistData?.assets ?? []) {
+      if (asset.watch_type !== 'crypto') continue;
+      append(asset.chain, asset.contract);
+    }
+
+    for (const item of (recommendationsData?.recommendations ?? []).slice(0, 5)) {
+      append(item.asset?.chain ?? null, item.asset?.contract ?? null);
+    }
+
+    return output.slice(0, 100);
+  }, [recommendationsData?.recommendations, watchlistData?.assets]);
+
+  const { data: tokenDetailBatch, isLoading: isTokenDetailLoading } = useQuery({
+    queryKey: ['home-token-details', detailLookups.map((item) => buildChainAssetId(item.chain, item.contract)).join(',')],
+    queryFn: () => getCoinDetailsBatch(detailLookups),
+    enabled: detailLookups.length > 0,
     staleTime: 60_000,
     refetchInterval: 90_000,
     refetchOnWindowFocus: true,
@@ -170,36 +203,40 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     refetchOnWindowFocus: true,
   });
 
-  const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
-    const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
-    const marketAssets = (shelfData ?? []).flatMap((shelf) => shelf.assets);
-    const byChainAssetId = new Map<string, TopMarketAsset>();
-    const bySymbol = new Map<string, TopMarketAsset[]>();
-
-    for (const asset of marketAssets) {
-      const chainAssetId = asset.chain_asset_id || buildChainAssetId(asset.chain, asset.contract);
-      if (!byChainAssetId.has(chainAssetId)) byChainAssetId.set(chainAssetId, asset);
-
-      const symbol = (asset.symbol ?? '').trim().toUpperCase();
+  const tokenDetailLookup = useMemo(() => {
+    const byChainAssetId = new Map<string, CoinDetail>();
+    const bySymbol = new Map<string, CoinDetail[]>();
+    for (const item of tokenDetailBatch ?? []) {
+      const detail = item.detail;
+      if (!detail) continue;
+      const chainAssetId = (detail.chain_asset_id || buildChainAssetId(detail.chain, detail.contract)).trim().toLowerCase();
+      if (chainAssetId && !byChainAssetId.has(chainAssetId)) byChainAssetId.set(chainAssetId, detail);
+      const symbol = (detail.symbol ?? '').trim().toUpperCase();
       if (!symbol) continue;
       const bucket = bySymbol.get(symbol);
       if (bucket) {
-        bucket.push(asset);
+        bucket.push(detail);
       } else {
-        bySymbol.set(symbol, [asset]);
+        bySymbol.set(symbol, [detail]);
       }
     }
+    return { byChainAssetId, bySymbol };
+  }, [tokenDetailBatch]);
+
+  const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
+    const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
+    const { byChainAssetId, bySymbol } = tokenDetailLookup;
 
     return recommended
       .map((item) => {
         const assetMeta = item.asset;
         const symbol = (assetMeta?.symbol ?? item.title ?? '').trim().toUpperCase();
-        const chain = (assetMeta?.chain ?? '').trim().toLowerCase();
+        const chain = normalizeLookupChain(assetMeta?.chain ?? null);
         const contract = (assetMeta?.contract ?? '').trim().toLowerCase();
         const exactKey = chain ? buildChainAssetId(chain, contract) : '';
         const matched =
           (exactKey ? byChainAssetId.get(exactKey) : undefined)
-          ?? (symbol ? pickPreferredSymbolAsset(bySymbol.get(symbol) ?? [], chain || null) : undefined);
+          ?? (symbol ? pickPreferredSymbolDetail(bySymbol.get(symbol) ?? [], chain || null) : undefined);
 
         const displaySymbol = (matched?.symbol ?? symbol ?? '').toUpperCase();
         const displayName = matched?.name ?? assetMeta?.name ?? item.title ?? displaySymbol;
@@ -208,16 +245,41 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
           symbol: displaySymbol,
           name: displayName,
           image: matched?.image ?? assetMeta?.image ?? null,
-          priceChangePct: matched?.price_change_percentage_24h ?? assetMeta?.price_change_percentage_24h ?? null,
-          chain: matched?.chain ?? assetMeta?.chain ?? null,
-          contract: matched?.contract ?? assetMeta?.contract ?? null,
+          priceChangePct: matched?.priceChange24h ?? assetMeta?.price_change_percentage_24h ?? null,
+          chain: matched?.chain ?? chain ?? null,
+          contract: matched?.contract ?? (chain ? contract : null),
         };
       })
       .filter((item) => Boolean(item.symbol || item.name));
-  }, [recommendationsData, shelfData]);
-  const filteredWatchlist = useMemo(() => {
-    return (watchlistData?.assets ?? []).filter((asset) => asset.watch_type === watchlistCategory);
-  }, [watchlistCategory, watchlistData?.assets]);
+  }, [recommendationsData, tokenDetailLookup]);
+  const watchlistItems = useMemo<WatchlistDisplayAsset[]>(() => {
+    const { byChainAssetId, bySymbol } = tokenDetailLookup;
+    return (watchlistData?.assets ?? [])
+      .filter((asset) => asset.watch_type === watchlistCategory)
+      .map((asset) => {
+        const rawSymbol = (asset.symbol ?? '').trim().toUpperCase();
+        const chain = normalizeLookupChain(asset.chain);
+        const contract = (asset.contract ?? '').trim().toLowerCase();
+        const exactKey = chain ? buildChainAssetId(chain, contract) : '';
+        const matched =
+          (exactKey ? byChainAssetId.get(exactKey) : undefined)
+          ?? (rawSymbol ? pickPreferredSymbolDetail(bySymbol.get(rawSymbol) ?? [], chain) : undefined);
+
+        const displaySymbol = (rawSymbol || matched?.symbol || '').trim().toUpperCase();
+        const rawName = (asset.name ?? '').trim();
+        const displayName = rawName && rawName.toUpperCase() !== displaySymbol
+          ? rawName
+          : ((matched?.name ?? rawName) || displaySymbol);
+
+        return {
+          ...asset,
+          displaySymbol,
+          displayName,
+          displayImage: asset.image ?? matched?.image ?? null,
+          displayChange24h: asset.change_24h ?? matched?.priceChange24h ?? null,
+        };
+      });
+  }, [tokenDetailLookup, watchlistCategory, watchlistData?.assets]);
   const daily = dailyToday?.article ?? null;
   const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
   const topics = topicData?.articles ?? [];
@@ -225,8 +287,8 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const totalBalance = resolvedPortfolio?.totalUsd ?? 0;
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
   const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
-  const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isShelfLoading);
-  const shouldShowWatchlistSkeleton = filteredWatchlist.length === 0 && isWatchlistLoading;
+  const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isTokenDetailLoading);
+  const shouldShowWatchlistSkeleton = watchlistItems.length === 0 && isWatchlistLoading;
   const dailyArticleToOpen = daily ?? lastReadyDaily;
 
   const dailySummary = daily
@@ -346,30 +408,30 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
               ))}
             </>
           )}
-          {!shouldShowWatchlistSkeleton && filteredWatchlist.length === 0 && (
+          {!shouldShowWatchlistSkeleton && watchlistItems.length === 0 && (
             <p className="m-0 text-base text-base-content/70">{t('home.watchlistEmpty')}</p>
           )}
-          {filteredWatchlist.map((asset) => {
+          {watchlistItems.map((asset) => {
             const content = (
               <AssetListItem
                 className="bg-base-100 py-3"
                 leftIcon={
-                  asset.image ? (
+                  asset.displayImage ? (
                     <CachedIconImage
-                      src={asset.image}
-                      alt={asset.symbol}
+                      src={asset.displayImage}
+                      alt={asset.displaySymbol}
                       className="h-10 w-10 rounded-full bg-base-300 object-cover"
                       loading="lazy"
                     />
                   ) : (
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                      {getRecommendationInitial(asset.symbol || asset.name)}
+                      {getRecommendationInitial(asset.displaySymbol || asset.displayName)}
                     </div>
                   )
                 }
-                leftPrimary={(asset.symbol ?? '').toUpperCase()}
-                leftSecondary={asset.name}
-                rightSecondary={formatPct(asset.change_24h)}
+                leftPrimary={asset.displaySymbol}
+                leftSecondary={asset.displayName}
+                rightSecondary={formatPct(asset.displayChange24h)}
               />
             );
 
