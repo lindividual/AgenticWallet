@@ -721,13 +721,43 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
     const symbolValue = this.normalizeWatchSymbol(input.symbol);
     const nameValue = this.normalizeLabel(input.name, 80);
+    const existing = this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          user_id,
+          watch_type,
+          item_id,
+          chain,
+          contract,
+          symbol,
+          name,
+          image,
+          source,
+          change_24h,
+          external_url,
+          created_at,
+          updated_at
+         FROM user_watchlist_assets
+         WHERE user_id = ?
+           AND chain = ?
+           AND contract = ?
+         LIMIT 1`,
+        userId,
+        chain,
+        contract,
+      )
+      .toArray()[0] as WatchlistAssetRow | undefined;
+
     const symbol = symbolValue
+      ?? existing?.symbol
       ?? (nameValue ? nameValue.slice(0, 24).toUpperCase() : contract.slice(0, 24).toUpperCase());
-    const name = nameValue ?? symbol;
-    const image = this.normalizeOptional(input.image, 512);
-    const source = this.normalizeOptional(input.source, 64);
-    const externalUrl = this.normalizeOptional(input.externalUrl, 1024);
-    const change24h = this.normalizeWatchChange(input.change24h);
+    const name = nameValue ?? existing?.name ?? symbol;
+    const image = this.normalizeOptional(input.image, 512) ?? existing?.image ?? null;
+    const source = this.normalizeOptional(input.source, 64) ?? existing?.source ?? null;
+    const externalUrl = this.normalizeOptional(input.externalUrl, 1024) ?? existing?.external_url ?? null;
+    const change24h = this.normalizeWatchChange(input.change24h) ?? existing?.change_24h ?? null;
+    const resolvedItemId = itemId ?? existing?.item_id ?? null;
     const now = new Date().toISOString();
 
     this.ctx.storage.sql.exec(
@@ -760,7 +790,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       crypto.randomUUID(),
       userId,
       watchType,
-      itemId,
+      resolvedItemId,
       chain,
       contract,
       symbol,

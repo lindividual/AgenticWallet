@@ -2,7 +2,9 @@ import type { Bindings } from '../types';
 import { fetchBitgetTopMarketAssets, type MarketTopAsset } from './bitgetWallet';
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
 import { fetchBinanceStockTokens, fetchBinanceStockDetail, fetchBinanceStockKlines } from './binance';
-import { getSupportedMarketChains } from '../config/appConfig';
+import { getChainIdByMarketChain, getSupportedMarketChains } from '../config/appConfig';
+import { normalizeMarketChain } from './assetIdentity';
+import { resolveBestTokenCatalogLogosBatch } from './market';
 
 export type TradeBrowseMarketItem = {
   id: string;
@@ -208,6 +210,45 @@ function normalizeTimestampSeconds(raw: unknown): number | null {
   return Math.round(value);
 }
 
+function normalizeContractAddress(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  if (!value) return null;
+  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
+  return value;
+}
+
+async function applyCanonicalCryptoItemLogos(
+  env: Bindings,
+  items: TradeBrowseMarketItem[],
+): Promise<TradeBrowseMarketItem[]> {
+  if (items.length === 0) return items;
+  const lookups: Array<{ chainId: number; address: string }> = [];
+  for (const item of items) {
+    const chainId = item.chain ? getChainIdByMarketChain(item.chain) : null;
+    const contract = normalizeContractAddress(item.contract);
+    if (!Number.isFinite(chainId) || !contract) continue;
+    lookups.push({
+      chainId: chainId as number,
+      address: contract,
+    });
+  }
+  if (lookups.length === 0) return items;
+  const logos = await resolveBestTokenCatalogLogosBatch(env.DB, lookups);
+  if (logos.size === 0) return items;
+
+  return items.map((item) => {
+    const chainId = item.chain ? getChainIdByMarketChain(item.chain) : null;
+    const contract = normalizeContractAddress(item.contract);
+    if (!Number.isFinite(chainId) || !contract) return item;
+    const canonical = logos.get(`${chainId}:${contract}`);
+    if (!canonical) return item;
+    return {
+      ...item,
+      image: canonical,
+    };
+  });
+}
+
 function buildAssetUrl(chain: string, contract: string): string | null {
   const normalizedChain = normalizeText(chain)?.toLowerCase();
   const normalizedContract = normalizeText(contract)?.toLowerCase();
@@ -272,20 +313,22 @@ async function fetchTopMovers(env: Bindings): Promise<TradeBrowseMarketItem[]> {
       limit: 9,
       chains,
     });
-    return assets
+    const items = assets
       .filter((asset) => !isStableLikeAsset(asset))
       .slice(0, 9)
       .map((asset) => mapTopAssetToBrowseItem(asset, 'bitget'));
+    return applyCanonicalCryptoItemLogos(env, items);
   } catch {
     const fallback = await fetchCoinGeckoTopMarketAssets(env, {
       name: 'topGainers',
       limit: 9,
       chains,
     });
-    return fallback
+    const items = fallback
       .filter((asset) => !isStableLikeAsset(asset))
       .slice(0, 9)
       .map((asset) => mapTopAssetToBrowseItem(asset, 'coingecko'));
+    return applyCanonicalCryptoItemLogos(env, items);
   }
 }
 
@@ -296,22 +339,66 @@ async function fetchTrendings(env: Bindings): Promise<TradeBrowseMarketItem[]> {
     limit: 36,
     chains,
   });
-  return assets
+  const items = assets
     .filter((asset) => !isStableLikeAsset(asset))
     .slice(0, 16)
     .map((asset) => mapTopAssetToBrowseItem(asset, 'coingecko'));
+  return applyCanonicalCryptoItemLogos(env, items);
 }
 
-async function fetchStocks(_env: Bindings): Promise<TradeBrowseMarketItem[]> {
+async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
   try {
-    const items = await fetchBinanceStockTokens(15);
-    return items.slice(0, 10).map((item) => ({
+    const items = (await fetchBinanceStockTokens(15)).slice(0, 10);
+    const stockLookupBySymbol = new Map<string, string>();
+    if (items.some((item) => !normalizeText(item.image))) {
+      try {
+        const marketAssets = await fetchCoinGeckoTopMarketAssets(env, {
+          name: 'marketCap',
+          limit: 200,
+          chains: getSupportedMarketChains(),
+        });
+        for (const asset of marketAssets) {
+          const symbol = normalizeText(asset.symbol)?.toUpperCase();
+          const image = normalizeText(asset.image);
+          if (!symbol || !image || stockLookupBySymbol.has(symbol)) continue;
+          stockLookupBySymbol.set(symbol, image);
+        }
+      } catch {
+        // Ignore fallback source failures.
+      }
+    }
+
+    const catalogLookups: Array<{ chainId: number; address: string }> = [];
+    for (const item of items) {
+      const chain = normalizeMarketChain(item.chain);
+      const chainId = getChainIdByMarketChain(chain);
+      const contract = normalizeContractAddress(item.contract);
+      if (!Number.isFinite(chainId) || !contract) continue;
+      catalogLookups.push({
+        chainId: chainId as number,
+        address: contract,
+      });
+    }
+    const catalogLogos = await resolveBestTokenCatalogLogosBatch(env.DB, catalogLookups);
+
+    return items.map((item) => {
+      const normalizedChain = normalizeMarketChain(item.chain);
+      const normalizedContract = normalizeText(item.contract);
+      const chainId = getChainIdByMarketChain(normalizedChain);
+      const contract = normalizeContractAddress(normalizedContract);
+      const catalogLogo =
+        Number.isFinite(chainId) && contract ? catalogLogos.get(`${chainId}:${contract}`) ?? null : null;
+      const stockSymbol = normalizeText(item.stockTicker)?.toUpperCase() ?? '';
+      const symbol = normalizeText(item.symbol)?.toUpperCase() ?? '';
+      const coingeckoLogo = stockLookupBySymbol.get(stockSymbol) ?? stockLookupBySymbol.get(symbol) ?? null;
+
+      return {
       id: item.id,
       symbol: item.stockTicker,
       name: item.name,
-      image: item.image,
-      chain: item.chain || null,
-      contract: item.contract || null,
+      image: catalogLogo ?? normalizeText(item.image) ?? coingeckoLogo,
+      chain: normalizedChain || null,
+      contract: normalizedContract ?? null,
       currentPrice: item.currentPrice,
       change24h: item.change24h,
       volume24h: item.volume24h,
@@ -319,7 +406,8 @@ async function fetchStocks(_env: Bindings): Promise<TradeBrowseMarketItem[]> {
       metaLabel: item.marketCap ? 'MCap' : null,
       metaValue: item.marketCap,
       externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
-    }));
+    };
+    });
   } catch {
     return [];
   }

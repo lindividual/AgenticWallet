@@ -1,10 +1,12 @@
 import type { Bindings } from '../types';
+import { getChainIdByMarketChain } from '../config/appConfig';
 import {
   fetchBitgetTopMarketAssets,
   type MarketTopAsset,
   type TopAssetListName,
 } from './bitgetWallet';
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
+import { resolveBestTokenCatalogLogosBatch } from './market';
 
 export type TopAssetSource = 'auto' | 'coingecko' | 'bitget';
 
@@ -19,6 +21,50 @@ type FetchTopAssetOptions = {
 const TOP_ASSETS_CACHE_TTL_MS = 20_000;
 const topAssetsValueCache = new Map<string, { expiresAt: number; assets: MarketTopAsset[] }>();
 const topAssetsInFlightCache = new Map<string, Promise<MarketTopAsset[]>>();
+
+function normalizeText(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value ? value : null;
+}
+
+function normalizeContractAddress(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  if (!value) return null;
+  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
+  return value;
+}
+
+async function applyCanonicalLogosFromTokenCatalog(env: Bindings, assets: MarketTopAsset[]): Promise<MarketTopAsset[]> {
+  if (assets.length === 0) return assets;
+  const lookups: Array<{ chainId: number; address: string }> = [];
+
+  for (const asset of assets) {
+    const chainId = getChainIdByMarketChain(asset.chain);
+    const contract = normalizeContractAddress(asset.contract);
+    if (!Number.isFinite(chainId) || !contract) continue;
+    lookups.push({
+      chainId: chainId as number,
+      address: contract,
+    });
+  }
+
+  if (lookups.length === 0) return assets;
+  const canonicalLogos = await resolveBestTokenCatalogLogosBatch(env.DB, lookups);
+  if (canonicalLogos.size === 0) return assets;
+
+  return assets.map((asset) => {
+    const chainId = getChainIdByMarketChain(asset.chain);
+    const contract = normalizeContractAddress(asset.contract);
+    if (!Number.isFinite(chainId) || !contract) return asset;
+    const canonical = canonicalLogos.get(`${chainId}:${contract}`);
+    if (!canonical) return asset;
+    return {
+      ...asset,
+      image: canonical,
+    };
+  });
+}
 
 function supportsBitgetListName(name: TopAssetListName | undefined): boolean {
   return name === 'topGainers' || name === 'topLosers' || name == null;
@@ -105,7 +151,10 @@ export async function fetchTopMarketAssets(env: Bindings, options?: FetchTopAsse
       if (!supportsBitgetListName(name)) {
         throw new Error(`bitget_unsupported_list_name:${name}`);
       }
-      const assets = await fetchBitgetTopMarketAssets(env, { name, limit, chains });
+      const assets = await applyCanonicalLogosFromTokenCatalog(
+        env,
+        await fetchBitgetTopMarketAssets(env, { name, limit, chains }),
+      );
       topAssetsValueCache.set(cacheKey, {
         expiresAt: Date.now() + TOP_ASSETS_CACHE_TTL_MS,
         assets,
@@ -114,7 +163,10 @@ export async function fetchTopMarketAssets(env: Bindings, options?: FetchTopAsse
     }
 
     if (source === 'coingecko') {
-      const coingeckoAssets = await fetchCoinGeckoTopMarketAssets(env, { name, limit, chains, category });
+      const coingeckoAssets = await applyCanonicalLogosFromTokenCatalog(
+        env,
+        await fetchCoinGeckoTopMarketAssets(env, { name, limit, chains, category }),
+      );
       if (coingeckoAssets.length > 0) {
         topAssetsValueCache.set(cacheKey, {
           expiresAt: Date.now() + TOP_ASSETS_CACHE_TTL_MS,
@@ -123,7 +175,10 @@ export async function fetchTopMarketAssets(env: Bindings, options?: FetchTopAsse
         return coingeckoAssets;
       }
       if (!supportsBitgetListName(name)) return [];
-      const assets = await fetchBitgetTopMarketAssets(env, { name, limit, chains });
+      const assets = await applyCanonicalLogosFromTokenCatalog(
+        env,
+        await fetchBitgetTopMarketAssets(env, { name, limit, chains }),
+      );
       topAssetsValueCache.set(cacheKey, {
         expiresAt: Date.now() + TOP_ASSETS_CACHE_TTL_MS,
         assets,
@@ -134,7 +189,10 @@ export async function fetchTopMarketAssets(env: Bindings, options?: FetchTopAsse
     let coingeckoError: Error | null = null;
     let coingeckoAssets: MarketTopAsset[] = [];
     try {
-      coingeckoAssets = await fetchCoinGeckoTopMarketAssets(env, { name, limit, chains, category });
+      coingeckoAssets = await applyCanonicalLogosFromTokenCatalog(
+        env,
+        await fetchCoinGeckoTopMarketAssets(env, { name, limit, chains, category }),
+      );
     } catch (error) {
       coingeckoError = error instanceof Error ? error : new Error('coingecko_fetch_failed');
     }
@@ -160,7 +218,10 @@ export async function fetchTopMarketAssets(env: Bindings, options?: FetchTopAsse
       return [];
     }
 
-    const bitgetAssets = await fetchBitgetTopMarketAssets(env, { name, limit, chains });
+    const bitgetAssets = await applyCanonicalLogosFromTokenCatalog(
+      env,
+      await fetchBitgetTopMarketAssets(env, { name, limit, chains }),
+    );
     const merged = dedupeAssets([...coingeckoAssets, ...bitgetAssets]);
     if (merged.length > 0) {
       const assets = merged.slice(0, limit);

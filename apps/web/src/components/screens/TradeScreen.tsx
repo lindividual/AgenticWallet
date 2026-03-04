@@ -16,6 +16,7 @@ import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 import { TokenSearchModal } from '../TokenSearchModal';
 import { type TradeMarketDetailType } from '../../utils/tradeMarketDetail';
+import { buildChainAssetId } from '../../utils/assetIdentity';
 
 type TradeScreenProps = {
   onOpenToken: (token: TopMarketAsset, shelfId: string) => void;
@@ -54,14 +55,14 @@ function getLabelInitial(symbol: string, name: string): string {
 
 function canOpenToken(item: TradeBrowseMarketItem): item is TradeBrowseMarketItem & { chain: string; contract: string } {
   const chain = item.chain?.trim();
-  const contract = item.contract?.trim();
-  if (!chain || !contract) return false;
-  if (contract.toLowerCase() === 'native') return false;
-  return /^0x[a-fA-F0-9]{40}$/.test(contract);
+  const contract = item.contract?.trim() ?? '';
+  if (!chain) return false;
+  if (!contract || contract.toLowerCase() === 'native') return true;
+  return /^0x[a-f0-9]{40}$/.test(contract.toLowerCase());
 }
 
 function toTopMarketAsset(item: TradeBrowseMarketItem & { chain: string; contract: string }): TopMarketAsset {
-  const chainAssetId = `${item.chain}:${item.contract.toLowerCase()}`;
+  const chainAssetId = buildChainAssetId(item.chain, item.contract);
   return {
     id: item.id,
     asset_id: item.id,

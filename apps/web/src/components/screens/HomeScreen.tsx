@@ -51,14 +51,22 @@ type RecommendationDisplayAsset = {
   contract: string | null;
 };
 
+type WatchlistDisplayAsset = WatchlistAsset & {
+  displaySymbol: string;
+  displayName: string;
+  displayImage: string | null;
+  displayChange24h: number | null;
+};
+
 type WatchlistCategory = 'crypto' | 'perps' | 'stock' | 'prediction';
 
 function isOpenableCryptoWatch(asset: WatchlistAsset): boolean {
   if (asset.watch_type !== 'crypto') return false;
   if (asset.chain.startsWith('watch:')) return false;
-  if (!asset.chain || !asset.contract) return false;
-  if (asset.contract.toLowerCase() === 'native') return false;
-  return /^0x[a-fA-F0-9]{40}$/.test(asset.contract);
+  if (!asset.chain || asset.contract == null) return false;
+  const contract = asset.contract.trim().toLowerCase();
+  if (!contract || contract === 'native') return true;
+  return /^0x[a-f0-9]{40}$/.test(contract);
 }
 
 function pickPreferredSymbolAsset(
@@ -170,8 +178,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     refetchOnWindowFocus: true,
   });
 
-  const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
-    const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
+  const marketLookup = useMemo(() => {
     const marketAssets = (shelfData ?? []).flatMap((shelf) => shelf.assets);
     const byChainAssetId = new Map<string, TopMarketAsset>();
     const bySymbol = new Map<string, TopMarketAsset[]>();
@@ -189,6 +196,13 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         bySymbol.set(symbol, [asset]);
       }
     }
+
+    return { byChainAssetId, bySymbol };
+  }, [shelfData]);
+
+  const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
+    const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
+    const { byChainAssetId, bySymbol } = marketLookup;
 
     return recommended
       .map((item) => {
@@ -214,10 +228,36 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         };
       })
       .filter((item) => Boolean(item.symbol || item.name));
-  }, [recommendationsData, shelfData]);
-  const filteredWatchlist = useMemo(() => {
-    return (watchlistData?.assets ?? []).filter((asset) => asset.watch_type === watchlistCategory);
-  }, [watchlistCategory, watchlistData?.assets]);
+  }, [recommendationsData, marketLookup]);
+  const watchlistItems = useMemo<WatchlistDisplayAsset[]>(() => {
+    const { byChainAssetId, bySymbol } = marketLookup;
+    return (watchlistData?.assets ?? [])
+      .filter((asset) => asset.watch_type === watchlistCategory)
+      .map((asset) => {
+        const rawSymbol = (asset.symbol ?? '').trim().toUpperCase();
+        const chain = (asset.chain ?? '').trim().toLowerCase();
+        const contract = (asset.contract ?? '').trim().toLowerCase();
+        const canMatchChainAsset = Boolean(chain) && !chain.startsWith('watch:');
+        const exactKey = canMatchChainAsset ? buildChainAssetId(chain, contract) : '';
+        const matched =
+          (exactKey ? byChainAssetId.get(exactKey) : undefined)
+          ?? (rawSymbol ? pickPreferredSymbolAsset(bySymbol.get(rawSymbol) ?? [], canMatchChainAsset ? chain : null) : undefined);
+
+        const displaySymbol = (rawSymbol || matched?.symbol || '').trim().toUpperCase();
+        const rawName = (asset.name ?? '').trim();
+        const displayName = rawName && rawName.toUpperCase() !== displaySymbol
+          ? rawName
+          : ((matched?.name ?? rawName) || displaySymbol);
+
+        return {
+          ...asset,
+          displaySymbol,
+          displayName,
+          displayImage: asset.image ?? matched?.image ?? null,
+          displayChange24h: asset.change_24h ?? matched?.price_change_percentage_24h ?? null,
+        };
+      });
+  }, [watchlistCategory, watchlistData?.assets, marketLookup]);
   const daily = dailyToday?.article ?? null;
   const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
   const topics = topicData?.articles ?? [];
@@ -226,7 +266,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
   const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
   const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isShelfLoading);
-  const shouldShowWatchlistSkeleton = filteredWatchlist.length === 0 && isWatchlistLoading;
+  const shouldShowWatchlistSkeleton = watchlistItems.length === 0 && isWatchlistLoading;
   const dailyArticleToOpen = daily ?? lastReadyDaily;
 
   const dailySummary = daily
@@ -346,30 +386,30 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
               ))}
             </>
           )}
-          {!shouldShowWatchlistSkeleton && filteredWatchlist.length === 0 && (
+          {!shouldShowWatchlistSkeleton && watchlistItems.length === 0 && (
             <p className="m-0 text-base text-base-content/70">{t('home.watchlistEmpty')}</p>
           )}
-          {filteredWatchlist.map((asset) => {
+          {watchlistItems.map((asset) => {
             const content = (
               <AssetListItem
                 className="bg-base-100 py-3"
                 leftIcon={
-                  asset.image ? (
+                  asset.displayImage ? (
                     <CachedIconImage
-                      src={asset.image}
-                      alt={asset.symbol}
+                      src={asset.displayImage}
+                      alt={asset.displaySymbol}
                       className="h-10 w-10 rounded-full bg-base-300 object-cover"
                       loading="lazy"
                     />
                   ) : (
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                      {getRecommendationInitial(asset.symbol || asset.name)}
+                      {getRecommendationInitial(asset.displaySymbol || asset.displayName)}
                     </div>
                   )
                 }
-                leftPrimary={(asset.symbol ?? '').toUpperCase()}
-                leftSecondary={asset.name}
-                rightSecondary={formatPct(asset.change_24h)}
+                leftPrimary={asset.displaySymbol}
+                leftSecondary={asset.displayName}
+                rightSecondary={formatPct(asset.displayChange24h)}
               />
             );
 

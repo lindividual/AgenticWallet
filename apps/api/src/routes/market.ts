@@ -1,7 +1,13 @@
 import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { getChainIdByMarketChain } from '../config/appConfig';
-import { ingestTokenLists, listTokenCatalog, resolveBestTokenCatalogLogo } from '../services/market';
+import {
+  ingestTokenLists,
+  listTokenCatalog,
+  resolveBestTokenCatalogLogo,
+  resolveBestTokenCatalogLogosBatch,
+} from '../services/market';
+import type { BitgetTokenDetail, MarketTopAsset } from '../services/bitgetWallet';
 import { fetchBitgetTokenDetail, fetchBitgetTokenDetails, fetchBitgetTokenKline } from '../services/bitgetWallet';
 import { getCoinGeckoCoinListSyncStatus, syncCoinGeckoCoinListPlatforms } from '../services/coingecko';
 import {
@@ -10,6 +16,7 @@ import {
   normalizeTopAssetSource,
 } from '../services/marketTopAssets';
 import { fetchMarketShelves } from '../services/marketShelves';
+import { normalizeMarketChain } from '../services/assetIdentity';
 import {
   fetchTradeBrowse,
   fetchTradeMarketDetail,
@@ -18,6 +25,83 @@ import {
 } from '../services/tradeBrowse';
 import { searchBinanceTokens } from '../services/binance';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
+
+function normalizeText(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value ? value : null;
+}
+
+function normalizeContractAddress(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  if (!value) return null;
+  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
+  return value;
+}
+
+function isNativeLikeContract(raw: unknown): boolean {
+  const value = normalizeText(raw)?.toLowerCase() ?? '';
+  if (!value || value === 'native') return true;
+  if (value === '0x0000000000000000000000000000000000000000') return true;
+  return false;
+}
+
+function getExpectedNativeSymbol(chain: string): string {
+  const normalized = (chain ?? '').trim().toLowerCase();
+  if (normalized === 'bnb') return 'BNB';
+  return 'ETH';
+}
+
+function mapTopAssetToTokenDetail(asset: MarketTopAsset): BitgetTokenDetail {
+  return {
+    asset_id: asset.asset_id,
+    chain_asset_id: asset.chain_asset_id,
+    chain: asset.chain,
+    contract: asset.contract,
+    symbol: asset.symbol,
+    name: asset.name,
+    image: asset.image ?? null,
+    priceChange24h: asset.price_change_percentage_24h ?? null,
+    currentPriceUsd: asset.current_price ?? null,
+    holders: null,
+    totalSupply: null,
+    liquidityUsd: null,
+    top10HolderPercent: null,
+    devHolderPercent: null,
+    lockLpPercent: null,
+  };
+}
+
+async function resolveCanonicalLogoForDetail(
+  env: AppEnv['Bindings'],
+  detail: BitgetTokenDetail,
+): Promise<string | null> {
+  const chainId = getChainIdByMarketChain(detail.chain);
+  const contract = normalizeContractAddress(detail.contract);
+  if (!Number.isFinite(chainId) || !contract) return null;
+  const logo = await resolveBestTokenCatalogLogo(env.DB, chainId as number, contract);
+  return logo ?? null;
+}
+
+async function buildNativeTokenDetailFallback(
+  env: AppEnv['Bindings'],
+  chain: string,
+): Promise<BitgetTokenDetail | null> {
+  const assets = await fetchTopMarketAssets(env, {
+    source: 'coingecko',
+    name: 'marketCap',
+    limit: 120,
+    chains: [chain],
+  });
+  const normalizedChain = chain.trim().toLowerCase();
+  const expectedSymbol = getExpectedNativeSymbol(normalizedChain);
+  const primary =
+    assets.find((asset) => asset.chain === normalizedChain && isNativeLikeContract(asset.contract))
+    ?? assets.find((asset) => (asset.symbol ?? '').trim().toUpperCase() === expectedSymbol && isNativeLikeContract(asset.contract))
+    ?? null;
+  if (!primary) return null;
+  return mapTopAssetToTokenDetail(primary);
+}
 
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/market/tokens/ingest/run', async (c) => {
@@ -354,25 +438,35 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json({ error: 'invalid_chain' }, 400);
     }
 
+    if (isNativeLikeContract(contract)) {
+      try {
+        const fallback = await buildNativeTokenDetailFallback(c.env, chain);
+        if (fallback) {
+          const canonicalLogo = await resolveCanonicalLogoForDetail(c.env, fallback);
+          return c.json({
+            detail: {
+              ...fallback,
+              image: canonicalLogo ?? fallback.image,
+            },
+          });
+        }
+      } catch {
+        // Fall through to Bitget lookup if native fallback fails.
+      }
+    }
+
     try {
       const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
       if (!detail) {
         return c.json({ error: 'token_not_found' }, 404);
       }
-      let enrichedDetail = detail;
-      if (!enrichedDetail.image && enrichedDetail.contract) {
-        const chainId = getChainIdByMarketChain(enrichedDetail.chain);
-        if (chainId != null) {
-          const fallbackLogo = await resolveBestTokenCatalogLogo(c.env.DB, chainId, enrichedDetail.contract);
-          if (fallbackLogo) {
-            enrichedDetail = {
-              ...enrichedDetail,
-              image: fallbackLogo,
-            };
-          }
-        }
-      }
-      return c.json({ detail: enrichedDetail });
+      const canonicalLogo = await resolveCanonicalLogoForDetail(c.env, detail);
+      return c.json({
+        detail: {
+          ...detail,
+          image: canonicalLogo ?? detail.image,
+        },
+      });
     } catch (error) {
       return c.json(
         {
@@ -400,29 +494,38 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
 
     try {
       const details = await fetchBitgetTokenDetails(c.env, tokens);
-      const enriched = await Promise.all(
-        details.map(async (item) => {
-          const detail = item.detail;
-          if (!detail || detail.image || !detail.contract) {
-            return item;
-          }
-          const chainId = getChainIdByMarketChain(detail.chain);
-          if (chainId == null) {
-            return item;
-          }
-          const fallbackLogo = await resolveBestTokenCatalogLogo(c.env.DB, chainId, detail.contract);
-          if (!fallbackLogo) {
-            return item;
-          }
-          return {
-            ...item,
-            detail: {
-              ...detail,
-              image: fallbackLogo,
-            },
-          };
-        }),
-      );
+      const lookups: Array<{ chainId: number; address: string }> = [];
+      for (const item of details) {
+        const detail = item.detail;
+        if (!detail) continue;
+        const chainId = getChainIdByMarketChain(detail.chain);
+        const contractAddress = normalizeContractAddress(detail.contract);
+        if (!Number.isFinite(chainId) || !contractAddress) continue;
+        lookups.push({
+          chainId: chainId as number,
+          address: contractAddress,
+        });
+      }
+      const logoByKey = await resolveBestTokenCatalogLogosBatch(c.env.DB, lookups);
+
+      const enriched = details.map((item) => {
+        const detail = item.detail;
+        if (!detail) return item;
+        const chainId = getChainIdByMarketChain(detail.chain);
+        const contractAddress = normalizeContractAddress(detail.contract);
+        const logo =
+          Number.isFinite(chainId) && contractAddress
+            ? logoByKey.get(`${chainId}:${contractAddress}`) ?? null
+            : null;
+        if (!logo) return item;
+        return {
+          ...item,
+          detail: {
+            ...detail,
+            image: logo,
+          },
+        };
+      });
       return c.json({ details: enriched });
     } catch (error) {
       return c.json(
@@ -474,11 +577,56 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
 
     try {
       const items = await searchBinanceTokens(q, limit);
+      const logoLookups: Array<{ chainId: number; address: string }> = [];
+      for (const item of items) {
+        const chainId = getChainIdByMarketChain(normalizeMarketChain(item.chain));
+        const contract = normalizeContractAddress(item.contract);
+        if (!Number.isFinite(chainId) || !contract) continue;
+        logoLookups.push({
+          chainId: chainId as number,
+          address: contract,
+        });
+      }
+      const logoByKey = await resolveBestTokenCatalogLogosBatch(c.env.DB, logoLookups);
+
+      const symbolFallbackImage = new Map<string, string>();
+      if (items.some((item) => !normalizeText(item.image))) {
+        try {
+          const fallbackAssets = await fetchTopMarketAssets(c.env, {
+            source: 'coingecko',
+            name: 'marketCap',
+            limit: 200,
+          });
+          for (const asset of fallbackAssets) {
+            const symbol = normalizeText(asset.symbol)?.toUpperCase();
+            const image = normalizeText(asset.image);
+            if (!symbol || !image || symbolFallbackImage.has(symbol)) continue;
+            symbolFallbackImage.set(symbol, image);
+          }
+        } catch {
+          // Ignore fallback source failures for search.
+        }
+      }
+
       const results = items.map((item) => ({
+        ...(function resolveIcon() {
+          const chainId = getChainIdByMarketChain(normalizeMarketChain(item.chain));
+          const contract = normalizeContractAddress(item.contract);
+          const stockTicker = normalizeText(item.stockTicker)?.toUpperCase() ?? '';
+          const symbol = normalizeText(item.symbol)?.toUpperCase() ?? '';
+          const catalogLogo =
+            Number.isFinite(chainId) && contract
+              ? logoByKey.get(`${chainId}:${contract}`) ?? null
+              : null;
+          const image = normalizeText(item.image)
+            ?? symbolFallbackImage.get(stockTicker)
+            ?? symbolFallbackImage.get(symbol)
+            ?? null;
+          return { image: catalogLogo ?? image };
+        })(),
         id: item.id,
         symbol: item.stockTicker,
         name: item.name,
-        image: item.image,
         currentPrice: item.currentPrice,
         change24h: item.change24h,
         volume24h: item.volume24h,
@@ -542,10 +690,10 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
           perps: 'hyperliquid_info_api',
           prediction: 'polymarket_gamma_api',
         },
-        tokenDetail: 'bitget_wallet_tob',
+        tokenDetail: 'native_coingecko_fastpath_else_bitget_wallet_tob',
         klines: 'bitget_wallet_tob',
       },
-      note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Stocks use Binance spot data. Kline and token detail remain from Bitget with Binance fallback.',
+      note: 'Top asset rankings are resolved by CoinGecko first, then fallback to Bitget. Stocks use Binance spot data with icon fallbacks. Token detail uses a native-asset CoinGecko fast path, otherwise Bitget. Kline remains on Bitget.',
     });
   });
 }

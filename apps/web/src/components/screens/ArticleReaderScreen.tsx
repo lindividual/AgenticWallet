@@ -35,7 +35,7 @@ type RelatedAssetPill = {
 const DEFAULT_TOKEN_ROUTE_BY_SYMBOL: Record<string, { chain: string; contract: string; name?: string }> = {
   ETH: {
     chain: 'eth',
-    contract: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+    contract: 'native',
     name: 'Ethereum',
   },
   BTC: {
@@ -55,7 +55,7 @@ const DEFAULT_TOKEN_ROUTE_BY_SYMBOL: Record<string, { chain: string; contract: s
   },
   BNB: {
     chain: 'bnb',
-    contract: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+    contract: 'native',
     name: 'BNB',
   },
   LEO: {
@@ -110,8 +110,11 @@ function formatPct(value: number | null | undefined): string {
   return `${sign}${numeric.toFixed(2)}%`;
 }
 
-function isValidEvmContract(contract: string): boolean {
-  return /^0x[a-f0-9]{40}$/i.test(contract.trim());
+function normalizeRoutableTokenContract(contract: string): string | null {
+  const normalized = contract.trim().toLowerCase();
+  if (!normalized || normalized === 'native') return 'native';
+  if (/^0x[a-f0-9]{40}$/.test(normalized)) return normalized;
+  return null;
 }
 
 function extractRelatedSymbols(tags: string[] | undefined, markdown: string): string[] {
@@ -147,7 +150,7 @@ function extractRelatedSymbols(tags: string[] | undefined, markdown: string): st
 
 function hasTokenRoute(asset: TopMarketAsset | null | undefined): boolean {
   if (!asset) return false;
-  return Boolean(asset.chain?.trim() && asset.contract?.trim());
+  return Boolean(asset.chain?.trim() && normalizeRoutableTokenContract(asset.contract ?? ''));
 }
 
 function shouldPreferAsset(candidate: TopMarketAsset, current: TopMarketAsset): boolean {
@@ -239,10 +242,11 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
       const matched = bySymbol.get(symbol) ?? undefined;
       const marketChain = matched?.chain?.trim() ?? '';
       const marketContract = matched?.contract?.trim() ?? '';
-      const routeFromMarket = marketChain && marketContract && isValidEvmContract(marketContract)
+      const normalizedRouteContract = normalizeRoutableTokenContract(marketContract);
+      const routeFromMarket = marketChain && normalizedRouteContract
         ? {
             chain: marketChain,
-            contract: marketContract.toLowerCase(),
+            contract: normalizedRouteContract,
           }
         : null;
       const fallbackRoute = DEFAULT_TOKEN_ROUTE_BY_SYMBOL[symbol] ?? null;

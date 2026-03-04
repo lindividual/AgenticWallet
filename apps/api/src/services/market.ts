@@ -389,6 +389,54 @@ export async function resolveBestTokenCatalogLogo(
   return normalizeText(result?.logo_uri);
 }
 
+export async function resolveBestTokenCatalogLogosBatch(
+  db: D1Database,
+  entries: Array<{ chainId: number; address: string }>,
+): Promise<Map<string, string>> {
+  const output = new Map<string, string>();
+  const grouped = new Map<number, Set<string>>();
+
+  for (const entry of entries) {
+    const chainId = Number(entry.chainId);
+    const address = normalizeAddress(entry.address);
+    if (!Number.isFinite(chainId) || !address) continue;
+    const bucket = grouped.get(chainId);
+    if (bucket) {
+      bucket.add(address);
+    } else {
+      grouped.set(chainId, new Set([address]));
+    }
+  }
+
+  for (const [chainId, addressesSet] of grouped.entries()) {
+    const addresses = [...addressesSet];
+    if (addresses.length === 0) continue;
+    const placeholders = addresses.map(() => '?').join(',');
+    const rows = await db
+      .prepare(
+        `SELECT address, logo_uri
+         FROM token_catalog
+         WHERE chain_id = ?
+           AND address IN (${placeholders})
+           AND logo_uri IS NOT NULL
+         ORDER BY confidence DESC, updated_at DESC`,
+      )
+      .bind(chainId, ...addresses)
+      .all<{ address: string; logo_uri: string | null }>();
+
+    for (const row of rows.results ?? []) {
+      const address = normalizeAddress(row.address);
+      const logoUri = normalizeText(row.logo_uri);
+      if (!address || !logoUri) continue;
+      const key = `${chainId}:${address}`;
+      if (output.has(key)) continue;
+      output.set(key, logoUri);
+    }
+  }
+
+  return output;
+}
+
 async function hydrateAggregatedAssetCatalogByAssetIds(
   env: Bindings,
   assetIds: string[],
