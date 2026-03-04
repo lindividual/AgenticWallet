@@ -317,7 +317,7 @@ export type TradeBrowseMarketItem = {
   currentPrice: number | null;
   change24h: number | null;
   volume24h: number | null;
-  source: 'bitget' | 'coingecko' | 'hyperliquid';
+  source: 'bitget' | 'coingecko' | 'hyperliquid' | 'binance';
   metaLabel: string | null;
   metaValue: number | null;
   externalUrl: string | null;
@@ -697,6 +697,29 @@ export async function removeMarketWatchlistAsset(input: {
     true,
   );
   return response.removed;
+}
+
+export type MarketSearchResult = {
+  id: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  currentPrice: number | null;
+  change24h: number | null;
+  volume24h: number | null;
+  source: string;
+  externalUrl: string | null;
+};
+
+export async function searchMarketTokens(q: string, limit = 20): Promise<MarketSearchResult[]> {
+  const query = new URLSearchParams();
+  query.set('q', q.trim());
+  query.set('limit', String(limit));
+  const response = await getJson<{ results: MarketSearchResult[] }>(
+    `/v1/market/search?${query.toString()}`,
+    true,
+  );
+  return response.results;
 }
 
 export async function getAgentRecommendations(): Promise<{ recommendations: AgentRecommendation[] }> {

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   getTradeBrowse,
+  type MarketSearchResult,
   type TopMarketAsset,
   type TradeBrowseMarketItem,
   type TradeBrowsePredictionItem,
@@ -13,6 +14,7 @@ import { SkeletonBlock } from '../Skeleton';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
+import { TokenSearchModal } from '../TokenSearchModal';
 import { type TradeMarketDetailType } from '../../utils/tradeMarketDetail';
 
 type TradeScreenProps = {
@@ -132,6 +134,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
   const [pullDistance, setPullDistance] = useState(0);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const [cachedPayload, setCachedPayload] = useState<TradeBrowseResponse | null>(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   const {
     data,
@@ -228,6 +231,10 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
     onOpenToken(toTopMarketAsset(item), section);
   }
 
+  function handleSearchSelect(item: MarketSearchResult): void {
+    onOpenMarketDetail('stock', item.id);
+  }
+
   return (
     <section
       className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-28"
@@ -241,7 +248,29 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
           <h1 className="m-0 text-2xl font-bold tracking-tight">{t('trade.browse')}</h1>
           <p className="m-0 mt-1 text-sm text-base-content/65">{t('trade.title')}</p>
         </div>
-        <SettingsDropdown onLogout={onLogout} />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm btn-circle"
+            onClick={() => setIsSearchOpen(true)}
+            aria-label={t('trade.search')}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="size-5"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+          </button>
+          <SettingsDropdown onLogout={onLogout} />
+        </div>
       </header>
 
       {(pullDistance > 0 || isPullRefreshing) && (
@@ -387,7 +416,10 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
           </section>
 
           <section className="flex flex-col gap-2">
-            <SectionTitle title={t('trade.stocks')} />
+            <div className="flex items-center justify-between">
+              <SectionTitle title={t('trade.stocks')} />
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Binance</span>
+            </div>
             <div className="overflow-hidden rounded-xl bg-base-200/35">
               {payload.stocks.length === 0 && (
                 <div className="px-4 py-4 text-sm text-base-content/65">{t('trade.noSectionData')}</div>
@@ -407,12 +439,14 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                       <div className="flex min-w-0 items-center gap-3">
                         <IconAvatar symbol={item.symbol} name={item.name} image={item.image} />
                         <div className="min-w-0">
-                          <p className="m-0 truncate text-[15px] font-semibold">{item.name}</p>
-                          <p className="m-0 mt-0.5 text-xs text-base-content/55">{item.symbol}</p>
+                          <p className="m-0 truncate text-[15px] font-semibold">{item.symbol}</p>
+                          <p className="m-0 mt-0.5 text-xs text-base-content/55">{item.name}</p>
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="m-0 text-sm text-base-content/65">{formatCompactUsd(item.currentPrice, i18n.language)}</p>
+                        <p className="m-0 text-sm text-base-content/65">
+                          {item.currentPrice != null ? formatUsdAdaptive(item.currentPrice, i18n.language) : '--'}
+                        </p>
                         <p className={`m-0 mt-0.5 text-base font-semibold ${changeClass}`}>{formatPct(item.change24h)}</p>
                       </div>
                     </button>
@@ -498,6 +532,12 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
           </section>
         </>
       )}
+
+      <TokenSearchModal
+        visible={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        onSelectItem={handleSearchSelect}
+      />
     </section>
   );
 }

@@ -184,7 +184,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const normalizedKlineChain = (displayChain ?? '').trim().toLowerCase();
   const normalizedKlineContract = (displayContract ?? '').trim().toLowerCase();
   const hasKlineSupport = normalizedType === 'stock'
-    ? Boolean(normalizedKlineChain) && /^0x[a-f0-9]{40}$/.test(normalizedKlineContract)
+    ? normalizedItemId.startsWith('binance-stock:') || (Boolean(normalizedKlineChain) && /^0x[a-f0-9]{40}$/.test(normalizedKlineContract))
     : normalizedType === 'perp'
       ? normalizedItemId.startsWith('hyperliquid:')
       : Boolean(activePredictionItem) && Boolean(selectedPredictionTokenId);
@@ -204,17 +204,21 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       selectedPredictionTokenId,
       klinePeriod,
     ],
-    queryFn: () => (
-      normalizedType === 'stock'
-        ? getTokenKline(normalizedKlineChain, normalizedKlineContract, klinePeriod, 60)
-        : getTradeMarketKline(
-          normalizedType,
-          normalizedItemId,
-          klinePeriod,
-          60,
-          normalizedType === 'prediction' ? selectedPredictionTokenId : null,
-        )
-    ),
+    queryFn: () => {
+      if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
+        return getTradeMarketKline(normalizedType, normalizedItemId, klinePeriod, 60);
+      }
+      if (normalizedType === 'stock') {
+        return getTokenKline(normalizedKlineChain, normalizedKlineContract, klinePeriod, 60);
+      }
+      return getTradeMarketKline(
+        normalizedType,
+        normalizedItemId,
+        klinePeriod,
+        60,
+        normalizedType === 'prediction' ? selectedPredictionTokenId : null,
+      );
+    },
     staleTime: 20_000,
     refetchInterval: 30_000,
     enabled: hasKlineSupport,
@@ -332,17 +336,21 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
           selectedPredictionTokenId,
           nextPeriod,
         ],
-        queryFn: () => (
-          normalizedType === 'stock'
-            ? getTokenKline(normalizedKlineChain, normalizedKlineContract, nextPeriod, 60)
-            : getTradeMarketKline(
-              normalizedType,
-              normalizedItemId,
-              nextPeriod,
-              60,
-              normalizedType === 'prediction' ? selectedPredictionTokenId : null,
-            )
-        ),
+        queryFn: () => {
+          if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
+            return getTradeMarketKline(normalizedType, normalizedItemId, nextPeriod, 60);
+          }
+          if (normalizedType === 'stock') {
+            return getTokenKline(normalizedKlineChain, normalizedKlineContract, nextPeriod, 60);
+          }
+          return getTradeMarketKline(
+            normalizedType,
+            normalizedItemId,
+            nextPeriod,
+            60,
+            normalizedType === 'prediction' ? selectedPredictionTokenId : null,
+          );
+        },
         staleTime: 20_000,
       });
       setKlinePeriod(nextPeriod);
