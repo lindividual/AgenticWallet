@@ -45,8 +45,6 @@
     "notCreated": "未创建",
     "verifyPaymentPasskey": "支付密码验证（Passkey）",
     "verifyPaymentSuccess": "支付密码验证通过（UV required）。",
-    "mockRecommendation": "生成 Agent 推荐（Mock）",
-    "mockRecommendationSuccess": "已生成一条推荐（mock）。",
     "supportedChains": "支持的链",
     "defaultReceiveTokens": "默认收款币种",
     "topUpTitle": "充值",

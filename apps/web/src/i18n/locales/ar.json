@@ -45,8 +45,6 @@
     "notCreated": "لم يتم الإنشاء",
     "verifyPaymentPasskey": "التحقق من كلمة مرور الدفع (Passkey)",
     "verifyPaymentSuccess": "تم التحقق من كلمة مرور الدفع (UV مطلوب).",
-    "mockRecommendation": "إنشاء توصية Agent (وهمية)",
-    "mockRecommendationSuccess": "تم إنشاء توصية وهمية.",
     "supportedChains": "السلاسل المدعومة",
     "defaultReceiveTokens": "العملات الافتراضية للاستلام",
     "topUpTitle": "شحن",

@@ -45,8 +45,6 @@
     "notCreated": "Not created",
     "verifyPaymentPasskey": "Verify payment passkey",
     "verifyPaymentSuccess": "Payment passkey verified (UV required).",
-    "mockRecommendation": "Generate Agent recommendation (Mock)",
-    "mockRecommendationSuccess": "Mock recommendation generated.",
     "supportedChains": "Supported chains",
     "defaultReceiveTokens": "Default receive tokens",
     "topUpTitle": "Top Up",

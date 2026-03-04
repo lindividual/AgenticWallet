@@ -254,7 +254,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ctx.storage.sql.exec(
       `INSERT INTO transfers (
         id,
-        user_id,
         chain_id,
         from_address,
         to_address,
@@ -273,9 +272,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
         updated_at,
         submitted_at,
         confirmed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.id,
-      userId,
       input.chainId,
       input.fromAddress,
       input.toAddress,
@@ -379,7 +377,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     input: WatchlistAssetUpsertInput,
   ): Promise<{ asset: WatchlistAssetRow }> {
     this.ensureOwner(userId);
-    const asset = this.upsertWatchlistAsset(userId, input);
+    const asset = this.upsertWatchlistAsset(input);
     return { asset };
   }
 
@@ -388,7 +386,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     input: { id?: string | null; chain?: string | null; contract?: string | null },
   ): Promise<{ removed: boolean }> {
     this.ensureOwner(userId);
-    const removed = this.removeWatchlistAsset(userId, input.id ?? null, input.chain ?? null, input.contract ?? null);
+    const removed = this.removeWatchlistAsset(input.id ?? null, input.chain ?? null, input.contract ?? null);
     return { removed };
   }
 
@@ -402,19 +400,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
     },
   ): Promise<{ reply: string; sessionId: string }> {
     this.ensureOwner(userId);
-
-    const now = new Date().toISOString();
-    const lastMsg = request.messages[request.messages.length - 1];
-    if (lastMsg?.role === 'user') {
-      this.ctx.storage.sql.exec(
-        'INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
-        crypto.randomUUID(),
-        request.sessionId,
-        'user',
-        lastMsg.content,
-        now,
-      );
-    }
 
     const systemPrompt = this.buildChatSystemPrompt(request.page, request.pageContext ?? {});
     const llmMessages = [
@@ -436,15 +421,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
     } catch {
       reply = this.getFallbackChatReply(request.page);
     }
-
-    this.ctx.storage.sql.exec(
-      'INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
-      crypto.randomUUID(),
-      request.sessionId,
-      'assistant',
-      reply,
-      new Date().toISOString(),
-    );
 
     return { reply, sessionId: request.sessionId };
   }
@@ -487,15 +463,13 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ctx.storage.sql.exec(
       `INSERT INTO user_events (
         id,
-        user_id,
         event_type,
         payload_json,
         dedupe_key,
         occurred_at,
         received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
       event.eventId,
-      event.userId,
       event.type,
       JSON.stringify(event.payload ?? {}),
       event.dedupeKey,
@@ -508,7 +482,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       const chain = typeof payload.chain === 'string' ? payload.chain : '';
       const contract = typeof payload.contract === 'string' ? payload.contract : '';
       try {
-        this.upsertWatchlistAsset(event.userId, {
+        this.upsertWatchlistAsset({
           watchType: 'crypto',
           chain,
           contract,
@@ -649,7 +623,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT
           id,
-          user_id,
           watch_type,
           item_id,
           chain,
@@ -683,7 +656,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return deduped;
   }
 
-  private upsertWatchlistAsset(userId: string, input: WatchlistAssetUpsertInput): WatchlistAssetRow {
+  private upsertWatchlistAsset(input: WatchlistAssetUpsertInput): WatchlistAssetRow {
     const watchType = this.normalizeWatchType(input.watchType);
     if (!watchType) {
       throw new Error('invalid_watchlist_type');
@@ -725,7 +698,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT
           id,
-          user_id,
           watch_type,
           item_id,
           chain,
@@ -739,11 +711,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
           created_at,
           updated_at
          FROM user_watchlist_assets
-         WHERE user_id = ?
-           AND chain = ?
+         WHERE chain = ?
            AND contract = ?
          LIMIT 1`,
-        userId,
         chain,
         contract,
       )
@@ -763,7 +733,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ctx.storage.sql.exec(
       `INSERT INTO user_watchlist_assets (
          id,
-         user_id,
          watch_type,
          item_id,
          chain,
@@ -776,8 +745,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
          external_url,
          created_at,
          updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(user_id, chain, contract) DO UPDATE SET
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(chain, contract) DO UPDATE SET
          watch_type = excluded.watch_type,
          item_id = COALESCE(excluded.item_id, user_watchlist_assets.item_id),
          symbol = excluded.symbol,
@@ -788,7 +757,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
          external_url = COALESCE(excluded.external_url, user_watchlist_assets.external_url),
          updated_at = excluded.updated_at`,
       crypto.randomUUID(),
-      userId,
       watchType,
       resolvedItemId,
       chain,
@@ -807,7 +775,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT
           id,
-          user_id,
           watch_type,
           item_id,
           chain,
@@ -821,11 +788,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
           created_at,
           updated_at
          FROM user_watchlist_assets
-         WHERE user_id = ?
-           AND chain = ?
+         WHERE chain = ?
            AND contract = ?
          LIMIT 1`,
-        userId,
         chain,
         contract,
       )
@@ -837,7 +802,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private removeWatchlistAsset(
-    userId: string,
     idRaw: string | null,
     chainRaw: string | null,
     contractRaw: string | null,
@@ -848,19 +812,15 @@ export class UserAgentDO extends DurableObject<Bindings> {
         .exec(
           `SELECT id
            FROM user_watchlist_assets
-           WHERE user_id = ?
-             AND id = ?
+           WHERE id = ?
            LIMIT 1`,
-          userId,
           id,
         )
         .toArray()[0] as { id?: string } | undefined;
       if (!row?.id) return false;
       this.ctx.storage.sql.exec(
         `DELETE FROM user_watchlist_assets
-         WHERE user_id = ?
-           AND id = ?`,
-        userId,
+         WHERE id = ?`,
         id,
       );
       return true;
@@ -876,11 +836,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT id
          FROM user_watchlist_assets
-         WHERE user_id = ?
-           AND chain = ?
+         WHERE chain = ?
            AND contract = ?
          LIMIT 1`,
-        userId,
         chain,
         contract,
       )
@@ -889,10 +847,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
     this.ctx.storage.sql.exec(
       `DELETE FROM user_watchlist_assets
-       WHERE user_id = ?
-         AND chain = ?
+       WHERE chain = ?
          AND contract = ?`,
-      userId,
       chain,
       contract,
     );
@@ -1447,8 +1403,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
       case 'topic_generation':
         await this.generateTopicArticle(payload);
         return;
-      case 'cleanup':
-        return;
       default:
         throw new Error(`unsupported_job_type_${jobType}`);
     }
@@ -1488,7 +1442,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private async getArticleMarkdown(articleId: string, r2Key: string): Promise<string> {
-    return getArticleMarkdownContent(this.env, this.ctx.storage.sql, articleId, r2Key);
+    return getArticleMarkdownContent(this.env, articleId, r2Key);
   }
 
   private toHourBucket(asOf: string): string {
@@ -1685,7 +1639,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT
           id,
-          user_id,
           chain_id,
           from_address,
           to_address,
@@ -1719,7 +1672,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
         .exec(
           `SELECT
             id,
-            user_id,
             chain_id,
             from_address,
             to_address,
@@ -1752,7 +1704,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT
           id,
-          user_id,
           chain_id,
           from_address,
           to_address,

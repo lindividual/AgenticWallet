@@ -332,7 +332,6 @@ export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
 
 export type WatchlistAsset = {
   id: string;
-  user_id: string;
   watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
   item_id: string | null;
   chain: string;
@@ -363,7 +362,7 @@ export type AgentRecommendation = {
   score?: number;
   created_at: string;
   valid_until?: string;
-  source: 'do' | 'd1';
+  source: 'do';
 };
 
 export type AgentArticle = {

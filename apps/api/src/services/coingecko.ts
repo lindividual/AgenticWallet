@@ -366,28 +366,13 @@ function sortRowsByRankingName(rows: CoinGeckoMarketRow[], name: TopAssetListNam
 
 async function ensureCoinListPlatformSchema(db: D1Database): Promise<void> {
   if (coinListSchemaReady) return;
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS coingecko_coin_platforms (
-        coin_id TEXT PRIMARY KEY,
-        symbol TEXT,
-        name TEXT,
-        platforms_json TEXT NOT NULL DEFAULT '{}',
-        updated_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL
-      )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS coingecko_coin_platform_sync_meta (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        last_sync_at TEXT,
-        total_rows INTEGER NOT NULL DEFAULT 0,
-        changed_rows INTEGER NOT NULL DEFAULT 0
-      )`,
-    )
-    .run();
+  try {
+    await db.prepare('SELECT coin_id FROM coingecko_coin_platforms LIMIT 1').first();
+    await db.prepare('SELECT id FROM coingecko_coin_platform_sync_meta LIMIT 1').first();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`coingecko_platform_schema_missing_run_migrations:${message}`);
+  }
   coinListSchemaReady = true;
 }
 
