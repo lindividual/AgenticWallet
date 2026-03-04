@@ -51,6 +51,12 @@ export function MarketInfoSection({
   locale,
 }: MarketInfoSectionProps) {
   const { t } = useTranslation();
+  const normalizedSource = displaySource?.trim().toLowerCase() ?? '';
+  const sourceLabel = normalizedSource
+    ? normalizedSource === 'binance'
+      ? t('trade.aggregatedSource')
+      : normalizedSource.toUpperCase()
+    : '--';
 
   return (
     <section className="p-0">
@@ -78,7 +84,7 @@ export function MarketInfoSection({
           </div>
           <div className="rounded bg-base-200/40 p-2">
             <p className="m-0 text-xs text-base-content/60">{t('trade.dataSource')}</p>
-            <p className="m-0 mt-1 font-medium uppercase">{displaySource ?? '--'}</p>
+            <p className="m-0 mt-1 font-medium">{sourceLabel}</p>
           </div>
           <div className="rounded bg-base-200/40 p-2">
             <p className="m-0 text-xs text-base-content/60">{t('trade.itemId')}</p>

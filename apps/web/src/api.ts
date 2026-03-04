@@ -229,18 +229,6 @@ export type TradeSubmitResponse = {
   quote: TradeQuoteResponse;
 };
 
-export type MarketToken = {
-  chain_id: number;
-  address: string;
-  symbol: string;
-  name: string | null;
-  decimals: number | null;
-  logo_uri: string | null;
-  source: string;
-  confidence: number;
-  updated_at: string;
-};
-
 export type TopMarketAsset = {
   id: string;
   asset_id: string;
@@ -260,16 +248,6 @@ export type TopMarketAsset = {
 
 export type TopAssetListName = 'topGainers' | 'topLosers' | 'topVolume' | 'marketCap' | 'trending';
 export type TopAssetSource = 'auto' | 'coingecko' | 'bitget';
-export type MarketShelf = {
-  id: string;
-  title: string;
-  description: string | null;
-  source: TopAssetSource;
-  name: TopAssetListName;
-  chains: string[];
-  category: string | null;
-  assets: TopMarketAsset[];
-};
 
 export type CoinDetail = {
   asset_id: string;
@@ -520,27 +498,6 @@ export async function getAppConfig(): Promise<AppConfigResponse> {
   return getJson<AppConfigResponse>('/v1/app-config');
 }
 
-export async function getMarketTokens(params?: {
-  chainId?: number;
-  q?: string;
-  limit?: number;
-}): Promise<{ tokens: MarketToken[] }> {
-  const query = new URLSearchParams();
-  if (params?.chainId) query.set('chainId', String(params.chainId));
-  if (params?.q) query.set('q', params.q);
-  if (params?.limit) query.set('limit', String(params.limit));
-  const suffix = query.toString();
-  return getJson<{ tokens: MarketToken[] }>(`/v1/market/tokens${suffix ? `?${suffix}` : ''}`, true);
-}
-
-export async function runMarketTokenIngest(): Promise<{ ok: true; imported: number; sourceCount: number }> {
-  return postJson<{ ok: true; imported: number; sourceCount: number }>(
-    '/v1/market/tokens/ingest/run',
-    {},
-    true,
-  );
-}
-
 export async function getTopMarketAssets(params?: {
   limit?: number;
   name?: TopAssetListName;
@@ -560,21 +517,6 @@ export async function getTopMarketAssets(params?: {
     true,
   );
   return response.assets;
-}
-
-export async function getMarketShelves(params?: {
-  ids?: string[];
-  limitPerShelf?: number;
-}): Promise<MarketShelf[]> {
-  const query = new URLSearchParams();
-  if (params?.ids?.length) query.set('ids', params.ids.join(','));
-  if (params?.limitPerShelf) query.set('limitPerShelf', String(params.limitPerShelf));
-  const suffix = query.toString();
-  const response = await getJson<{ generatedAt: string; shelves: MarketShelf[] }>(
-    `/v1/market/shelves${suffix ? `?${suffix}` : ''}`,
-    true,
-  );
-  return response.shelves;
 }
 
 export async function getCoinDetail(chain: string, contract: string): Promise<CoinDetail> {

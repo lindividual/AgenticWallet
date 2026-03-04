@@ -7,7 +7,6 @@ import {
   addMarketWatchlistAsset,
   getAppConfig,
   getCoinDetail,
-  getMarketShelves,
   getMarketWatchlist,
   getTokenKline,
   ingestAgentEvent,
@@ -136,26 +135,6 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     staleTime: 20_000,
     refetchInterval: 30_000,
   });
-
-  const { data: shelfData } = useQuery({
-    queryKey: ['market-shelves', 10],
-    queryFn: () =>
-      getMarketShelves({
-        limitPerShelf: 10,
-      }),
-    staleTime: 60_000,
-  });
-
-  const selected = useMemo<TopMarketAsset | null>(() => {
-    const token = (shelfData ?? [])
-      .flatMap((shelf) => shelf.assets)
-      .find(
-        (asset) =>
-          asset.chain.trim().toLowerCase() === normalizedChain.toLowerCase()
-          && asset.contract.trim().toLowerCase() === normalizedContract.toLowerCase(),
-      );
-    return token ?? null;
-  }, [normalizedChain, normalizedContract, shelfData]);
   const routePreview = useMemo<TopMarketAsset | null>(
     () =>
       queryClient.getQueryData<TopMarketAsset>([
@@ -190,7 +169,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const currentWatchKey = toWatchlistKey(normalizedChain, normalizedContract);
   const isInWatchlist = watchlistKeySet.has(currentWatchKey);
 
-  const rawPriceChangePct = detail?.priceChange24h ?? selected?.price_change_percentage_24h;
+  const rawPriceChangePct = detail?.priceChange24h ?? routePreview?.price_change_percentage_24h;
   const shouldUseKlineChangeFallback = !Number.isFinite(Number(rawPriceChangePct));
 
   const { data: fallbackChangeKlineData } = useQuery({
@@ -203,12 +182,12 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
   useEffect(() => {
     ingestAgentEvent('asset_viewed', {
-      asset: (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol)?.toUpperCase(),
+      asset: (detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
       chain: normalizedChain,
       contract: normalizedContract,
       source: 'trade_detail',
     }).catch(() => undefined);
-  }, [detail?.symbol, normalizedChain, normalizedContract, routePreview?.symbol, selected?.symbol]);
+  }, [detail?.symbol, normalizedChain, normalizedContract, routePreview?.symbol]);
 
   const chartCandles = useMemo<CandlePoint[]>(
     () => normalizeCandlesForLiveline(klineData),
@@ -223,16 +202,16 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const latestChartValue =
     chartLine.length > 0
       ? chartLine[chartLine.length - 1].value
-      : detail?.currentPriceUsd ?? routePreview?.current_price ?? selected?.current_price ?? 0;
+      : detail?.currentPriceUsd ?? routePreview?.current_price ?? 0;
 
   const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
   const chartWindow = Math.max(candleWidth * Math.min(chartCandles.length || 30, 60), candleWidth * 10);
   const displayContract = (detail?.contract ?? normalizedContract).trim();
   const displayChain = (detail?.chain ?? normalizedChain).trim().toUpperCase();
-  const displayName = detail?.name ?? routePreview?.name ?? selected?.name ?? displayContract;
-  const displaySymbol = (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol ?? '').trim();
-  const displayImage = detail?.image ?? routePreview?.image ?? selected?.image ?? null;
-  const tradeMarketChain = (detail?.chain ?? selected?.chain ?? normalizedChain).trim().toLowerCase();
+  const displayName = detail?.name ?? routePreview?.name ?? displayContract;
+  const displaySymbol = (detail?.symbol ?? routePreview?.symbol ?? '').trim();
+  const displayImage = detail?.image ?? routePreview?.image ?? null;
+  const tradeMarketChain = (detail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
   const tradeContract = (detail?.contract ?? normalizedContract).trim();
   const tradeChainId = getChainIdByMarketChain(tradeMarketChain);
   const tradeTokenConfig = tradeChainId ? getTradeTokenConfig(tradeChainId) : null;
@@ -290,14 +269,14 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
           itemId: `${normalizedChain}:${normalizedContract}`,
           chain: normalizedChain,
           contract: normalizedContract,
-          symbol: (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol ?? '').trim() || undefined,
-          name: (detail?.name ?? routePreview?.name ?? selected?.name ?? '').trim() || undefined,
+          symbol: (detail?.symbol ?? routePreview?.symbol ?? '').trim() || undefined,
+          name: (detail?.name ?? routePreview?.name ?? '').trim() || undefined,
           image: displayImage,
           source: 'token_detail',
           change24h: priceChangePct ?? null,
         });
         ingestAgentEvent('asset_favorited', {
-          asset: (detail?.symbol ?? routePreview?.symbol ?? selected?.symbol)?.toUpperCase(),
+          asset: (detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
           chain: normalizedChain,
           contract: normalizedContract,
           source: 'trade_detail',
@@ -412,8 +391,8 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             <div className="mt-4">
               <p className="m-0 text-3xl font-bold">
                 {isPriceLoading
-                  ? Number.isFinite(Number(routePreview?.current_price ?? selected?.current_price))
-                    ? formatUsdAdaptive(Number(routePreview?.current_price ?? selected?.current_price), i18n.language)
+                  ? Number.isFinite(Number(routePreview?.current_price))
+                    ? formatUsdAdaptive(Number(routePreview?.current_price), i18n.language)
                     : t('trade.priceUnavailable')
                   : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
                   ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)
@@ -554,11 +533,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.marketCap')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(selected?.market_cap, i18n.language)}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompact(routePreview?.market_cap, i18n.language)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.turnover24h')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(selected?.turnover_24h, i18n.language)}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompact(routePreview?.turnover_24h, i18n.language)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.holders')}</p>

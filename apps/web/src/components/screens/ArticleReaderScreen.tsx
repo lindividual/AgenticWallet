@@ -4,7 +4,6 @@ import { ArrowLeft, Bookmark, Heart, Pause, Play, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   getAgentArticleDetail,
-  getMarketShelves,
   getTopMarketAssets,
   ingestAgentEvent,
   type TopMarketAsset,
@@ -187,17 +186,6 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
     [data],
   );
 
-  const { data: relatedShelfData } = useQuery({
-    queryKey: ['market-shelves', 12],
-    queryFn: () =>
-      getMarketShelves({
-        limitPerShelf: 12,
-      }),
-    enabled: relatedSymbols.length > 0,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
-
   const { data: relatedTopAssets } = useQuery({
     queryKey: ['top-assets', 'marketCap', 'auto', 120],
     queryFn: () =>
@@ -214,10 +202,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
   const relatedPills = useMemo<RelatedAssetPill[]>(() => {
     if (!data || relatedSymbols.length === 0) return [];
 
-    const marketAssets = [
-      ...(relatedTopAssets ?? []),
-      ...(relatedShelfData ?? []).flatMap((shelf) => shelf.assets),
-    ];
+    const marketAssets = [...(relatedTopAssets ?? [])];
 
     const bySymbol = new Map<string, TopMarketAsset | null>();
     for (const asset of marketAssets) {
@@ -260,7 +245,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
         clickable: Boolean(route?.chain && route?.contract && onOpenToken),
       };
     });
-  }, [data, onOpenToken, relatedShelfData, relatedSymbols, relatedTopAssets]);
+  }, [data, onOpenToken, relatedSymbols, relatedTopAssets]);
 
   const hasRelatedPanel = relatedPills.length > 0;
 

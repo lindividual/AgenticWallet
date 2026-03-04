@@ -2,9 +2,9 @@ import type { Bindings } from '../types';
 import { fetchBitgetTopMarketAssets, type MarketTopAsset } from './bitgetWallet';
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
 import { fetchBinanceStockTokens, fetchBinanceStockDetail, fetchBinanceStockKlines } from './binance';
-import { getChainIdByMarketChain, getSupportedMarketChains } from '../config/appConfig';
+import { getSupportedMarketChains } from '../config/appConfig';
 import { normalizeMarketChain } from './assetIdentity';
-import { resolveBestTokenCatalogLogosBatch } from './market';
+import { loadTokenIconLookup, resolveTokenIconFromLookup } from './marketTopAssets';
 
 export type TradeBrowseMarketItem = {
   id: string;
@@ -64,9 +64,7 @@ const TRADE_BROWSE_CACHE_TTL_MS = 20_000;
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
 const POLYMARKET_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
-const STOCK_CATEGORY_CANDIDATES = ['tokenized-stock', 'tokenized-stocks'];
-const ONDO_STOCK_NAME_HINTS = ['ondo', 'global markets', 'omf'];
-
+const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 const STABLECOIN_SYMBOLS = new Set([
   'USDT',
   'USDC',
@@ -218,37 +216,10 @@ function normalizeContractAddress(raw: unknown): string | null {
 }
 
 async function applyCanonicalCryptoItemLogos(
-  env: Bindings,
+  _env: Bindings,
   items: TradeBrowseMarketItem[],
 ): Promise<TradeBrowseMarketItem[]> {
-  if (items.length === 0) return items;
-  const lookups: Array<{ chainId: number; address: string }> = [];
-  for (const item of items) {
-    const chainId = item.chain ? getChainIdByMarketChain(item.chain) : null;
-    const contract = normalizeContractAddress(item.contract);
-    if (!Number.isFinite(chainId) || !contract) continue;
-    lookups.push({
-      chainId: chainId as number,
-      address: contract,
-    });
-  }
-  if (lookups.length === 0) return items;
-  const logos = await resolveBestTokenCatalogLogosBatch(env.DB, lookups);
-  if (logos.size === 0) return items;
-
-  return items.map((item) => {
-    // Keep source icon when present; token catalog only fills missing logos.
-    if (normalizeText(item.image)) return item;
-    const chainId = item.chain ? getChainIdByMarketChain(item.chain) : null;
-    const contract = normalizeContractAddress(item.contract);
-    if (!Number.isFinite(chainId) || !contract) return item;
-    const canonical = logos.get(`${chainId}:${contract}`);
-    if (!canonical) return item;
-    return {
-      ...item,
-      image: canonical,
-    };
-  });
+  return items;
 }
 
 function buildAssetUrl(chain: string, contract: string): string | null {
@@ -287,24 +258,6 @@ function mapTopAssetToBrowseItem(
     metaValue: null,
     externalUrl: buildAssetUrl(asset.chain, asset.contract),
   };
-}
-
-function sanitizeCompanyName(raw: string): string {
-  const stripped = raw
-    .replace(/\s*\([^)]*\)\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return stripped || raw.trim();
-}
-
-function isOndoStockAsset(asset: MarketTopAsset): boolean {
-  const assetId = (asset.asset_id ?? '').trim().toLowerCase();
-  const name = (asset.name ?? '').trim().toLowerCase();
-  const symbol = (asset.symbol ?? '').trim().toLowerCase();
-  if (!assetId && !name && !symbol) return false;
-  return ONDO_STOCK_NAME_HINTS.some(
-    (hint) => assetId.includes(hint) || name.includes(hint) || symbol.includes(hint),
-  );
 }
 
 async function fetchTopMovers(env: Bindings): Promise<TradeBrowseMarketItem[]> {
@@ -351,64 +304,41 @@ async function fetchTrendings(env: Bindings): Promise<TradeBrowseMarketItem[]> {
 async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
   try {
     const items = (await fetchBinanceStockTokens(15)).slice(0, 10);
-    const stockLookupBySymbol = new Map<string, string>();
-    if (items.some((item) => !normalizeText(item.image))) {
-      try {
-        const marketAssets = await fetchCoinGeckoTopMarketAssets(env, {
-          name: 'marketCap',
-          limit: 200,
-          chains: getSupportedMarketChains(),
-        });
-        for (const asset of marketAssets) {
-          const symbol = normalizeText(asset.symbol)?.toUpperCase();
-          const image = normalizeText(asset.image);
-          if (!symbol || !image || stockLookupBySymbol.has(symbol)) continue;
-          stockLookupBySymbol.set(symbol, image);
-        }
-      } catch {
-        // Ignore fallback source failures.
-      }
-    }
-
-    const catalogLookups: Array<{ chainId: number; address: string }> = [];
-    for (const item of items) {
-      const chain = normalizeMarketChain(item.chain);
-      const chainId = getChainIdByMarketChain(chain);
-      const contract = normalizeContractAddress(item.contract);
-      if (!Number.isFinite(chainId) || !contract) continue;
-      catalogLookups.push({
-        chainId: chainId as number,
-        address: contract,
-      });
-    }
-    const catalogLogos = await resolveBestTokenCatalogLogosBatch(env.DB, catalogLookups);
+    const stockIconLookup = await loadTokenIconLookup(env, {
+      source: 'auto',
+      name: 'marketCap',
+      limit: 200,
+      chains: getSupportedMarketChains(),
+      categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+    });
 
     return items.map((item) => {
       const normalizedChain = normalizeMarketChain(item.chain);
       const normalizedContract = normalizeText(item.contract);
-      const chainId = getChainIdByMarketChain(normalizedChain);
-      const contract = normalizeContractAddress(normalizedContract);
-      const catalogLogo =
-        Number.isFinite(chainId) && contract ? catalogLogos.get(`${chainId}:${contract}`) ?? null : null;
-      const stockSymbol = normalizeText(item.stockTicker)?.toUpperCase() ?? '';
-      const symbol = normalizeText(item.symbol)?.toUpperCase() ?? '';
-      const coingeckoLogo = stockLookupBySymbol.get(stockSymbol) ?? stockLookupBySymbol.get(symbol) ?? null;
 
       return {
-      id: item.id,
-      symbol: item.stockTicker,
-      name: item.name,
-      image: catalogLogo ?? normalizeText(item.image) ?? coingeckoLogo,
-      chain: normalizedChain || null,
-      contract: normalizedContract ?? null,
-      currentPrice: item.currentPrice,
-      change24h: item.change24h,
-      volume24h: item.volume24h,
-      source: 'binance' as const,
-      metaLabel: item.marketCap ? 'MCap' : null,
-      metaValue: item.marketCap,
-      externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
-    };
+        id: item.id,
+        symbol: item.stockTicker,
+        name: item.name,
+        image: resolveTokenIconFromLookup(
+          stockIconLookup,
+          {
+            symbol: item.stockTicker,
+            name: item.name,
+            chain: normalizedChain,
+            contract: normalizedContract,
+          },
+        ),
+        chain: normalizedChain || null,
+        contract: normalizedContract ?? null,
+        currentPrice: item.currentPrice,
+        change24h: item.change24h,
+        volume24h: item.volume24h,
+        source: 'binance' as const,
+        metaLabel: item.marketCap ? 'MCap' : null,
+        metaValue: item.marketCap,
+        externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
+      };
     });
   } catch {
     return [];
@@ -611,13 +541,30 @@ export async function fetchTradeMarketDetail(
       try {
         const detail = await fetchBinanceStockDetail(alphaIdRaw);
         if (detail) {
+          const chain = normalizeMarketChain(detail.chain);
+          const contract = normalizeContractAddress(detail.contract);
+          const stockIconLookup = await loadTokenIconLookup(env, {
+            source: 'auto',
+            name: 'marketCap',
+            limit: 200,
+            chains: getSupportedMarketChains(),
+            categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+          });
           return {
             id: detail.id,
             symbol: detail.stockTicker,
             name: detail.name,
-            image: detail.image,
-            chain: detail.chain || null,
-            contract: detail.contract || null,
+            image: resolveTokenIconFromLookup(
+              stockIconLookup,
+              {
+                symbol: detail.stockTicker,
+                name: detail.name,
+                chain,
+                contract,
+              },
+            ),
+            chain: chain || null,
+            contract: contract ?? null,
             currentPrice: detail.currentPrice,
             change24h: detail.change24h,
             volume24h: detail.volume24h,

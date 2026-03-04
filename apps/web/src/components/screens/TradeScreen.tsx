@@ -442,7 +442,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
           <section className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <SectionTitle title={t('trade.stocks')} />
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Binance</span>
             </div>
             <div className="overflow-hidden rounded-xl bg-base-200/35">
               {payload.stocks.length === 0 && (
