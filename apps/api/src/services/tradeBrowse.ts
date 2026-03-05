@@ -3,6 +3,8 @@ import { fetchBitgetTopMarketAssets, type MarketTopAsset } from './bitgetWallet'
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
 import { fetchBinanceStockTokens, fetchBinanceStockDetail, fetchBinanceStockKlines } from './binance';
 import { getSupportedMarketChains } from '../config/appConfig';
+import { normalizeMarketChain } from './assetIdentity';
+import { loadTokenIconLookup, resolveTokenIconFromLookup } from './marketTopAssets';
 
 export type TradeBrowseMarketItem = {
   id: string;
@@ -62,9 +64,7 @@ const TRADE_BROWSE_CACHE_TTL_MS = 20_000;
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
 const POLYMARKET_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
-const STOCK_CATEGORY_CANDIDATES = ['tokenized-stock', 'tokenized-stocks'];
-const ONDO_STOCK_NAME_HINTS = ['ondo', 'global markets', 'omf'];
-
+const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 const STABLECOIN_SYMBOLS = new Set([
   'USDT',
   'USDC',
@@ -208,6 +208,20 @@ function normalizeTimestampSeconds(raw: unknown): number | null {
   return Math.round(value);
 }
 
+function normalizeContractAddress(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  if (!value) return null;
+  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
+  return value;
+}
+
+async function applyCanonicalCryptoItemLogos(
+  _env: Bindings,
+  items: TradeBrowseMarketItem[],
+): Promise<TradeBrowseMarketItem[]> {
+  return items;
+}
+
 function buildAssetUrl(chain: string, contract: string): string | null {
   const normalizedChain = normalizeText(chain)?.toLowerCase();
   const normalizedContract = normalizeText(contract)?.toLowerCase();
@@ -235,7 +249,7 @@ function mapTopAssetToBrowseItem(
     name: asset.name,
     image: asset.image,
     chain: normalizeText(asset.chain),
-    contract: normalizeText(asset.contract),
+    contract: normalizeText(asset.contract) ?? '',
     currentPrice: asset.current_price,
     change24h: asset.price_change_percentage_24h,
     volume24h: asset.turnover_24h,
@@ -246,24 +260,6 @@ function mapTopAssetToBrowseItem(
   };
 }
 
-function sanitizeCompanyName(raw: string): string {
-  const stripped = raw
-    .replace(/\s*\([^)]*\)\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return stripped || raw.trim();
-}
-
-function isOndoStockAsset(asset: MarketTopAsset): boolean {
-  const assetId = (asset.asset_id ?? '').trim().toLowerCase();
-  const name = (asset.name ?? '').trim().toLowerCase();
-  const symbol = (asset.symbol ?? '').trim().toLowerCase();
-  if (!assetId && !name && !symbol) return false;
-  return ONDO_STOCK_NAME_HINTS.some(
-    (hint) => assetId.includes(hint) || name.includes(hint) || symbol.includes(hint),
-  );
-}
-
 async function fetchTopMovers(env: Bindings): Promise<TradeBrowseMarketItem[]> {
   const chains = getSupportedMarketChains();
   try {
@@ -272,20 +268,22 @@ async function fetchTopMovers(env: Bindings): Promise<TradeBrowseMarketItem[]> {
       limit: 9,
       chains,
     });
-    return assets
+    const items = assets
       .filter((asset) => !isStableLikeAsset(asset))
       .slice(0, 9)
       .map((asset) => mapTopAssetToBrowseItem(asset, 'bitget'));
+    return applyCanonicalCryptoItemLogos(env, items);
   } catch {
     const fallback = await fetchCoinGeckoTopMarketAssets(env, {
       name: 'topGainers',
       limit: 9,
       chains,
     });
-    return fallback
+    const items = fallback
       .filter((asset) => !isStableLikeAsset(asset))
       .slice(0, 9)
       .map((asset) => mapTopAssetToBrowseItem(asset, 'coingecko'));
+    return applyCanonicalCryptoItemLogos(env, items);
   }
 }
 
@@ -296,30 +294,52 @@ async function fetchTrendings(env: Bindings): Promise<TradeBrowseMarketItem[]> {
     limit: 36,
     chains,
   });
-  return assets
+  const items = assets
     .filter((asset) => !isStableLikeAsset(asset))
     .slice(0, 16)
     .map((asset) => mapTopAssetToBrowseItem(asset, 'coingecko'));
+  return applyCanonicalCryptoItemLogos(env, items);
 }
 
-async function fetchStocks(_env: Bindings): Promise<TradeBrowseMarketItem[]> {
+async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
   try {
-    const items = await fetchBinanceStockTokens(15);
-    return items.slice(0, 10).map((item) => ({
-      id: item.id,
-      symbol: item.stockTicker,
-      name: item.name,
-      image: item.image,
-      chain: item.chain || null,
-      contract: item.contract || null,
-      currentPrice: item.currentPrice,
-      change24h: item.change24h,
-      volume24h: item.volume24h,
-      source: 'binance' as const,
-      metaLabel: item.marketCap ? 'MCap' : null,
-      metaValue: item.marketCap,
-      externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
-    }));
+    const items = (await fetchBinanceStockTokens(15)).slice(0, 10);
+    const stockIconLookup = await loadTokenIconLookup(env, {
+      source: 'auto',
+      name: 'marketCap',
+      limit: 200,
+      chains: getSupportedMarketChains(),
+      categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+    });
+
+    return items.map((item) => {
+      const normalizedChain = normalizeMarketChain(item.chain);
+      const normalizedContract = normalizeText(item.contract);
+
+      return {
+        id: item.id,
+        symbol: item.stockTicker,
+        name: item.name,
+        image: resolveTokenIconFromLookup(
+          stockIconLookup,
+          {
+            symbol: item.stockTicker,
+            name: item.name,
+            chain: normalizedChain,
+            contract: normalizedContract,
+          },
+        ),
+        chain: normalizedChain || null,
+        contract: normalizedContract ?? null,
+        currentPrice: item.currentPrice,
+        change24h: item.change24h,
+        volume24h: item.volume24h,
+        source: 'binance' as const,
+        metaLabel: item.marketCap ? 'MCap' : null,
+        metaValue: item.marketCap,
+        externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
+      };
+    });
   } catch {
     return [];
   }
@@ -521,13 +541,30 @@ export async function fetchTradeMarketDetail(
       try {
         const detail = await fetchBinanceStockDetail(alphaIdRaw);
         if (detail) {
+          const chain = normalizeMarketChain(detail.chain);
+          const contract = normalizeContractAddress(detail.contract);
+          const stockIconLookup = await loadTokenIconLookup(env, {
+            source: 'auto',
+            name: 'marketCap',
+            limit: 200,
+            chains: getSupportedMarketChains(),
+            categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+          });
           return {
             id: detail.id,
             symbol: detail.stockTicker,
             name: detail.name,
-            image: detail.image,
-            chain: detail.chain || null,
-            contract: detail.contract || null,
+            image: resolveTokenIconFromLookup(
+              stockIconLookup,
+              {
+                symbol: detail.stockTicker,
+                name: detail.name,
+                chain,
+                contract,
+              },
+            ),
+            chain: chain || null,
+            contract: contract ?? null,
             currentPrice: detail.currentPrice,
             change24h: detail.change24h,
             volume24h: detail.volume24h,

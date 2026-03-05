@@ -8,7 +8,7 @@ type AgentEventIngestResult = {
   sequence: number;
 };
 
-type AgentJobType = 'daily_digest' | 'recommendation_refresh' | 'topic_generation' | 'cleanup';
+type AgentJobType = 'daily_digest' | 'recommendation_refresh' | 'topic_generation';
 
 export type AgentRecommendation = {
   id: string;
@@ -64,7 +64,6 @@ type AgentPortfolioSnapshotPoint = {
 
 export type AgentTransfer = {
   id: string;
-  user_id: string;
   chain_id: number;
   from_address: string;
   to_address: string;
@@ -87,7 +86,6 @@ export type AgentTransfer = {
 
 export type AgentWatchlistAsset = {
   id: string;
-  user_id: string;
   watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
   item_id: string | null;
   chain: string;

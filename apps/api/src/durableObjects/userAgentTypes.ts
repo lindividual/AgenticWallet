@@ -1,4 +1,4 @@
-export type JobType = 'daily_digest' | 'recommendation_refresh' | 'topic_generation' | 'cleanup';
+export type JobType = 'daily_digest' | 'recommendation_refresh' | 'topic_generation';
 
 export type EventRow = {
   id: string;
@@ -36,11 +36,6 @@ export type ArticleRow = {
   status: string;
 };
 
-export type ArticleContentRow = {
-  article_id: string;
-  markdown: string;
-};
-
 export type JobRow = {
   id: string;
   job_type: JobType;
@@ -62,7 +57,6 @@ export type TransferStatus = 'created' | 'submitted' | 'confirmed' | 'failed';
 
 export type TransferRow = {
   id: string;
-  user_id: string;
   chain_id: number;
   from_address: string;
   to_address: string;
@@ -85,7 +79,6 @@ export type TransferRow = {
 
 export type WatchlistAssetRow = {
   id: string;
-  user_id: string;
   watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
   item_id: string | null;
   chain: string;

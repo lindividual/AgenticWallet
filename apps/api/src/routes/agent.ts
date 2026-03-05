@@ -16,7 +16,6 @@ import { getLlmStatus } from '../services/llm';
 import { generateTopicSpecialBatch } from '../services/topicSpecials';
 import type { AppEnv } from '../types';
 import { safeJsonParse } from '../utils/json';
-import { nowIso } from '../utils/time';
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === 'object' && input !== null && !Array.isArray(input);
@@ -297,22 +296,4 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     });
   });
 
-  app.post('/v1/agent/recommendations/mock', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    await c.env.DB.prepare(
-      'INSERT INTO recommendations (id, user_id, kind, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    )
-      .bind(
-        crypto.randomUUID(),
-        userId,
-        'code',
-        'Transfer Script Suggestion',
-        'Use viem walletClient.writeContract to execute an ERC20 transfer and add simulation before submit.',
-        nowIso(),
-      )
-      .run();
-
-    return c.json({ ok: true });
-  });
 }

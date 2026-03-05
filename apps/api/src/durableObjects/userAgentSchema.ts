@@ -2,7 +2,178 @@ type SqlStorage = {
   exec: (query: string, ...bindings: unknown[]) => { toArray(): unknown[] };
 };
 
+type SqlTableInfoRow = {
+  name?: string;
+};
+
+function tableHasColumn(sql: SqlStorage, table: string, column: string): boolean {
+  try {
+    const rows = sql.exec(`PRAGMA table_info(${table})`).toArray() as SqlTableInfoRow[];
+    return rows.some((row) => row.name === column);
+  } catch {
+    return false;
+  }
+}
+
+function migrateLegacyUserEvents(sql: SqlStorage): void {
+  if (!tableHasColumn(sql, 'user_events', 'user_id')) return;
+
+  sql.exec('ALTER TABLE user_events RENAME TO user_events_legacy_v1');
+  sql.exec(
+    `CREATE TABLE user_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      dedupe_key TEXT,
+      occurred_at TEXT NOT NULL,
+      received_at TEXT NOT NULL
+    )`,
+  );
+  sql.exec(
+    `INSERT INTO user_events (id, event_type, payload_json, dedupe_key, occurred_at, received_at)
+     SELECT id, event_type, payload_json, dedupe_key, occurred_at, received_at
+     FROM user_events_legacy_v1`,
+  );
+  sql.exec('DROP TABLE user_events_legacy_v1');
+}
+
+function migrateLegacyTransfers(sql: SqlStorage): void {
+  if (!tableHasColumn(sql, 'transfers', 'user_id')) return;
+
+  sql.exec('ALTER TABLE transfers RENAME TO transfers_legacy_v1');
+  sql.exec(
+    `CREATE TABLE transfers (
+      id TEXT PRIMARY KEY,
+      chain_id INTEGER NOT NULL,
+      from_address TEXT NOT NULL,
+      to_address TEXT NOT NULL,
+      token_address TEXT,
+      token_symbol TEXT,
+      token_decimals INTEGER NOT NULL DEFAULT 18,
+      amount_input TEXT NOT NULL,
+      amount_raw TEXT NOT NULL,
+      tx_value TEXT NOT NULL,
+      tx_hash TEXT,
+      status TEXT NOT NULL,
+      error_code TEXT,
+      error_message TEXT,
+      idempotency_key TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      submitted_at TEXT,
+      confirmed_at TEXT
+    )`,
+  );
+  sql.exec(
+    `INSERT INTO transfers (
+      id,
+      chain_id,
+      from_address,
+      to_address,
+      token_address,
+      token_symbol,
+      token_decimals,
+      amount_input,
+      amount_raw,
+      tx_value,
+      tx_hash,
+      status,
+      error_code,
+      error_message,
+      idempotency_key,
+      created_at,
+      updated_at,
+      submitted_at,
+      confirmed_at
+    )
+    SELECT
+      id,
+      chain_id,
+      from_address,
+      to_address,
+      token_address,
+      token_symbol,
+      token_decimals,
+      amount_input,
+      amount_raw,
+      tx_value,
+      tx_hash,
+      status,
+      error_code,
+      error_message,
+      idempotency_key,
+      created_at,
+      updated_at,
+      submitted_at,
+      confirmed_at
+    FROM transfers_legacy_v1`,
+  );
+  sql.exec('DROP TABLE transfers_legacy_v1');
+}
+
+function migrateLegacyWatchlist(sql: SqlStorage): void {
+  if (!tableHasColumn(sql, 'user_watchlist_assets', 'user_id')) return;
+
+  sql.exec('ALTER TABLE user_watchlist_assets RENAME TO user_watchlist_assets_legacy_v1');
+  sql.exec(
+    `CREATE TABLE user_watchlist_assets (
+      id TEXT PRIMARY KEY,
+      watch_type TEXT NOT NULL DEFAULT 'crypto',
+      item_id TEXT,
+      chain TEXT NOT NULL,
+      contract TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      name TEXT NOT NULL,
+      image TEXT,
+      source TEXT,
+      change_24h REAL,
+      external_url TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(chain, contract)
+    )`,
+  );
+  sql.exec(
+    `INSERT OR REPLACE INTO user_watchlist_assets (
+      id,
+      watch_type,
+      item_id,
+      chain,
+      contract,
+      symbol,
+      name,
+      image,
+      source,
+      change_24h,
+      external_url,
+      created_at,
+      updated_at
+    )
+    SELECT
+      id,
+      watch_type,
+      item_id,
+      chain,
+      contract,
+      symbol,
+      name,
+      image,
+      source,
+      change_24h,
+      external_url,
+      created_at,
+      updated_at
+    FROM user_watchlist_assets_legacy_v1
+    ORDER BY updated_at ASC`,
+  );
+  sql.exec('DROP TABLE user_watchlist_assets_legacy_v1');
+}
+
 export function initializeAgentSchema(sql: SqlStorage): void {
+  migrateLegacyUserEvents(sql);
+  migrateLegacyTransfers(sql);
+  migrateLegacyWatchlist(sql);
+
   sql.exec(
     `CREATE TABLE IF NOT EXISTS agent_state (
       key TEXT PRIMARY KEY,
@@ -14,7 +185,6 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS user_events (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       dedupe_key TEXT,
@@ -68,14 +238,6 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   );
 
   sql.exec(
-    `CREATE TABLE IF NOT EXISTS article_contents (
-      article_id TEXT PRIMARY KEY,
-      markdown TEXT NOT NULL,
-      FOREIGN KEY(article_id) REFERENCES article_index(id)
-    )`,
-  );
-
-  sql.exec(
     `CREATE TABLE IF NOT EXISTS recommendations (
       id TEXT PRIMARY KEY,
       category TEXT NOT NULL,
@@ -124,26 +286,6 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   }
 
   sql.exec(
-    `CREATE TABLE IF NOT EXISTS guide_prompts (
-      id TEXT PRIMARY KEY,
-      page TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      expires_at TEXT
-    )`,
-  );
-
-  sql.exec(
-    `CREATE TABLE IF NOT EXISTS chat_messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    )`,
-  );
-
-  sql.exec(
     `CREATE TABLE IF NOT EXISTS portfolio_snapshots_hourly (
       bucket_hour_utc TEXT PRIMARY KEY,
       total_usd REAL NOT NULL,
@@ -165,7 +307,6 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS transfers (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
       chain_id INTEGER NOT NULL,
       from_address TEXT NOT NULL,
       to_address TEXT NOT NULL,
@@ -201,7 +342,6 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS user_watchlist_assets (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
       watch_type TEXT NOT NULL DEFAULT 'crypto',
       item_id TEXT,
       chain TEXT NOT NULL,
@@ -214,7 +354,7 @@ export function initializeAgentSchema(sql: SqlStorage): void {
       external_url TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      UNIQUE(user_id, chain, contract)
+      UNIQUE(chain, contract)
     )`,
   );
   try {

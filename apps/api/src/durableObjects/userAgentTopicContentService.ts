@@ -113,5 +113,5 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
     createdAt,
     'ready',
   );
-  await putArticleMarkdownContent(deps.env, deps.sql, articleId, r2Key, markdown);
+  await putArticleMarkdownContent(deps.env, articleId, r2Key, markdown);
 }

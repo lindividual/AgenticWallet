@@ -305,32 +305,12 @@ export async function generateTopicSpecialBatch(
 
 export async function ensureTopicSpecialSchema(db: D1Database): Promise<void> {
   if (topicSpecialSchemaReady) return;
-
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS topic_special_articles (
-         id TEXT PRIMARY KEY,
-         slot_key TEXT NOT NULL,
-         topic_slug TEXT NOT NULL,
-         title TEXT NOT NULL,
-         summary TEXT NOT NULL,
-         r2_key TEXT NOT NULL,
-         related_assets_json TEXT NOT NULL,
-         source_refs_json TEXT NOT NULL,
-         generated_at TEXT NOT NULL,
-         status TEXT NOT NULL DEFAULT 'ready'
-       )`,
-    )
-    .run();
-  await db
-    .prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_special_slot_slug ON topic_special_articles(slot_key, topic_slug)')
-    .run();
-  await db
-    .prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_special_r2_key ON topic_special_articles(r2_key)')
-    .run();
-  await db
-    .prepare('CREATE INDEX IF NOT EXISTS idx_topic_special_generated_at ON topic_special_articles(generated_at DESC)')
-    .run();
+  try {
+    await db.prepare('SELECT id FROM topic_special_articles LIMIT 1').first();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`topic_special_schema_missing_run_migrations:${message}`);
+  }
   topicSpecialSchemaReady = true;
 }
 
