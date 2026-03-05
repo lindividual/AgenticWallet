@@ -87,7 +87,8 @@ function toTopMarketAsset(
   const chainAssetId = buildChainAssetId(chain, contract);
   return {
     id: item.id,
-    asset_id: item.id,
+    asset_id: item.asset_id ?? item.id,
+    instrument_id: item.instrument_id,
     chain_asset_id: chainAssetId,
     chain,
     contract,
@@ -260,6 +261,10 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
 
   function handleSearchSelect(item: MarketSearchResult): void {
     onOpenMarketDetail('stock', item.id);
+  }
+
+  function toDetailItemId(item: { id: string; instrument_id?: string }): string {
+    return item.instrument_id?.trim() || item.id;
   }
 
   return (
@@ -460,7 +465,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                     <button
                       type="button"
                       className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left transition-colors hover:bg-base-200/70"
-                      onClick={() => onOpenMarketDetail('stock', item.id)}
+                      onClick={() => onOpenMarketDetail('stock', toDetailItemId(item))}
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         <IconAvatar symbol={item.symbol} name={item.name} image={item.image} />
@@ -497,7 +502,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                     <button
                       type="button"
                       className="flex min-w-0 flex-1 items-start justify-between gap-3 text-inherit no-underline text-left transition-colors hover:bg-base-200/70"
-                      onClick={() => onOpenMarketDetail('perp', item.id)}
+                      onClick={() => onOpenMarketDetail('perp', toDetailItemId(item))}
                     >
                       <div className="min-w-0 flex-1 text-left">
                         <p className="m-0 text-sm font-semibold">{item.symbol}</p>
@@ -536,7 +541,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                     <button
                       type="button"
                       className="flex min-w-0 flex-1 items-start justify-between gap-3 text-inherit no-underline text-left transition-colors hover:bg-base-200/70"
-                      onClick={() => onOpenMarketDetail('prediction', market.id)}
+                      onClick={() => onOpenMarketDetail('prediction', toDetailItemId(market))}
                     >
                       <div className="min-w-0 flex-1 text-left">
                         <p className="m-0 line-clamp-2 text-sm font-semibold">{market.title}</p>

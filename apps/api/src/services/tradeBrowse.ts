@@ -8,6 +8,8 @@ import { loadTokenIconLookup, resolveTokenIconFromLookup } from './marketTopAsse
 
 export type TradeBrowseMarketItem = {
   id: string;
+  asset_id?: string;
+  instrument_id?: string;
   symbol: string;
   name: string;
   image: string | null;
@@ -24,6 +26,8 @@ export type TradeBrowseMarketItem = {
 
 export type TradeBrowsePredictionItem = {
   id: string;
+  asset_id?: string;
+  instrument_id?: string;
   title: string;
   image: string | null;
   probability: number | null;
@@ -245,6 +249,8 @@ function mapTopAssetToBrowseItem(
 ): TradeBrowseMarketItem {
   return {
     id: asset.id,
+    asset_id: asset.asset_id,
+    instrument_id: asset.instrument_id,
     symbol: asset.symbol,
     name: asset.name,
     image: asset.image,

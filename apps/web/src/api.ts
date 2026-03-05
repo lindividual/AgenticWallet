@@ -232,6 +232,7 @@ export type TradeSubmitResponse = {
 export type TopMarketAsset = {
   id: string;
   asset_id: string;
+  instrument_id?: string;
   chain_asset_id: string;
   chain: string;
   contract: string;
@@ -251,6 +252,7 @@ export type TopAssetSource = 'auto' | 'coingecko' | 'bitget';
 
 export type CoinDetail = {
   asset_id: string;
+  instrument_id?: string;
   chain_asset_id: string;
   chain: string;
   contract: string;
@@ -287,6 +289,8 @@ export type KlineCandle = {
 
 export type TradeBrowseMarketItem = {
   id: string;
+  asset_id?: string;
+  instrument_id?: string;
   symbol: string;
   name: string;
   image: string | null;
@@ -303,6 +307,8 @@ export type TradeBrowseMarketItem = {
 
 export type TradeBrowsePredictionItem = {
   id: string;
+  asset_id?: string;
+  instrument_id?: string;
   title: string;
   image: string | null;
   probability: number | null;
@@ -329,6 +335,78 @@ export type TradeBrowseResponse = {
 };
 
 export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
+export type InstrumentMarketType = 'spot' | 'perp' | 'prediction';
+export type AssetClass = 'crypto' | 'equity_exposure' | 'event_outcome' | 'fiat' | 'index';
+
+export type AssetResolveRequest = {
+  chain?: string;
+  contract?: string;
+  itemId?: string;
+  marketType?: InstrumentMarketType;
+  venue?: string;
+  symbol?: string;
+  marketId?: string;
+  outcomeId?: string;
+  assetClassHint?: AssetClass;
+  nameHint?: string;
+};
+
+export type AssetResolveResponse = {
+  asset_id: string;
+  instrument_id: string;
+  market_type: InstrumentMarketType;
+  confidence: number;
+};
+
+export type AssetResolveBatchItemResult =
+  | {
+      ok: true;
+      result: AssetResolveResponse;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type AssetSummary = {
+  asset_id: string;
+  asset_class: AssetClass;
+  symbol: string | null;
+  name: string | null;
+  logo_uri: string | null;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AssetInstrument = {
+  instrument_id: string;
+  asset_id: string;
+  market_type: InstrumentMarketType;
+  venue: string | null;
+  symbol: string | null;
+  chain: string | null;
+  contract_key: string | null;
+  source: string;
+  source_item_id: string | null;
+  metadata_json: string | null;
+  metadata?: Record<string, unknown>;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarketByInstrumentResponse = {
+  instrument: AssetInstrument;
+  asset: AssetSummary | null;
+  refs: Array<{
+    provider: string;
+    provider_key: string;
+    confidence: number;
+  }>;
+  providerDetail: unknown;
+};
 
 export type WatchlistAsset = {
   id: string;
@@ -596,6 +674,66 @@ export async function getTradeMarketDetail(
 
 export async function getTradeBrowse(): Promise<TradeBrowseResponse> {
   return getJson<TradeBrowseResponse>('/v1/market/trade-browse', true);
+}
+
+export async function resolveAssetIdentity(input: AssetResolveRequest): Promise<AssetResolveResponse> {
+  return postJson<AssetResolveResponse>('/v1/assets/resolve', input, true);
+}
+
+export async function resolveAssetIdentityBatch(
+  inputs: AssetResolveRequest[],
+): Promise<AssetResolveBatchItemResult[]> {
+  if (!inputs.length) return [];
+  const response = await postJson<{ results: AssetResolveBatchItemResult[] }>(
+    '/v1/assets/resolve/batch',
+    { items: inputs },
+    true,
+  );
+  return response.results;
+}
+
+export async function getAssetById(assetId: string): Promise<{
+  asset: AssetSummary;
+  marketCount: number;
+  defaultInstrumentId: string | null;
+  instruments: Array<{
+    instrument_id: string;
+    market_type: InstrumentMarketType;
+    venue: string | null;
+    symbol: string | null;
+    chain: string | null;
+    contract_key: string | null;
+  }>;
+}> {
+  return getJson(`/v1/assets/${encodeURIComponent(assetId)}`, true);
+}
+
+export async function getAssetInstruments(assetId: string): Promise<{
+  asset_id: string;
+  instruments: AssetInstrument[];
+}> {
+  return getJson(`/v1/assets/${encodeURIComponent(assetId)}/instruments`, true);
+}
+
+export async function getMarketByInstrumentId(instrumentId: string): Promise<MarketByInstrumentResponse> {
+  return getJson(`/v1/markets/${encodeURIComponent(instrumentId)}`, true);
+}
+
+export async function getMarketCandlesByInstrumentId(
+  instrumentId: string,
+  period: KlinePeriod = '1h',
+  size = 60,
+  optionTokenId?: string | null,
+): Promise<KlineCandle[]> {
+  const query = new URLSearchParams();
+  query.set('period', period);
+  query.set('size', String(size));
+  if (optionTokenId) query.set('optionTokenId', optionTokenId.trim());
+  const response = await getJson<{ candles: KlineCandle[] }>(
+    `/v1/markets/${encodeURIComponent(instrumentId)}/candles?${query.toString()}`,
+    true,
+  );
+  return response.candles;
 }
 
 export async function getMarketWatchlist(params?: {

@@ -6,8 +6,11 @@ import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   addMarketWatchlistAsset,
   getAppConfig,
+  getMarketByInstrumentId,
+  getMarketCandlesByInstrumentId,
   getCoinDetail,
   getMarketWatchlist,
+  resolveAssetIdentity,
   getTokenKline,
   ingestAgentEvent,
   removeMarketWatchlistAsset,
@@ -103,6 +106,42 @@ function toWatchlistKey(chain: string, contract: string): string {
   return `${chain.trim().toLowerCase()}:${contract.trim().toLowerCase()}`;
 }
 
+type TokenDetailLike = {
+  chain?: string | null;
+  contract?: string | null;
+  symbol?: string | null;
+  name?: string | null;
+  image?: string | null;
+  currentPriceUsd?: number | null;
+  priceChange24h?: number | null;
+  holders?: number | null;
+  liquidityUsd?: number | null;
+  top10HolderPercent?: number | null;
+  lockLpPercent?: number | null;
+  currentPrice?: number | null;
+  change24h?: number | null;
+};
+
+function toTokenDetailLike(raw: unknown): TokenDetailLike | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  return {
+    chain: typeof row.chain === 'string' ? row.chain : null,
+    contract: typeof row.contract === 'string' ? row.contract : null,
+    symbol: typeof row.symbol === 'string' ? row.symbol : null,
+    name: typeof row.name === 'string' ? row.name : null,
+    image: typeof row.image === 'string' ? row.image : null,
+    currentPriceUsd: Number.isFinite(Number(row.currentPriceUsd)) ? Number(row.currentPriceUsd) : null,
+    priceChange24h: Number.isFinite(Number(row.priceChange24h)) ? Number(row.priceChange24h) : null,
+    holders: Number.isFinite(Number(row.holders)) ? Number(row.holders) : null,
+    liquidityUsd: Number.isFinite(Number(row.liquidityUsd)) ? Number(row.liquidityUsd) : null,
+    top10HolderPercent: Number.isFinite(Number(row.top10HolderPercent)) ? Number(row.top10HolderPercent) : null,
+    lockLpPercent: Number.isFinite(Number(row.lockLpPercent)) ? Number(row.lockLpPercent) : null,
+    currentPrice: Number.isFinite(Number(row.currentPrice)) ? Number(row.currentPrice) : null,
+    change24h: Number.isFinite(Number(row.change24h)) ? Number(row.change24h) : null,
+  };
+}
+
 export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
@@ -122,19 +161,6 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [normalizedChain, normalizedContract]);
 
-  const { data: detail, isLoading: isDetailLoading } = useQuery({
-    queryKey: ['trade-token-detail', normalizedChain, normalizedContract],
-    queryFn: () => getCoinDetail(normalizedChain, normalizedContract),
-    staleTime: 15_000,
-    refetchInterval: 20_000,
-  });
-
-  const { data: klineData, isLoading: isKlineLoading } = useQuery({
-    queryKey: ['trade-token-kline', normalizedChain, normalizedContract, klinePeriod],
-    queryFn: () => getTokenKline(normalizedChain, normalizedContract, klinePeriod, 60),
-    staleTime: 20_000,
-    refetchInterval: 30_000,
-  });
   const routePreview = useMemo<TopMarketAsset | null>(
     () =>
       queryClient.getQueryData<TopMarketAsset>([
@@ -144,6 +170,59 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       ]) ?? null,
     [normalizedChain, normalizedContract, queryClient],
   );
+
+  const previewInstrumentId = routePreview?.instrument_id?.trim() || null;
+
+  const { data: resolvedIdentity } = useQuery({
+    queryKey: ['trade-token-identity', normalizedChain, normalizedContract],
+    queryFn: () =>
+      resolveAssetIdentity({
+        chain: normalizedChain,
+        contract: normalizedContract || 'native',
+        marketType: 'spot',
+        symbol: routePreview?.symbol,
+        nameHint: routePreview?.name,
+      }),
+    staleTime: 5 * 60_000,
+    enabled: !previewInstrumentId,
+  });
+
+  const activeInstrumentId = previewInstrumentId
+    || resolvedIdentity?.instrument_id?.trim()
+    || null;
+
+  const { data: instrumentMarket, isLoading: isInstrumentDetailLoading } = useQuery({
+    queryKey: ['trade-token-market-by-instrument', activeInstrumentId],
+    queryFn: () => getMarketByInstrumentId(activeInstrumentId ?? ''),
+    enabled: Boolean(activeInstrumentId),
+    staleTime: 60_000,
+    refetchInterval: 90_000,
+  });
+
+  const providerDetail = useMemo(
+    () => toTokenDetailLike(instrumentMarket?.providerDetail),
+    [instrumentMarket?.providerDetail],
+  );
+
+  const { data: detail, isLoading: isLegacyDetailLoading } = useQuery({
+    queryKey: ['trade-token-detail-legacy', normalizedChain, normalizedContract],
+    queryFn: () => getCoinDetail(normalizedChain, normalizedContract),
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+    enabled: !activeInstrumentId,
+  });
+
+  const { data: klineData, isLoading: isKlineLoading } = useQuery({
+    queryKey: ['trade-token-kline', normalizedChain, normalizedContract, activeInstrumentId, klinePeriod],
+    queryFn: () => {
+      if (activeInstrumentId) {
+        return getMarketCandlesByInstrumentId(activeInstrumentId, klinePeriod, 60);
+      }
+      return getTokenKline(normalizedChain, normalizedContract, klinePeriod, 60);
+    },
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+  });
 
   const { data: watchlistData } = useQuery({
     queryKey: ['market-watchlist', 200],
@@ -169,12 +248,21 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const currentWatchKey = toWatchlistKey(normalizedChain, normalizedContract);
   const isInWatchlist = watchlistKeySet.has(currentWatchKey);
 
-  const rawPriceChangePct = detail?.priceChange24h ?? routePreview?.price_change_percentage_24h;
+  const rawPriceChangePct =
+    providerDetail?.priceChange24h
+    ?? providerDetail?.change24h
+    ?? detail?.priceChange24h
+    ?? routePreview?.price_change_percentage_24h;
   const shouldUseKlineChangeFallback = !Number.isFinite(Number(rawPriceChangePct));
 
   const { data: fallbackChangeKlineData } = useQuery({
-    queryKey: ['trade-token-kline-change-fallback', normalizedChain, normalizedContract],
-    queryFn: () => getTokenKline(normalizedChain, normalizedContract, '1h', 48),
+    queryKey: ['trade-token-kline-change-fallback', normalizedChain, normalizedContract, activeInstrumentId],
+    queryFn: () => {
+      if (activeInstrumentId) {
+        return getMarketCandlesByInstrumentId(activeInstrumentId, '1h', 48);
+      }
+      return getTokenKline(normalizedChain, normalizedContract, '1h', 48);
+    },
     staleTime: 20_000,
     refetchInterval: 30_000,
     enabled: shouldUseKlineChangeFallback,
@@ -182,12 +270,13 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
   useEffect(() => {
     ingestAgentEvent('asset_viewed', {
-      asset: (detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+      asset: (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+      itemId: activeInstrumentId ?? undefined,
       chain: normalizedChain,
       contract: normalizedContract,
       source: 'trade_detail',
     }).catch(() => undefined);
-  }, [detail?.symbol, normalizedChain, normalizedContract, routePreview?.symbol]);
+  }, [activeInstrumentId, detail?.symbol, normalizedChain, normalizedContract, providerDetail?.symbol, routePreview?.symbol]);
 
   const chartCandles = useMemo<CandlePoint[]>(
     () => normalizeCandlesForLiveline(klineData),
@@ -202,17 +291,21 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const latestChartValue =
     chartLine.length > 0
       ? chartLine[chartLine.length - 1].value
-      : detail?.currentPriceUsd ?? routePreview?.current_price ?? 0;
+      : providerDetail?.currentPriceUsd
+        ?? providerDetail?.currentPrice
+        ?? detail?.currentPriceUsd
+        ?? routePreview?.current_price
+        ?? 0;
 
   const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
   const chartWindow = Math.max(candleWidth * Math.min(chartCandles.length || 30, 60), candleWidth * 10);
-  const displayContract = (detail?.contract ?? normalizedContract).trim();
-  const displayChain = (detail?.chain ?? normalizedChain).trim().toUpperCase();
-  const displayName = detail?.name ?? routePreview?.name ?? displayContract;
-  const displaySymbol = (detail?.symbol ?? routePreview?.symbol ?? '').trim();
-  const displayImage = detail?.image ?? routePreview?.image ?? null;
-  const tradeMarketChain = (detail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
-  const tradeContract = (detail?.contract ?? normalizedContract).trim();
+  const displayContract = (providerDetail?.contract ?? detail?.contract ?? normalizedContract).trim();
+  const displayChain = (providerDetail?.chain ?? detail?.chain ?? normalizedChain).trim().toUpperCase();
+  const displayName = providerDetail?.name ?? detail?.name ?? routePreview?.name ?? displayContract;
+  const displaySymbol = (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol ?? '').trim();
+  const displayImage = providerDetail?.image ?? detail?.image ?? routePreview?.image ?? null;
+  const tradeMarketChain = (providerDetail?.chain ?? detail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
+  const tradeContract = (providerDetail?.contract ?? detail?.contract ?? normalizedContract).trim();
   const tradeChainId = getChainIdByMarketChain(tradeMarketChain);
   const tradeTokenConfig = tradeChainId ? getTradeTokenConfig(tradeChainId) : null;
   const canTradeToken = Boolean(tradeChainId && tradeTokenConfig && /^0x[a-fA-F0-9]{40}$/.test(tradeContract));
@@ -230,9 +323,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       : numericPriceChangePct > 0
         ? 'text-success'
         : 'text-error';
-  const isPriceLoading = isDetailLoading;
+  const isPriceLoading = isLegacyDetailLoading || isInstrumentDetailLoading;
   const isChartLoading = isKlineLoading && chartCandles.length === 0;
-  const shouldShowHeaderSkeleton = isDetailLoading && !detail;
+  const shouldShowHeaderSkeleton = (isLegacyDetailLoading || isInstrumentDetailLoading) && !detail && !providerDetail;
   const chartColor = useMemo(
     () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
     [resolvedTheme],
@@ -243,8 +336,13 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     setPendingKlinePeriod(nextPeriod);
     try {
       await queryClient.fetchQuery({
-        queryKey: ['trade-token-kline', normalizedChain, normalizedContract, nextPeriod],
-        queryFn: () => getTokenKline(normalizedChain, normalizedContract, nextPeriod, 60),
+        queryKey: ['trade-token-kline', normalizedChain, normalizedContract, activeInstrumentId, nextPeriod],
+        queryFn: () => {
+          if (activeInstrumentId) {
+            return getMarketCandlesByInstrumentId(activeInstrumentId, nextPeriod, 60);
+          }
+          return getTokenKline(normalizedChain, normalizedContract, nextPeriod, 60);
+        },
         staleTime: 20_000,
       });
       setKlinePeriod(nextPeriod);
@@ -269,14 +367,15 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
           itemId: `${normalizedChain}:${normalizedContract}`,
           chain: normalizedChain,
           contract: normalizedContract,
-          symbol: (detail?.symbol ?? routePreview?.symbol ?? '').trim() || undefined,
-          name: (detail?.name ?? routePreview?.name ?? '').trim() || undefined,
+          symbol: (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol ?? '').trim() || undefined,
+          name: (providerDetail?.name ?? detail?.name ?? routePreview?.name ?? '').trim() || undefined,
           image: displayImage,
           source: 'token_detail',
           change24h: priceChangePct ?? null,
         });
         ingestAgentEvent('asset_favorited', {
-          asset: (detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+          asset: (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+          itemId: activeInstrumentId ?? undefined,
           chain: normalizedChain,
           contract: normalizedContract,
           source: 'trade_detail',
@@ -399,9 +498,13 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
                   ? Number.isFinite(Number(routePreview?.current_price))
                     ? formatUsdAdaptive(Number(routePreview?.current_price), i18n.language)
                     : t('trade.priceUnavailable')
-                  : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
-                  ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)
-                  : t('trade.priceUnavailable')}
+                  : Number.isFinite(Number(providerDetail?.currentPriceUsd))
+                    ? formatUsdAdaptive(Number(providerDetail?.currentPriceUsd), i18n.language)
+                    : Number.isFinite(Number(providerDetail?.currentPrice))
+                      ? formatUsdAdaptive(Number(providerDetail?.currentPrice), i18n.language)
+                      : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
+                        ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)
+                        : t('trade.priceUnavailable')}
               </p>
               <p className={`m-0 mt-1 flex items-center gap-1 text-base font-medium ${priceChangeTone}`}>
                 <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
@@ -517,7 +620,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
       <section className="p-0">
         <h2 className="m-0 text-lg font-bold">{t('trade.tokenInfo')}</h2>
-        {isDetailLoading ? (
+        {(isLegacyDetailLoading || isInstrumentDetailLoading) && !detail && !providerDetail ? (
           <div className="mt-3 grid grid-cols-2 gap-3">
             {Array.from({ length: 8 }).map((_, index) => (
               <div key={`token-info-skeleton-${index}`} className="rounded bg-base-200/40 p-2">
@@ -546,19 +649,19 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.holders')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(detail?.holders, i18n.language)}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompact(providerDetail?.holders ?? detail?.holders, i18n.language)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.liquidity')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(detail?.liquidityUsd, i18n.language)}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompact(providerDetail?.liquidityUsd ?? detail?.liquidityUsd, i18n.language)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.top10HolderPercent')}</p>
-              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(detail?.top10HolderPercent)}</p>
+              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(providerDetail?.top10HolderPercent ?? detail?.top10HolderPercent)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.lockLpPercent')}</p>
-              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(detail?.lockLpPercent)}</p>
+              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(providerDetail?.lockLpPercent ?? detail?.lockLpPercent)}</p>
             </div>
           </div>
         )}

@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   addMarketWatchlistAsset,
+  getMarketByInstrumentId,
+  getMarketCandlesByInstrumentId,
   getMarketWatchlist,
+  resolveAssetIdentity,
   getTradeMarketDetail,
   getTradeMarketKline,
   getTokenKline,
@@ -78,6 +81,18 @@ function buildSyntheticWatchKey(watchType: 'stock' | 'perps' | 'prediction', ite
   };
 }
 
+function isTradeBrowseMarketItem(value: unknown): value is TradeBrowseMarketItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.symbol === 'string' && typeof row.name === 'string';
+}
+
+function isTradeBrowsePredictionItem(value: unknown): value is TradeBrowsePredictionItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.title === 'string' && row.source === 'polymarket';
+}
+
 export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
@@ -91,6 +106,36 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
   const normalizedType = normalizeTradeMarketDetailType(marketType) ?? 'stock';
   const normalizedItemId = itemId.trim();
+  const isInstrumentRouteItem = normalizedItemId.toLowerCase().startsWith('ins:');
+
+  const { data: resolvedIdentity } = useQuery({
+    queryKey: ['trade-market-identity', normalizedType, normalizedItemId],
+    queryFn: () =>
+      resolveAssetIdentity(
+        normalizedType === 'stock'
+          ? {
+              itemId: normalizedItemId,
+              marketType: 'spot',
+              assetClassHint: 'equity_exposure',
+            }
+          : {
+              itemId: normalizedItemId,
+              marketType: normalizedType,
+            },
+      ),
+    enabled: Boolean(normalizedItemId),
+    staleTime: 5 * 60_000,
+  });
+
+  const activeInstrumentId = resolvedIdentity?.instrument_id?.trim() ?? null;
+
+  const { data: instrumentMarket, isLoading: isInstrumentLoading } = useQuery({
+    queryKey: ['market-by-instrument', activeInstrumentId],
+    queryFn: () => getMarketByInstrumentId(activeInstrumentId ?? ''),
+    enabled: Boolean(activeInstrumentId),
+    staleTime: 60_000,
+    refetchInterval: 90_000,
+  });
 
   const { data: browseData, isLoading } = useQuery({
     queryKey: ['trade-browse'],
@@ -110,11 +155,15 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     queryFn: () => getTradeMarketDetail(normalizedType, normalizedItemId),
     staleTime: 60_000,
     refetchInterval: 90_000,
-    enabled: Boolean(normalizedItemId),
+    enabled: Boolean(normalizedItemId) && !isInstrumentRouteItem,
   });
 
   const stockItem = useMemo<TradeBrowseMarketItem | null>(
     () => {
+      const fromInstrument = normalizedType === 'stock' && isTradeBrowseMarketItem(instrumentMarket?.providerDetail)
+        ? instrumentMarket.providerDetail
+        : null;
+      if (fromInstrument) return fromInstrument;
       const fromDetail = normalizedType === 'stock'
         && detailItem
         && 'symbol' in detailItem
@@ -123,10 +172,14 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       if (fromDetail) return fromDetail;
       return browseData?.stocks.find((item) => item.id === normalizedItemId) ?? null;
     },
-    [browseData?.stocks, detailItem, normalizedItemId, normalizedType],
+    [browseData?.stocks, detailItem, instrumentMarket?.providerDetail, normalizedItemId, normalizedType],
   );
   const perpItem = useMemo<TradeBrowseMarketItem | null>(
     () => {
+      const fromInstrument = normalizedType === 'perp' && isTradeBrowseMarketItem(instrumentMarket?.providerDetail)
+        ? instrumentMarket.providerDetail
+        : null;
+      if (fromInstrument) return fromInstrument;
       const fromDetail = normalizedType === 'perp'
         && detailItem
         && 'symbol' in detailItem
@@ -135,10 +188,14 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       if (fromDetail) return fromDetail;
       return browseData?.perps.find((item) => item.id === normalizedItemId) ?? null;
     },
-    [browseData?.perps, detailItem, normalizedItemId, normalizedType],
+    [browseData?.perps, detailItem, instrumentMarket?.providerDetail, normalizedItemId, normalizedType],
   );
   const predictionItem = useMemo<TradeBrowsePredictionItem | null>(
     () => {
+      const fromInstrument = normalizedType === 'prediction' && isTradeBrowsePredictionItem(instrumentMarket?.providerDetail)
+        ? instrumentMarket.providerDetail
+        : null;
+      if (fromInstrument) return fromInstrument;
       const fromDetail = normalizedType === 'prediction'
         && detailItem
         && detailItem.source === 'polymarket'
@@ -147,12 +204,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       if (fromDetail) return fromDetail;
       return browseData?.predictions.find((item) => item.id === normalizedItemId) ?? null;
     },
-    [browseData?.predictions, detailItem, normalizedItemId, normalizedType],
+    [browseData?.predictions, detailItem, instrumentMarket?.providerDetail, normalizedItemId, normalizedType],
   );
 
   const activeMarketItem = normalizedType === 'stock' ? stockItem : normalizedType === 'perp' ? perpItem : null;
   const activePredictionItem = normalizedType === 'prediction' ? predictionItem : null;
-  const isSummaryLoading = isLoading && isDetailLoading && !activeMarketItem && !activePredictionItem;
+  const isSummaryLoading = (isLoading || isDetailLoading || isInstrumentLoading) && !activeMarketItem && !activePredictionItem;
   const predictionOptions = activePredictionItem?.options ?? [];
   const selectedPredictionOption = useMemo<TradeBrowsePredictionOption | null>(() => {
     if (!predictionOptions.length) return null;
@@ -183,11 +240,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const selectedPredictionTokenId = selectedPredictionOption?.tokenId ?? null;
   const normalizedKlineChain = (displayChain ?? '').trim().toLowerCase();
   const normalizedKlineContract = (displayContract ?? '').trim().toLowerCase();
-  const hasKlineSupport = normalizedType === 'stock'
+  const fallbackHasKlineSupport = normalizedType === 'stock'
     ? normalizedItemId.startsWith('binance-stock:') || (Boolean(normalizedKlineChain) && /^0x[a-f0-9]{40}$/.test(normalizedKlineContract))
     : normalizedType === 'perp'
       ? normalizedItemId.startsWith('hyperliquid:')
       : Boolean(activePredictionItem) && Boolean(selectedPredictionTokenId);
+  const hasKlineSupport = Boolean(activeInstrumentId) || fallbackHasKlineSupport;
 
   const {
     data: klineData,
@@ -199,12 +257,21 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       'trade-market-kline',
       normalizedType,
       normalizedItemId,
+      activeInstrumentId,
       normalizedKlineChain,
       normalizedKlineContract,
       selectedPredictionTokenId,
       klinePeriod,
     ],
     queryFn: () => {
+      if (activeInstrumentId) {
+        return getMarketCandlesByInstrumentId(
+          activeInstrumentId,
+          klinePeriod,
+          60,
+          normalizedType === 'prediction' ? selectedPredictionTokenId : null,
+        );
+      }
       if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
         return getTradeMarketKline(normalizedType, normalizedItemId, klinePeriod, 60);
       }
@@ -273,9 +340,10 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       id: normalizedItemId,
       hasKlineSupport,
       selectedPredictionTokenId,
+      activeInstrumentId,
       klinePeriod,
     });
-  }, [hasKlineSupport, klinePeriod, normalizedItemId, normalizedType, selectedPredictionTokenId]);
+  }, [activeInstrumentId, hasKlineSupport, klinePeriod, normalizedItemId, normalizedType, selectedPredictionTokenId]);
 
   useEffect(() => {
     if (!klineData) return;
@@ -331,12 +399,21 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
           'trade-market-kline',
           normalizedType,
           normalizedItemId,
+          activeInstrumentId,
           normalizedKlineChain,
           normalizedKlineContract,
           selectedPredictionTokenId,
           nextPeriod,
         ],
         queryFn: () => {
+          if (activeInstrumentId) {
+            return getMarketCandlesByInstrumentId(
+              activeInstrumentId,
+              nextPeriod,
+              60,
+              normalizedType === 'prediction' ? selectedPredictionTokenId : null,
+            );
+          }
           if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
             return getTradeMarketKline(normalizedType, normalizedItemId, nextPeriod, 60);
           }

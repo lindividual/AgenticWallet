@@ -5,6 +5,7 @@ import { getUserSummary } from '../services/user';
 import { getWallet } from '../services/wallet';
 import type { AppEnv } from '../types';
 import { registerAgentRoutes } from './agent';
+import { registerAssetRoutes } from './assets';
 import { registerMarketRoutes } from './market';
 import { registerPaymentRoutes } from './payment';
 import { registerTradeRoutes } from './trade';
@@ -33,5 +34,6 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
   registerTransferRoutes(app);
   registerTradeRoutes(app);
   registerMarketRoutes(app);
+  registerAssetRoutes(app);
   registerAgentRoutes(app);
 }

@@ -10,15 +10,23 @@ import {
   normalizeTopAssetSource,
   resolveTokenIconFromLookup,
 } from '../services/marketTopAssets';
-import { normalizeMarketChain } from '../services/assetIdentity';
+import { normalizeMarketChain, toContractKey } from '../services/assetIdentity';
 import {
   fetchTradeBrowse,
+  type TradeBrowseMarketItem,
+  type TradeBrowsePredictionItem,
   fetchTradeMarketDetail,
   fetchTradeMarketKline,
   normalizeTradeMarketDetailType,
 } from '../services/tradeBrowse';
 import { searchBinanceTokens } from '../services/binance';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
+import {
+  resolveAssetIdentity,
+  resolveAssetIdentityBatch,
+  type ResolveAssetInput,
+  type ResolvedAsset,
+} from '../services/assetData';
 
 const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 
@@ -88,6 +96,311 @@ async function buildNativeTokenDetailFallback(
   return mapTopAssetToTokenDetail(primary);
 }
 
+type BrowseMarketHint = 'spot' | 'perp' | 'stock';
+
+type IdentityResolveRequest = {
+  key: string;
+  input: ResolveAssetInput;
+};
+
+type BitgetTokenDetailWithIdentity = BitgetTokenDetail & {
+  instrument_id?: string;
+};
+
+function buildTopAssetResolveRequest(asset: MarketTopAsset): IdentityResolveRequest | null {
+  const chain = normalizeText(asset.chain);
+  if (!chain) return null;
+  const contract = normalizeText(asset.contract) ?? 'native';
+  const normalizedChain = normalizeMarketChain(chain);
+  return {
+    key: `top:${normalizedChain}:${toContractKey(contract)}`,
+    input: {
+      chain: normalizedChain,
+      contract,
+      marketType: 'spot',
+      symbol: asset.symbol,
+      nameHint: asset.name,
+    },
+  };
+}
+
+function applyTopAssetIdentity(asset: MarketTopAsset, identityMap: Map<string, ResolvedAsset>): MarketTopAsset {
+  const request = buildTopAssetResolveRequest(asset);
+  if (!request) return asset;
+  const resolved = identityMap.get(request.key);
+  if (!resolved) return asset;
+  return {
+    ...asset,
+    asset_id: resolved.asset_id,
+    instrument_id: resolved.instrument_id,
+  };
+}
+
+async function buildTopAssetIdentityMap(
+  env: AppEnv['Bindings'],
+  assets: MarketTopAsset[],
+): Promise<Map<string, ResolvedAsset>> {
+  if (!assets.length) return new Map<string, ResolvedAsset>();
+  const requests: IdentityResolveRequest[] = [];
+  const seen = new Set<string>();
+  for (const asset of assets) {
+    const request = buildTopAssetResolveRequest(asset);
+    if (!request || seen.has(request.key)) continue;
+    seen.add(request.key);
+    requests.push(request);
+  }
+  if (!requests.length) return new Map<string, ResolvedAsset>();
+
+  const results = await resolveAssetIdentityBatch(
+    env,
+    requests.map((item) => item.input),
+  );
+  const identityMap = new Map<string, ResolvedAsset>();
+  for (let index = 0; index < requests.length; index += 1) {
+    const request = requests[index];
+    const result = results[index];
+    if (!request || !result || !result.ok) continue;
+    identityMap.set(request.key, result.result);
+  }
+  return identityMap;
+}
+
+function buildTokenDetailResolveRequest(detail: BitgetTokenDetail): IdentityResolveRequest | null {
+  const chain = normalizeText(detail.chain);
+  if (!chain) return null;
+  const contract = normalizeText(detail.contract) ?? 'native';
+  const normalizedChain = normalizeMarketChain(chain);
+  return {
+    key: `token:${normalizedChain}:${toContractKey(contract)}`,
+    input: {
+      chain: normalizedChain,
+      contract,
+      marketType: 'spot',
+      symbol: detail.symbol,
+      nameHint: detail.name,
+    },
+  };
+}
+
+function applyTokenDetailIdentity(
+  detail: BitgetTokenDetail,
+  identityMap: Map<string, ResolvedAsset>,
+): BitgetTokenDetailWithIdentity {
+  const request = buildTokenDetailResolveRequest(detail);
+  if (!request) return detail;
+  const resolved = identityMap.get(request.key);
+  if (!resolved) return detail;
+  return {
+    ...detail,
+    asset_id: resolved.asset_id,
+    instrument_id: resolved.instrument_id,
+  };
+}
+
+async function buildTokenDetailIdentityMap(
+  env: AppEnv['Bindings'],
+  details: BitgetTokenDetail[],
+): Promise<Map<string, ResolvedAsset>> {
+  if (!details.length) return new Map<string, ResolvedAsset>();
+  const requests: IdentityResolveRequest[] = [];
+  const seen = new Set<string>();
+  for (const detail of details) {
+    const request = buildTokenDetailResolveRequest(detail);
+    if (!request || seen.has(request.key)) continue;
+    seen.add(request.key);
+    requests.push(request);
+  }
+  if (!requests.length) return new Map<string, ResolvedAsset>();
+
+  const results = await resolveAssetIdentityBatch(
+    env,
+    requests.map((item) => item.input),
+  );
+  const identityMap = new Map<string, ResolvedAsset>();
+  for (let index = 0; index < requests.length; index += 1) {
+    const request = requests[index];
+    const result = results[index];
+    if (!request || !result || !result.ok) continue;
+    identityMap.set(request.key, result.result);
+  }
+  return identityMap;
+}
+
+function buildBrowseMarketResolveRequest(
+  item: TradeBrowseMarketItem,
+  hint: BrowseMarketHint,
+): IdentityResolveRequest | null {
+  if (hint === 'spot') {
+    const chain = normalizeText(item.chain);
+    const contract = normalizeText(item.contract);
+    if (!chain || !contract) return null;
+    return {
+      key: `spot:${normalizeMarketChain(chain)}:${contract.toLowerCase()}`,
+      input: {
+        chain,
+        contract,
+        marketType: 'spot',
+        symbol: item.symbol,
+        nameHint: item.name,
+      },
+    };
+  }
+
+  if (hint === 'stock') {
+    const itemId = normalizeText(item.id);
+    if (!itemId) return null;
+    return {
+      key: `stock:${itemId.toLowerCase()}`,
+      input: {
+        itemId,
+        marketType: 'spot',
+        assetClassHint: 'equity_exposure',
+        symbol: item.symbol,
+        nameHint: item.name,
+      },
+    };
+  }
+
+  const itemId = normalizeText(item.id);
+  if (!itemId) return null;
+  return {
+    key: `perp:${itemId.toLowerCase()}`,
+    input: {
+      itemId,
+      marketType: 'perp',
+      symbol: item.symbol,
+      venue: item.source,
+      nameHint: item.name,
+    },
+  };
+}
+
+function buildBrowsePredictionResolveRequest(item: TradeBrowsePredictionItem): IdentityResolveRequest | null {
+  const itemId = normalizeText(item.id);
+  if (!itemId) return null;
+  return {
+    key: `pred:${itemId.toLowerCase()}`,
+    input: {
+      itemId,
+      marketType: 'prediction',
+      venue: item.source,
+      marketId: item.id.replace(/^polymarket:/i, ''),
+      outcomeId: 'default',
+      nameHint: item.title,
+    },
+  };
+}
+
+function applyBrowseMarketIdentity(
+  item: TradeBrowseMarketItem,
+  hint: BrowseMarketHint,
+  identityMap: Map<string, ResolvedAsset>,
+): TradeBrowseMarketItem {
+  const request = buildBrowseMarketResolveRequest(item, hint);
+  if (!request) return item;
+  const resolved = identityMap.get(request.key);
+  if (!resolved) return item;
+  return {
+    ...item,
+    asset_id: resolved.asset_id,
+    instrument_id: resolved.instrument_id,
+  };
+}
+
+function applyBrowsePredictionIdentity(
+  item: TradeBrowsePredictionItem,
+  identityMap: Map<string, ResolvedAsset>,
+): TradeBrowsePredictionItem {
+  const request = buildBrowsePredictionResolveRequest(item);
+  if (!request) return item;
+  const resolved = identityMap.get(request.key);
+  if (!resolved) return item;
+  return {
+    ...item,
+    asset_id: resolved.asset_id,
+    instrument_id: resolved.instrument_id,
+  };
+}
+
+async function buildTradeBrowseIdentityMap(
+  env: AppEnv['Bindings'],
+  payload: {
+    topMovers: TradeBrowseMarketItem[];
+    trendings: TradeBrowseMarketItem[];
+    stocks: TradeBrowseMarketItem[];
+    perps: TradeBrowseMarketItem[];
+    predictions: TradeBrowsePredictionItem[];
+  },
+): Promise<Map<string, ResolvedAsset>> {
+  const requests: IdentityResolveRequest[] = [];
+  const seen = new Set<string>();
+  const append = (request: IdentityResolveRequest | null): void => {
+    if (!request) return;
+    if (seen.has(request.key)) return;
+    seen.add(request.key);
+    requests.push(request);
+  };
+
+  for (const item of payload.topMovers) append(buildBrowseMarketResolveRequest(item, 'spot'));
+  for (const item of payload.trendings) append(buildBrowseMarketResolveRequest(item, 'spot'));
+  for (const item of payload.stocks) append(buildBrowseMarketResolveRequest(item, 'stock'));
+  for (const item of payload.perps) append(buildBrowseMarketResolveRequest(item, 'perp'));
+  for (const item of payload.predictions) append(buildBrowsePredictionResolveRequest(item));
+
+  if (!requests.length) return new Map<string, ResolvedAsset>();
+
+  const results = await resolveAssetIdentityBatch(
+    env,
+    requests.map((request) => request.input),
+  );
+
+  const identityMap = new Map<string, ResolvedAsset>();
+  for (let index = 0; index < requests.length; index += 1) {
+    const result = results[index];
+    const request = requests[index];
+    if (!request || !result || !result.ok) continue;
+    identityMap.set(request.key, result.result);
+  }
+  return identityMap;
+}
+
+async function enrichBrowseMarketItemIdentity(
+  env: AppEnv['Bindings'],
+  item: TradeBrowseMarketItem,
+  hint: BrowseMarketHint,
+): Promise<TradeBrowseMarketItem> {
+  const request = buildBrowseMarketResolveRequest(item, hint);
+  if (!request) return item;
+  try {
+    const resolved = await resolveAssetIdentity(env, request.input);
+    return {
+      ...item,
+      asset_id: resolved.asset_id,
+      instrument_id: resolved.instrument_id,
+    };
+  } catch {
+    return item;
+  }
+}
+
+async function enrichBrowsePredictionItemIdentity(
+  env: AppEnv['Bindings'],
+  item: TradeBrowsePredictionItem,
+): Promise<TradeBrowsePredictionItem> {
+  const request = buildBrowsePredictionResolveRequest(item);
+  if (!request) return item;
+  try {
+    const resolved = await resolveAssetIdentity(env, request.input);
+    return {
+      ...item,
+      asset_id: resolved.asset_id,
+      instrument_id: resolved.instrument_id,
+    };
+  } catch {
+    return item;
+  }
+}
+
 export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/market/top-assets', async (c) => {
     const limitRaw = Number(c.req.query('limit'));
@@ -109,7 +422,9 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         chains,
         category,
       });
-      return c.json({ assets });
+      const identityMap = await buildTopAssetIdentityMap(c.env, assets);
+      const normalizedAssets = assets.map((asset) => applyTopAssetIdentity(asset, identityMap));
+      return c.json({ assets: normalizedAssets });
     } catch (error) {
       return c.json(
         {
@@ -124,7 +439,21 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/market/trade-browse', async (c) => {
     try {
       const payload = await fetchTradeBrowse(c.env);
-      return c.json(payload);
+      const identityMap = await buildTradeBrowseIdentityMap(c.env, payload);
+      const topMovers = payload.topMovers.map((item) => applyBrowseMarketIdentity(item, 'spot', identityMap));
+      const trendings = payload.trendings.map((item) => applyBrowseMarketIdentity(item, 'spot', identityMap));
+      const stocks = payload.stocks.map((item) => applyBrowseMarketIdentity(item, 'stock', identityMap));
+      const perps = payload.perps.map((item) => applyBrowseMarketIdentity(item, 'perp', identityMap));
+      const predictions = payload.predictions.map((item) => applyBrowsePredictionIdentity(item, identityMap));
+
+      return c.json({
+        ...payload,
+        topMovers,
+        trendings,
+        stocks,
+        perps,
+        predictions,
+      });
     } catch (error) {
       return c.json(
         {
@@ -231,6 +560,18 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         id,
         source: 'source' in detail ? detail.source : null,
       });
+      if (type === 'stock' && 'symbol' in detail) {
+        const enriched = await enrichBrowseMarketItemIdentity(c.env, detail, 'stock');
+        return c.json({ type, id, detail: enriched });
+      }
+      if (type === 'perp' && 'symbol' in detail) {
+        const enriched = await enrichBrowseMarketItemIdentity(c.env, detail, 'perp');
+        return c.json({ type, id, detail: enriched });
+      }
+      if (type === 'prediction' && detail.source === 'polymarket') {
+        const enriched = await enrichBrowsePredictionItemIdentity(c.env, detail);
+        return c.json({ type, id, detail: enriched });
+      }
       return c.json({ type, id, detail });
     } catch (error) {
       console.error('[trade-detail-debug][error]', {
@@ -392,11 +733,13 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
             symbol: fallback.symbol,
             name: fallback.name,
           });
+          const normalizedDetail: BitgetTokenDetail = {
+            ...fallback,
+            image,
+          };
+          const identityMap = await buildTokenDetailIdentityMap(c.env, [normalizedDetail]);
           return c.json({
-            detail: {
-              ...fallback,
-              image,
-            },
+            detail: applyTokenDetailIdentity(normalizedDetail, identityMap),
           });
         }
       } catch {
@@ -409,27 +752,30 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       if (!detail) {
         return c.json({ error: 'token_not_found' }, 404);
       }
-      if (normalizeText(detail.image)) {
-        return c.json({ detail });
+      let normalizedDetail = detail;
+      if (!normalizeText(normalizedDetail.image)) {
+        const iconLookup = await loadTokenIconLookup(c.env, {
+          source: 'auto',
+          name: 'marketCap',
+          limit: 200,
+          chains: [normalizedDetail.chain],
+          categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+        });
+        const image = resolveTokenIconFromLookup(iconLookup, {
+          chain: normalizedDetail.chain,
+          contract: normalizedDetail.contract,
+          symbol: normalizedDetail.symbol,
+          name: normalizedDetail.name,
+        });
+        normalizedDetail = {
+          ...normalizedDetail,
+          image: image ?? normalizedDetail.image,
+        };
       }
-      const iconLookup = await loadTokenIconLookup(c.env, {
-        source: 'auto',
-        name: 'marketCap',
-        limit: 200,
-        chains: [detail.chain],
-        categories: TOKENIZED_STOCK_ICON_CATEGORIES,
-      });
-      const image = resolveTokenIconFromLookup(iconLookup, {
-        chain: detail.chain,
-        contract: detail.contract,
-        symbol: detail.symbol,
-        name: detail.name,
-      });
+
+      const identityMap = await buildTokenDetailIdentityMap(c.env, [normalizedDetail]);
       return c.json({
-        detail: {
-          ...detail,
-          image: image ?? detail.image,
-        },
+        detail: applyTokenDetailIdentity(normalizedDetail, identityMap),
       });
     } catch (error) {
       return c.json(
@@ -467,33 +813,46 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
             .filter(Boolean),
         ),
       ];
-      if (!missingImageChains.length) {
-        return c.json({ details });
+      let detailsWithImage = details;
+      if (missingImageChains.length) {
+        const iconLookup = await loadTokenIconLookup(c.env, {
+          source: 'auto',
+          name: 'marketCap',
+          limit: 200,
+          chains: missingImageChains,
+          categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+        });
+        detailsWithImage = details.map((item) => {
+          const detail = item.detail;
+          if (!detail || normalizeText(detail.image)) return item;
+          const image = resolveTokenIconFromLookup(iconLookup, {
+            chain: detail.chain,
+            contract: detail.contract,
+            symbol: detail.symbol,
+            name: detail.name,
+          });
+          if (!image) return item;
+          return {
+            ...item,
+            detail: {
+              ...detail,
+              image,
+            },
+          };
+        });
       }
 
-      const iconLookup = await loadTokenIconLookup(c.env, {
-        source: 'auto',
-        name: 'marketCap',
-        limit: 200,
-        chains: missingImageChains,
-        categories: TOKENIZED_STOCK_ICON_CATEGORIES,
-      });
-      const enriched = details.map((item) => {
-        const detail = item.detail;
-        if (!detail || normalizeText(detail.image)) return item;
-        const image = resolveTokenIconFromLookup(iconLookup, {
-          chain: detail.chain,
-          contract: detail.contract,
-          symbol: detail.symbol,
-          name: detail.name,
-        });
-        if (!image) return item;
+      const identityMap = await buildTokenDetailIdentityMap(
+        c.env,
+        detailsWithImage
+          .map((item) => item.detail)
+          .filter((detail): detail is BitgetTokenDetail => detail != null),
+      );
+      const enriched = detailsWithImage.map((item) => {
+        if (!item.detail) return item;
         return {
           ...item,
-          detail: {
-            ...detail,
-            image,
-          },
+          detail: applyTokenDetailIdentity(item.detail, identityMap),
         };
       });
       return c.json({ details: enriched });

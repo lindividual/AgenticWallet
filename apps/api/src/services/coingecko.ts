@@ -1,6 +1,6 @@
 import type { Bindings } from '../types';
 import type { MarketTopAsset, TopAssetListName } from './bitgetWallet';
-import { buildAssetId, buildChainAssetId } from './assetIdentity';
+import { buildAssetId, buildChainAssetId, toContractKey } from './assetIdentity';
 
 const DEFAULT_COINGECKO_BASE_URL = 'https://api.coingecko.com/api/v3';
 const DEFAULT_COINGECKO_USER_AGENT = 'AgenticWallet-MVP/0.1 (market-shelves; +https://agentic-wallet.local)';
@@ -702,10 +702,12 @@ function toMarketTopAsset(
 
   const chainAssetId = buildChainAssetId(chainMatch.chain, chainMatch.contract);
   const assetId = buildAssetId(chainMatch.chain, chainMatch.contract, `coingecko:${coinId}`);
+  const instrumentId = `ins:spot:${chainMatch.chain}:${toContractKey(chainMatch.contract)}`;
 
   return {
     id: chainAssetId,
     asset_id: assetId,
+    instrument_id: instrumentId,
     chain_asset_id: chainAssetId,
     chain: chainMatch.chain,
     contract: chainMatch.contract,

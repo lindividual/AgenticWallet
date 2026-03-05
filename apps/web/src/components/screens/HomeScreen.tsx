@@ -10,6 +10,7 @@ import {
   getMarketWatchlist,
   getWalletPortfolio,
   type CoinDetail,
+  type TopMarketAsset,
   type WalletPortfolioResponse,
   type WatchlistAsset,
 } from '../../api';
@@ -25,7 +26,7 @@ import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 type HomeScreenProps = {
   auth: AuthState;
   onOpenArticle: (articleId: string) => void;
-  onOpenToken: (chain: string, contract: string) => void;
+  onOpenToken: (chain: string, contract: string, tokenPreview?: TopMarketAsset) => void;
   onLogout: () => void;
 };
 
@@ -49,6 +50,7 @@ type RecommendationDisplayAsset = {
   priceChangePct: number | null;
   chain: string | null;
   contract: string | null;
+  tokenPreview: TopMarketAsset | null;
 };
 
 type WatchlistDisplayAsset = WatchlistAsset & {
@@ -56,6 +58,7 @@ type WatchlistDisplayAsset = WatchlistAsset & {
   displayName: string;
   displayImage: string | null;
   displayChange24h: number | null;
+  tokenPreview: TopMarketAsset | null;
 };
 
 type WatchlistCategory = 'crypto' | 'perps' | 'stock' | 'prediction';
@@ -93,6 +96,39 @@ function pickPreferredSymbolDetail(
   });
   if (!normalizedPreferred) return sorted[0];
   return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
+}
+
+function buildTopMarketAssetPreview(input: {
+  chain: string;
+  contract: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  currentPrice: number | null;
+  priceChange24h: number | null;
+  assetId?: string | null;
+  instrumentId?: string | null;
+}): TopMarketAsset {
+  const chain = input.chain.trim().toLowerCase();
+  const contract = input.contract.trim().toLowerCase();
+  const chainAssetId = buildChainAssetId(chain, contract);
+  return {
+    id: chainAssetId,
+    asset_id: (input.assetId ?? '').trim() || chainAssetId,
+    instrument_id: input.instrumentId ?? undefined,
+    chain_asset_id: chainAssetId,
+    chain,
+    contract,
+    symbol: input.symbol,
+    name: input.name,
+    image: input.image,
+    current_price: input.currentPrice,
+    market_cap_rank: null,
+    market_cap: null,
+    price_change_percentage_24h: input.priceChange24h,
+    turnover_24h: null,
+    risk_level: null,
+  };
 }
 
 const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -240,14 +276,31 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
 
         const displaySymbol = (matched?.symbol ?? symbol ?? '').toUpperCase();
         const displayName = matched?.name ?? assetMeta?.name ?? item.title ?? displaySymbol;
+        const routeChain = matched?.chain ?? chain ?? null;
+        const routeContract = matched?.contract ?? (chain ? contract : null);
+        const tokenPreview =
+          routeChain && routeContract != null
+            ? buildTopMarketAssetPreview({
+                chain: routeChain,
+                contract: routeContract,
+                symbol: displaySymbol,
+                name: displayName,
+                image: matched?.image ?? assetMeta?.image ?? null,
+                currentPrice: matched?.currentPriceUsd ?? null,
+                priceChange24h: matched?.priceChange24h ?? assetMeta?.price_change_percentage_24h ?? null,
+                assetId: matched?.asset_id ?? null,
+                instrumentId: matched?.instrument_id ?? null,
+              })
+            : null;
         return {
           id: item.id,
           symbol: displaySymbol,
           name: displayName,
           image: matched?.image ?? assetMeta?.image ?? null,
           priceChangePct: matched?.priceChange24h ?? assetMeta?.price_change_percentage_24h ?? null,
-          chain: matched?.chain ?? chain ?? null,
-          contract: matched?.contract ?? (chain ? contract : null),
+          chain: routeChain,
+          contract: routeContract,
+          tokenPreview,
         };
       })
       .filter((item) => Boolean(item.symbol || item.name));
@@ -270,6 +323,20 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         const displayName = rawName && rawName.toUpperCase() !== displaySymbol
           ? rawName
           : ((matched?.name ?? rawName) || displaySymbol);
+        const tokenPreview =
+          chain && contract != null
+            ? buildTopMarketAssetPreview({
+                chain,
+                contract,
+                symbol: displaySymbol || (asset.symbol ?? '').trim().toUpperCase(),
+                name: displayName || asset.name,
+                image: asset.image ?? matched?.image ?? null,
+                currentPrice: matched?.currentPriceUsd ?? null,
+                priceChange24h: asset.change_24h ?? matched?.priceChange24h ?? null,
+                assetId: matched?.asset_id ?? null,
+                instrumentId: matched?.instrument_id ?? null,
+              })
+            : null;
 
         return {
           ...asset,
@@ -277,6 +344,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
           displayName,
           displayImage: asset.image ?? matched?.image ?? null,
           displayChange24h: asset.change_24h ?? matched?.priceChange24h ?? null,
+          tokenPreview,
         };
       });
   }, [tokenDetailLookup, watchlistCategory, watchlistData?.assets]);
@@ -446,7 +514,12 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                   key={asset.id}
                   type="button"
                   className="w-full cursor-pointer text-start transition-colors hover:bg-base-200/60"
-                  onClick={() => onOpenToken(asset.chain, asset.contract)}
+                  onClick={() =>
+                    onOpenToken(
+                      asset.tokenPreview?.chain ?? asset.chain,
+                      asset.tokenPreview?.contract ?? asset.contract,
+                      asset.tokenPreview ?? undefined,
+                    )}
                 >
                   {content}
                 </button>
@@ -525,7 +598,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                 key={item.id}
                 type="button"
                 className="w-full cursor-pointer text-start transition-colors hover:bg-base-200/60"
-                onClick={() => onOpenToken(chain, contract)}
+                onClick={() => onOpenToken(chain, contract, item.tokenPreview ?? undefined)}
               >
                 {content}
               </button>

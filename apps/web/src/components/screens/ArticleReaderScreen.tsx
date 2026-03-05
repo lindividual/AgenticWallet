@@ -14,7 +14,7 @@ import { useToast } from '../../contexts/ToastContext';
 type ArticleReaderScreenProps = {
   articleId: string;
   onBack: () => void;
-  onOpenToken?: (chain: string, contract: string) => void;
+  onOpenToken?: (chain: string, contract: string, tokenPreview?: TopMarketAsset) => void;
 };
 
 type ArticleEngagement = {
@@ -29,6 +29,7 @@ type RelatedAssetPill = {
   chain: string | null;
   contract: string | null;
   clickable: boolean;
+  tokenPreview: TopMarketAsset | null;
 };
 
 const DEFAULT_TOKEN_ROUTE_BY_SYMBOL: Record<string, { chain: string; contract: string; name?: string }> = {
@@ -243,6 +244,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
         chain: route?.chain ?? null,
         contract: route?.contract ?? null,
         clickable: Boolean(route?.chain && route?.contract && onOpenToken),
+        tokenPreview: routeFromMarket ? matched ?? null : null,
       };
     });
   }, [data, onOpenToken, relatedSymbols, relatedTopAssets]);
@@ -358,7 +360,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
       contract: asset.contract,
       source: 'article_related',
     }).catch(() => undefined);
-    onOpenToken(asset.chain, asset.contract);
+    onOpenToken(asset.chain, asset.contract, asset.tokenPreview ?? undefined);
   }
 
   return (
