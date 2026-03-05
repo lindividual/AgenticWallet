@@ -4,6 +4,7 @@ import {
   fetchWalletPortfolio,
 } from '../services/market';
 import { listUserPortfolioSnapshots, saveUserPortfolioSnapshot } from '../services/agent';
+import { getPredictionAccountSafe } from '../services/prediction';
 import { getWallet } from '../services/wallet';
 import type { AppEnv } from '../types';
 
@@ -30,7 +31,12 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       );
     }
     const holdings = result.holdings;
-    const mergedHoldings = await buildMergedPortfolioHoldings(c.env, holdings);
+    const [mergedHoldings, predictionAccount] = await Promise.all([
+      buildMergedPortfolioHoldings(c.env, holdings),
+      getPredictionAccountSafe(c.env, userId, {
+        signatureType: 'proxy',
+      }),
+    ]);
     const totalUsd = result.totalUsd;
     const sample = holdings
       .slice(0, 3)
@@ -50,6 +56,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       totalUsd,
       holdings,
       mergedHoldings,
+      predictionAccount,
     });
   });
 

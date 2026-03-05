@@ -34,6 +34,8 @@ export type Bindings = {
   TRADE_AGGREGATOR_BASE_URL?: string;
   TRADE_AGGREGATOR_API_KEY?: string;
   TRADE_DEFAULT_SLIPPAGE_BPS?: string;
+  PREDICTION_CLOB_HOST?: string;
+  PREDICTION_SIGNATURE_TYPE?: string;
 };
 
 export type Variables = {
@@ -170,4 +172,13 @@ export type TradeQuoteResponse = {
 
 export type TradeSubmitRequest = TradeQuoteRequest & {
   idempotencyKey?: string;
+};
+
+export type PredictionBetRequest = {
+  tokenId: string;
+  amount: string;
+  side?: 'buy' | 'sell';
+  orderType?: 'fok' | 'fak';
+  slippageBps?: number;
+  signatureType?: 'proxy' | 'eoa' | 'gnosis-safe';
 };

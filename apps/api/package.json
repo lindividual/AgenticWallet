@@ -12,10 +12,11 @@
     "test:asset-model-local": "bash scripts/e2e-asset-model-local.sh"
   },
   "dependencies": {
+    "@biconomy/abstractjs": "^1.1.21",
+    "@polymarket/clob-client": "^5.7.0",
     "@simplewebauthn/server": "^13.2.2",
     "hono": "^4.6.12",
-    "viem": "^2.22.11",
-    "@biconomy/abstractjs": "^1.1.21"
+    "viem": "^2.22.11"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260207.0",

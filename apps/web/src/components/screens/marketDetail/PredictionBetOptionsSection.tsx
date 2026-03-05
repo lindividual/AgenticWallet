@@ -10,16 +10,20 @@ type PredictionBetOptionsSectionProps = {
   options: TradeBrowsePredictionOption[];
   selectedOptionId: string | null;
   onSelectOption: (id: string) => void;
-  onBet: (optionLabel: string) => void;
-  hasExternalUrl: boolean;
+  betAmount: string;
+  onBetAmountChange: (next: string) => void;
+  onBet: (option: TradeBrowsePredictionOption) => void;
+  pendingOptionId: string | null;
 };
 
 export function PredictionBetOptionsSection({
   options,
   selectedOptionId,
   onSelectOption,
+  betAmount,
+  onBetAmountChange,
   onBet,
-  hasExternalUrl,
+  pendingOptionId,
 }: PredictionBetOptionsSectionProps) {
   const { t } = useTranslation();
 
@@ -30,8 +34,23 @@ export function PredictionBetOptionsSection({
         <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.noPredictionOptions')}</p>
       ) : (
         <div className="mt-3 flex flex-col gap-2">
+          <label className="flex flex-col gap-1 rounded-lg border border-base-content/10 bg-base-200/30 px-3 py-2">
+            <span className="text-xs text-base-content/60">{t('trade.betAmount')}</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              inputMode="decimal"
+              className="input input-bordered h-9 w-full"
+              value={betAmount}
+              onChange={(event) => onBetAmountChange(event.target.value)}
+              placeholder={t('trade.betAmountPlaceholder')}
+            />
+          </label>
           {options.map((option) => {
             const selected = selectedOptionId === option.id;
+            const isPending = pendingOptionId === option.id;
+            const disableBet = !option.tokenId || pendingOptionId != null;
             return (
               <div
                 key={option.id}
@@ -52,10 +71,14 @@ export function PredictionBetOptionsSection({
                 <button
                   type="button"
                   className="btn btn-xs btn-primary border-0"
-                  onClick={() => onBet(option.label)}
-                  disabled={!hasExternalUrl}
+                  onClick={() => onBet(option)}
+                  disabled={disableBet}
                 >
-                  {t('trade.betNow')}
+                  {isPending ? (
+                    <span className="loading loading-spinner loading-xs" />
+                  ) : (
+                    t('trade.betNow')
+                  )}
                 </button>
               </div>
             );

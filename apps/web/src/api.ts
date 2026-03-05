@@ -97,6 +97,7 @@ export type WalletPortfolioResponse = {
   totalUsd: number;
   holdings: SimEvmBalance[];
   mergedHoldings?: WalletMergedHolding[];
+  predictionAccount?: PredictionAccountSnapshot | null;
 };
 
 export type PortfolioSnapshotPeriod = '24h' | '7d' | '30d';
@@ -125,6 +126,66 @@ export type WalletMergedHolding = {
   logo: string | null;
   total_value_usd: number;
   variants: WalletMergedHoldingVariant[];
+};
+
+export type PredictionAccountSnapshot = {
+  available: boolean;
+  chainId: number;
+  chain: 'polygon';
+  signatureType: 'proxy' | 'eoa' | 'gnosis-safe';
+  eoaAddress: string | null;
+  proxyAddress: string | null;
+  depositAddress: string | null;
+  collateralSymbol: 'USDC';
+  collateralTokenAddress: string;
+  collateralDecimals: number;
+  balanceRaw: string | null;
+  balance: string | null;
+  balanceUsd: number | null;
+  allowanceRaw: string | null;
+  allowance: string | null;
+  error: string | null;
+  updatedAt: string;
+};
+
+export type PredictionDepositInfo = {
+  chainId: number;
+  chain: 'polygon';
+  tokenSymbol: 'USDC';
+  tokenAddress: string;
+  decimals: number;
+  depositAddress: string;
+  eoaAddress: string;
+  proxyAddress: string;
+  note: string;
+};
+
+export type PredictionBetRequest = {
+  tokenId: string;
+  amount: string;
+  side?: 'buy' | 'sell';
+  orderType?: 'fok' | 'fak';
+  slippageBps?: number;
+  signatureType?: 'proxy' | 'eoa' | 'gnosis-safe';
+};
+
+export type PredictionBetResponse = {
+  success: true;
+  orderId: string | null;
+  status: string | null;
+  makingAmount: string | null;
+  takingAmount: string | null;
+  transactionsHashes: string[];
+  side: 'buy' | 'sell';
+  amount: string;
+  tokenId: string;
+  priceUsed: number;
+  tickSize: '0.1' | '0.01' | '0.001' | '0.0001';
+  negRisk: boolean;
+  feeRateBps: number;
+  signatureType: 'proxy' | 'eoa' | 'gnosis-safe';
+  eoaAddress: string;
+  proxyAddress: string;
 };
 
 export type TransferQuoteRequest = {
@@ -558,6 +619,23 @@ export async function submitTrade(
   request: TradeQuoteRequest & { idempotencyKey?: string },
 ): Promise<TradeSubmitResponse> {
   return postJson<TradeSubmitResponse>('/v1/trade/submit', request, true);
+}
+
+export async function getPredictionAccount(params?: {
+  signatureType?: 'proxy' | 'eoa' | 'gnosis-safe';
+}): Promise<PredictionAccountSnapshot> {
+  const query = new URLSearchParams();
+  if (params?.signatureType) query.set('signatureType', params.signatureType);
+  const suffix = query.toString();
+  return getJson<PredictionAccountSnapshot>(`/v1/prediction/account${suffix ? `?${suffix}` : ''}`, true);
+}
+
+export async function getPredictionDepositInfo(): Promise<PredictionDepositInfo> {
+  return getJson<PredictionDepositInfo>('/v1/prediction/deposit', true);
+}
+
+export async function submitPredictionBet(request: PredictionBetRequest): Promise<PredictionBetResponse> {
+  return postJson<PredictionBetResponse>('/v1/prediction/bet', request, true);
 }
 
 export async function getTransferHistory(params?: {

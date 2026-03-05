@@ -20,6 +20,10 @@ TRADE_AGGREGATOR_BASE_URL=
 TRADE_AGGREGATOR_API_KEY=
 # Optional default slippage in bps (1% = 100, defaults to 100)
 TRADE_DEFAULT_SLIPPAGE_BPS=100
+# Optional Polymarket CLOB host (defaults to https://clob.polymarket.com)
+PREDICTION_CLOB_HOST=
+# Optional signature type for prediction trading (proxy|eoa|gnosis-safe, defaults to proxy)
+PREDICTION_SIGNATURE_TYPE=proxy
 
 # Optional LLM integration (Phase 1 content/recommendation generation)
 LLM_PROVIDER=openai

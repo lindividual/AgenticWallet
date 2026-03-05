@@ -6,6 +6,7 @@ import type { LivelinePoint } from 'liveline';
 import {
   getAppConfig,
   getCoinDetailsBatch,
+  getPredictionDepositInfo,
   getWalletPortfolio,
   getWalletPortfolioSnapshots,
   type PortfolioSnapshotPeriod,
@@ -139,6 +140,12 @@ function formatDisplayAmount(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
+function truncateAddress(address: string, start = 6, end = 4): string {
+  const normalized = address.trim();
+  if (normalized.length <= start + end + 3) return normalized;
+  return `${normalized.slice(0, start)}...${normalized.slice(-end)}`;
+}
+
 const BALANCE_CHART_PERIOD_OPTIONS: Array<{
   value: PortfolioSnapshotPeriod;
   labelKey: string;
@@ -267,6 +274,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
   });
 
   const portfolioData = data ?? cachedPortfolio;
+  const predictionAccount = portfolioData?.predictionAccount ?? null;
   const totalBalance = portfolioData?.totalUsd ?? 0;
   const supportedChains = appConfig?.supportedChains ?? [];
   const chainNameById = useMemo(
@@ -592,6 +600,31 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     }
   }
 
+  async function handleCopyPredictionDepositAddress() {
+    const depositAddress = predictionAccount?.depositAddress?.trim();
+    if (!depositAddress) {
+      showError(t('wallet.addressUnavailable'));
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(depositAddress);
+      showSuccess(t('wallet.predictionAddressCopied'));
+    } catch (err) {
+      showError(`${t('common.error')}: ${(err as Error).message}`);
+    }
+  }
+
+  async function handlePredictionTopUp() {
+    try {
+      const info = await getPredictionDepositInfo();
+      await navigator.clipboard.writeText(info.depositAddress);
+      showSuccess(t('wallet.predictionAddressCopied'));
+    } catch (err) {
+      showError(`${t('common.error')}: ${(err as Error).message}`);
+    }
+  }
+
   function showModal(originRect: RectSnapshot | null) {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
@@ -833,6 +866,43 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           {t('wallet.trade')}
         </button>
       </section>
+
+      {predictionAccount?.available && predictionAccount.depositAddress ? (
+        <article className="rounded-2xl border border-base-300 bg-base-100 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="m-0 text-base font-semibold">{t('wallet.predictionAccount')}</h3>
+            <p className="m-0 text-base font-semibold tabular-nums">
+              {formatUsdAdaptive(Number(predictionAccount.balanceUsd ?? 0), i18n.language)}
+            </p>
+          </div>
+          <p className="m-0 mt-1 text-xs text-base-content/60">
+            {t('wallet.predictionDepositHint')}
+          </p>
+          <p className="m-0 mt-2 font-mono text-sm text-base-content/80">
+            {truncateAddress(predictionAccount.depositAddress)}
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-sm btn-outline h-8 min-h-0 px-3"
+              onClick={() => {
+                void handleCopyPredictionDepositAddress();
+              }}
+            >
+              {t('wallet.copy')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary h-8 min-h-0 px-3"
+              onClick={() => {
+                void handlePredictionTopUp();
+              }}
+            >
+              {t('wallet.topUp')}
+            </button>
+          </div>
+        </article>
+      ) : null}
 
       <section className="flex flex-col gap-4">
         <div className="flex items-center justify-between gap-3">

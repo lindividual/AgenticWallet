@@ -8,6 +8,7 @@ import { registerAgentRoutes } from './agent';
 import { registerAssetRoutes } from './assets';
 import { registerMarketRoutes } from './market';
 import { registerPaymentRoutes } from './payment';
+import { registerPredictionRoutes } from './prediction';
 import { registerTradeRoutes } from './trade';
 import { registerTransferRoutes } from './transfer';
 import { registerWalletRoutes } from './wallet';
@@ -30,6 +31,7 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
   });
 
   registerWalletRoutes(app);
+  registerPredictionRoutes(app);
   registerPaymentRoutes(app);
   registerTransferRoutes(app);
   registerTradeRoutes(app);

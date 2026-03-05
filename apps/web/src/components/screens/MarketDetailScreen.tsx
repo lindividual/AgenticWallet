@@ -14,6 +14,7 @@ import {
   getTradeBrowse,
   ingestAgentEvent,
   removeMarketWatchlistAsset,
+  submitPredictionBet,
   type KlinePeriod,
   type TradeBrowseMarketItem,
   type TradeBrowsePredictionOption,
@@ -103,6 +104,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
   const [selectedPredictionOptionId, setSelectedPredictionOptionId] = useState<string | null>(null);
+  const [predictionBetAmount, setPredictionBetAmount] = useState('5');
+  const [pendingPredictionOptionId, setPendingPredictionOptionId] = useState<string | null>(null);
 
   const normalizedType = normalizeTradeMarketDetailType(marketType) ?? 'stock';
   const normalizedItemId = itemId.trim();
@@ -486,6 +489,46 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     window.open(displayExternalUrl, '_blank', 'noopener,noreferrer');
   }
 
+  async function submitPredictionBetOrder(option: TradeBrowsePredictionOption): Promise<void> {
+    if (pendingPredictionOptionId != null) return;
+    if (!option.tokenId) {
+      showError(t('trade.betTokenUnavailable'));
+      return;
+    }
+
+    const amount = predictionBetAmount.trim();
+    const numericAmount = Number(amount);
+    if (!amount || !Number.isFinite(numericAmount) || numericAmount <= 0) {
+      showError(t('trade.betAmountInvalid'));
+      return;
+    }
+
+    setPendingPredictionOptionId(option.id);
+    try {
+      const result = await submitPredictionBet({
+        tokenId: option.tokenId,
+        amount,
+        side: 'buy',
+        orderType: 'fok',
+      });
+      ingestAgentEvent('trade_buy', {
+        asset: (displaySymbol || displayName).toUpperCase(),
+        itemId: normalizedItemId,
+        marketType: normalizedType,
+        option: option.label,
+        source: 'trade_market_detail',
+        tokenId: option.tokenId,
+        orderId: result.orderId,
+      }).catch(() => undefined);
+      await queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] });
+      showSuccess(t('trade.betSuccess'));
+    } catch (error) {
+      showError(`${t('trade.betFailed')}: ${(error as Error).message}`);
+    } finally {
+      setPendingPredictionOptionId(null);
+    }
+  }
+
   const klinePeriodButtons = (
     <div className="mt-3 flex flex-wrap gap-2">
       {KLINE_PERIOD_OPTIONS.map((option) => (
@@ -551,8 +594,10 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
           options={predictionOptions}
           selectedOptionId={selectedPredictionOption?.id ?? null}
           onSelectOption={setSelectedPredictionOptionId}
-          onBet={(label) => openExternalMarket(label)}
-          hasExternalUrl={Boolean(displayExternalUrl)}
+          betAmount={predictionBetAmount}
+          onBetAmountChange={setPredictionBetAmount}
+          onBet={(option) => void submitPredictionBetOrder(option)}
+          pendingOptionId={pendingPredictionOptionId}
         />
       )}
 
