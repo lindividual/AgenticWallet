@@ -396,6 +396,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
                   alt={displaySymbol || displayName}
                   className="h-12 w-12 rounded-full bg-base-300 object-cover"
                   loading="lazy"
+                  fallback={(
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-base-300 text-lg font-semibold text-base-content/70">
+                      {getTokenInitial(displaySymbol, displayName)}
+                    </div>
+                  )}
                 />
               ) : (
                 <div className="flex h-12 w-12 items-center justify-center rounded-full bg-base-300 text-lg font-semibold text-base-content/70">

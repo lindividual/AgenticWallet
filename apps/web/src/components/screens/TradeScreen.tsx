@@ -108,6 +108,14 @@ function IconAvatar({
   image: string | null;
   className?: string;
 }) {
+  const fallback = (
+    <div
+      className={className ?? 'flex h-9 w-9 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75'}
+    >
+      {getLabelInitial(symbol, name)}
+    </div>
+  );
+
   if (image) {
     return (
       <CachedIconImage
@@ -115,16 +123,11 @@ function IconAvatar({
         alt={symbol}
         className={className ?? 'h-9 w-9 rounded-full bg-white/10 object-cover'}
         loading="lazy"
+        fallback={fallback}
       />
     );
   }
-  return (
-    <div
-      className={className ?? 'flex h-9 w-9 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75'}
-    >
-      {getLabelInitial(symbol, name)}
-    </div>
-  );
+  return fallback;
 }
 
 export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: TradeScreenProps) {

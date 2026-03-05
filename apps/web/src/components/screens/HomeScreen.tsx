@@ -360,6 +360,11 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                       alt={asset.symbol}
                       className="h-10 w-10 rounded-full bg-base-300 object-cover"
                       loading="lazy"
+                      fallback={(
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                          {getRecommendationInitial(asset.symbol || asset.name)}
+                        </div>
+                      )}
                     />
                   ) : (
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
@@ -429,6 +434,11 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                       alt={item.symbol}
                       className="h-10 w-10 rounded-full bg-base-300 object-cover"
                       loading="lazy"
+                      fallback={(
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                          {getRecommendationInitial(item.symbol || item.name)}
+                        </div>
+                      )}
                     />
                   ) : (
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">

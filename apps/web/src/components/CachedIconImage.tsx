@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cacheStores, clearExpired, pruneCacheStore, readCache, writeCache } from '../utils/indexedDbCache';
 
 type CachedIconImageProps = {
@@ -6,6 +6,7 @@ type CachedIconImageProps = {
   alt: string;
   className?: string;
   loading?: 'eager' | 'lazy';
+  fallback?: ReactNode;
   onError?: () => void;
 };
 
@@ -89,13 +90,16 @@ export function CachedIconImage({
   alt,
   className,
   loading = 'lazy',
+  fallback,
   onError,
 }: CachedIconImageProps) {
   const normalizedSrc = useMemo(() => src.trim(), [src]);
   const [resolvedSrc, setResolvedSrc] = useState<string>(() => normalizedSrc);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setLoadFailed(false);
     if (!normalizedSrc) {
       setResolvedSrc('');
       return () => {
@@ -134,7 +138,12 @@ export function CachedIconImage({
     });
   }, [normalizedSrc]);
 
+  if (loadFailed && fallback != null) {
+    return <>{fallback}</>;
+  }
+
   if (!resolvedSrc) {
+    if (fallback != null) return <>{fallback}</>;
     return <div className={className} aria-hidden="true" />;
   }
 
@@ -144,7 +153,11 @@ export function CachedIconImage({
       alt={alt}
       className={className}
       loading={loading}
-      onError={onError}
+      referrerPolicy="no-referrer"
+      onError={() => {
+        setLoadFailed(true);
+        onError?.();
+      }}
     />
   );
 }
