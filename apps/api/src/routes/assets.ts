@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { fetchBinanceSpotKlines } from '../services/binance';
 import {
   buildLegacyItemIdForInstrument,
   getAssetById,
@@ -11,6 +12,7 @@ import {
   toSpotLookupFromInstrument,
 } from '../services/assetData';
 import { fetchBitgetTokenDetail, fetchBitgetTokenKline } from '../services/bitgetWallet';
+import { isKlineStale, shouldPreferFallbackCandles } from '../services/klineFreshness';
 import { fetchTradeMarketDetail, fetchTradeMarketKline } from '../services/tradeBrowse';
 import type { AppEnv } from '../types';
 
@@ -18,6 +20,12 @@ function toValidSize(raw: unknown, fallback: number): number {
   const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
   return Math.max(10, Math.min(Math.trunc(value), 240));
+}
+
+function toUpperSymbol(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return value || null;
 }
 
 export function registerAssetRoutes(app: Hono<AppEnv>): void {
@@ -222,12 +230,50 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
         if (!spotLookup) {
           return c.json({ error: 'spot_instrument_lookup_failed' }, 400);
         }
-        const candles = await fetchBitgetTokenKline(c.env, {
-          chain: spotLookup.chain,
-          contract: spotLookup.contract,
-          period,
-          size,
-        });
+
+        const resolveBinanceFallbackCandles = async (): Promise<null | Awaited<ReturnType<typeof fetchBinanceSpotKlines>>> => {
+          let symbol = toUpperSymbol(instrument.symbol);
+          if (!symbol) {
+            try {
+              const detail = await fetchBitgetTokenDetail(c.env, spotLookup.chain, spotLookup.contract);
+              symbol = toUpperSymbol(detail?.symbol);
+            } catch {
+              symbol = null;
+            }
+          }
+          if (!symbol) return null;
+          const fallback = await fetchBinanceSpotKlines(symbol, period, size);
+          return fallback.length > 0 ? fallback : null;
+        };
+
+        let candles: Awaited<ReturnType<typeof fetchBitgetTokenKline>>;
+        try {
+          candles = await fetchBitgetTokenKline(c.env, {
+            chain: spotLookup.chain,
+            contract: spotLookup.contract,
+            period,
+            size,
+          });
+        } catch (error) {
+          const fallback = await resolveBinanceFallbackCandles();
+          if (fallback) {
+            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_spot_fallback' });
+          }
+          throw error;
+        }
+
+        if (!candles.length) {
+          const fallback = await resolveBinanceFallbackCandles();
+          if (fallback && shouldPreferFallbackCandles(candles, fallback, period)) {
+            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_spot_fallback' });
+          }
+        }
+        if (candles.length && isKlineStale(candles, period)) {
+          const fallback = await resolveBinanceFallbackCandles();
+          if (fallback && shouldPreferFallbackCandles(candles, fallback, period)) {
+            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_spot_fallback' });
+          }
+        }
         return c.json({ instrumentId: instrument.instrument_id, period, candles });
       }
 
@@ -262,10 +308,20 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
 
       return c.json({ error: 'unsupported_market_type' }, 400);
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      if (message.includes('bgw_http_429')) {
+        return c.json(
+          {
+            error: 'market_candles_rate_limited',
+            message,
+          },
+          429,
+        );
+      }
       return c.json(
         {
           error: 'market_candles_failed',
-          message: error instanceof Error ? error.message : 'unknown_error',
+          message,
         },
         502,
       );

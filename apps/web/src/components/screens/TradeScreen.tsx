@@ -126,16 +126,22 @@ function IconAvatar({
   name,
   image,
   className,
+  fallbackClassName,
 }: {
   symbol: string;
   name: string;
   image: string | null;
   className?: string;
+  fallbackClassName?: string;
 }) {
+  const imageClassName = className ?? 'h-9 w-9 rounded-full bg-white/10 object-cover';
+  const computedFallbackClassName = fallbackClassName
+    ?? (className
+      ? `flex items-center justify-center rounded-full bg-base-300 font-semibold text-base-content/75 ${className}`
+      : 'flex h-9 w-9 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75');
+
   const fallback = (
-    <div
-      className={className ?? 'flex h-9 w-9 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75'}
-    >
+    <div className={computedFallbackClassName}>
       {getLabelInitial(symbol, name)}
     </div>
   );
@@ -145,7 +151,7 @@ function IconAvatar({
       <CachedIconImage
         src={image}
         alt={symbol}
-        className={className ?? 'h-9 w-9 rounded-full bg-white/10 object-cover'}
+        className={imageClassName}
         loading="lazy"
         fallback={fallback}
       />
@@ -417,6 +423,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                       name={item.name}
                       image={item.image}
                       className="h-6 w-6 rounded-full bg-base-300 object-cover"
+                      fallbackClassName="flex h-6 w-6 items-center justify-center rounded-full bg-base-300 text-[10px] font-semibold text-base-content/75"
                     />
                     <span className="line-clamp-1 max-w-[11rem] text-sm font-semibold">{item.name}</span>
                   </>
@@ -504,12 +511,15 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                       className="flex min-w-0 flex-1 items-start justify-between gap-3 text-inherit no-underline text-left transition-colors hover:bg-base-200/70"
                       onClick={() => onOpenMarketDetail('perp', toDetailItemId(item))}
                     >
-                      <div className="min-w-0 flex-1 text-left">
-                        <p className="m-0 text-sm font-semibold">{item.symbol}</p>
-                        <p className="m-0 mt-0.5 text-xs text-base-content/60">
-                          {t('trade.volumeShort')}: {formatCompactUsd(item.volume24h, i18n.language)}
-                          {item.metaValue != null ? `  ${t('trade.openInterestShort')}: ${formatCompactUsd(item.metaValue, i18n.language)}` : ''}
-                        </p>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <IconAvatar symbol={item.symbol} name={item.name} image={item.image} />
+                        <div className="min-w-0 flex-1 text-left">
+                          <p className="m-0 text-sm font-semibold">{item.symbol}</p>
+                          <p className="m-0 mt-0.5 text-xs text-base-content/60">
+                            {t('trade.volumeShort')}: {formatCompactUsd(item.volume24h, i18n.language)}
+                            {item.metaValue != null ? `  ${t('trade.openInterestShort')}: ${formatCompactUsd(item.metaValue, i18n.language)}` : ''}
+                          </p>
+                        </div>
                       </div>
                       <div className="shrink-0 text-right">
                         <p className="m-0 text-sm text-base-content/70">
@@ -543,11 +553,14 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                       className="flex min-w-0 flex-1 items-start justify-between gap-3 text-inherit no-underline text-left transition-colors hover:bg-base-200/70"
                       onClick={() => onOpenMarketDetail('prediction', toDetailItemId(market))}
                     >
-                      <div className="min-w-0 flex-1 text-left">
-                        <p className="m-0 line-clamp-2 text-sm font-semibold">{market.title}</p>
-                        <p className="m-0 mt-1 text-xs text-base-content/60">
-                          {t('trade.volumeShort')}: {formatCompactUsd(market.volume24h, i18n.language)}
-                        </p>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <IconAvatar symbol={market.title} name={market.title} image={market.image} />
+                        <div className="min-w-0 flex-1 text-left">
+                          <p className="m-0 line-clamp-2 text-sm font-semibold">{market.title}</p>
+                          <p className="m-0 mt-1 text-xs text-base-content/60">
+                            {t('trade.volumeShort')}: {formatCompactUsd(market.volume24h, i18n.language)}
+                          </p>
+                        </div>
                       </div>
                       <div className="shrink-0 text-right">
                         <p className="m-0 rounded-full bg-success/15 px-2 py-0.5 text-sm font-semibold text-success">

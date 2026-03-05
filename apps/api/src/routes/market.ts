@@ -19,7 +19,7 @@ import {
   fetchTradeMarketKline,
   normalizeTradeMarketDetailType,
 } from '../services/tradeBrowse';
-import { searchBinanceTokens } from '../services/binance';
+import { fetchBinanceSpotKlines, searchBinanceTokens } from '../services/binance';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 import {
   resolveAssetIdentity,
@@ -27,6 +27,7 @@ import {
   type ResolveAssetInput,
   type ResolvedAsset,
 } from '../services/assetData';
+import { isKlineStale, shouldPreferFallbackCandles } from '../services/klineFreshness';
 
 const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 
@@ -41,6 +42,12 @@ function normalizeContractAddress(raw: unknown): string | null {
   if (!value) return null;
   if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
   return value;
+}
+
+function toUpperSymbol(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return value || null;
 }
 
 function isNativeLikeContract(raw: unknown): boolean {
@@ -878,18 +885,59 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     }
 
     try {
+      const resolveBinanceFallbackCandles = async (): Promise<null | Awaited<ReturnType<typeof fetchBinanceSpotKlines>>> => {
+        let symbol: string | null = null;
+        try {
+          const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
+          symbol = toUpperSymbol(detail?.symbol);
+        } catch {
+          symbol = null;
+        }
+        if (!symbol) return null;
+        const fallback = await fetchBinanceSpotKlines(symbol, period, size);
+        return fallback.length > 0 ? fallback : null;
+      };
+
       const candles = await fetchBitgetTokenKline(c.env, {
         chain,
         contract,
         period,
         size,
       });
+      const fallback = (!candles.length || isKlineStale(candles, period))
+        ? await resolveBinanceFallbackCandles()
+        : null;
+      if (fallback && shouldPreferFallbackCandles(candles, fallback, period)) {
+        return c.json({ period, candles: fallback, source: 'binance_spot_fallback' });
+      }
       return c.json({ period, candles });
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      try {
+        const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
+        const symbol = toUpperSymbol(detail?.symbol);
+        if (symbol) {
+          const fallback = await fetchBinanceSpotKlines(symbol, period, size);
+          if (fallback.length > 0) {
+            return c.json({ period, candles: fallback, source: 'binance_spot_fallback' });
+          }
+        }
+      } catch {
+        // ignore
+      }
+      if (message.includes('bgw_http_429')) {
+        return c.json(
+          {
+            error: 'market_kline_rate_limited',
+            message,
+          },
+          429,
+        );
+      }
       return c.json(
         {
           error: 'bitget_kline_failed',
-          message: error instanceof Error ? error.message : 'unknown_error',
+          message,
         },
         502,
       );
@@ -924,7 +972,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
               chain: normalizeMarketChain(item.chain),
               contract,
             },
-          );
+          ) ?? item.image;
           return { image };
         })(),
         id: item.id,

@@ -99,6 +99,21 @@ const STABLECOIN_NAME_FRAGMENTS = [
   'euro coin',
 ];
 
+const PERP_QUOTE_SUFFIXES = [
+  'USDT',
+  'USDC',
+  'USD',
+  'FDUSD',
+  'BUSD',
+];
+
+const PERP_SYMBOL_ALIASES: Record<string, string[]> = {
+  XBT: ['BTC'],
+  WBTC: ['BTC'],
+  WETH: ['ETH'],
+  STETH: ['ETH'],
+};
+
 let tradeBrowseCache: { expiresAt: number; value: TradeBrowseResponse } | null = null;
 let tradeBrowseInFlight: Promise<TradeBrowseResponse> | null = null;
 
@@ -219,6 +234,53 @@ function normalizeContractAddress(raw: unknown): string | null {
   return value;
 }
 
+function normalizePerpUnderlyingSymbol(raw: unknown): string | null {
+  let value = normalizeText(raw)?.toUpperCase() ?? null;
+  if (!value) return null;
+  value = value.replace(/[_\s]+/g, '');
+  value = value.replace(/-PERP$/i, '').replace(/PERP$/i, '');
+
+  const slashIndex = value.indexOf('/');
+  if (slashIndex > 0) value = value.slice(0, slashIndex);
+  const dashIndex = value.indexOf('-');
+  if (dashIndex > 0) value = value.slice(0, dashIndex);
+
+  for (const suffix of PERP_QUOTE_SUFFIXES) {
+    if (value.endsWith(suffix) && value.length > suffix.length) {
+      value = value.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return value || null;
+}
+
+function buildPerpIconSymbolCandidates(raw: unknown): string[] {
+  const normalized = normalizePerpUnderlyingSymbol(raw);
+  if (!normalized) return [];
+  const output: string[] = [normalized];
+  const aliases = PERP_SYMBOL_ALIASES[normalized] ?? [];
+  for (const alias of aliases) {
+    if (!output.includes(alias)) output.push(alias);
+  }
+  return output;
+}
+
+function resolvePerpIconFromLookup(
+  lookup: Awaited<ReturnType<typeof loadTokenIconLookup>> | null,
+  symbol: string,
+): string | null {
+  if (!lookup) return null;
+  const candidates = buildPerpIconSymbolCandidates(symbol);
+  for (const candidate of candidates) {
+    const icon = resolveTokenIconFromLookup(lookup, {
+      symbol: candidate,
+      name: candidate,
+    });
+    if (icon) return icon;
+  }
+  return null;
+}
+
 async function applyCanonicalCryptoItemLogos(
   _env: Bindings,
   items: TradeBrowseMarketItem[],
@@ -321,20 +383,21 @@ async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
     return items.map((item) => {
       const normalizedChain = normalizeMarketChain(item.chain);
       const normalizedContract = normalizeText(item.contract);
+      const mappedImage = resolveTokenIconFromLookup(
+        stockIconLookup,
+        {
+          symbol: item.stockTicker,
+          name: item.name,
+          chain: normalizedChain,
+          contract: normalizedContract,
+        },
+      );
 
       return {
         id: item.id,
         symbol: item.stockTicker,
         name: item.name,
-        image: resolveTokenIconFromLookup(
-          stockIconLookup,
-          {
-            symbol: item.stockTicker,
-            name: item.name,
-            chain: normalizedChain,
-            contract: normalizedContract,
-          },
-        ),
+        image: mappedImage ?? item.image,
         chain: normalizedChain || null,
         contract: normalizedContract ?? null,
         currentPrice: item.currentPrice,
@@ -351,7 +414,7 @@ async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
   }
 }
 
-async function fetchPerps(): Promise<TradeBrowseMarketItem[]> {
+async function fetchPerps(env: Bindings): Promise<TradeBrowseMarketItem[]> {
   const response = await fetch(HYPERLIQUID_INFO_URL, {
     method: 'POST',
     headers: {
@@ -371,6 +434,11 @@ async function fetchPerps(): Promise<TradeBrowseMarketItem[]> {
   const meta = asRecord(payload[0]);
   const universe = Array.isArray(meta?.universe) ? meta.universe : [];
   const ctxs = Array.isArray(payload[1]) ? payload[1] : [];
+  const perpIconLookup = await loadTokenIconLookup(env, {
+    source: 'auto',
+    name: 'marketCap',
+    limit: 400,
+  }).catch(() => null);
   const output: TradeBrowseMarketItem[] = [];
 
   const maxLength = Math.min(universe.length, ctxs.length);
@@ -389,12 +457,13 @@ async function fetchPerps(): Promise<TradeBrowseMarketItem[]> {
       : null;
     const volume24h = toFiniteNumber(marketCtx.dayNtlVlm);
     const openInterest = toFiniteNumber(marketCtx.openInterest);
+    const mappedImage = resolvePerpIconFromLookup(perpIconLookup, symbol);
 
     output.push({
       id: `hyperliquid:${symbol}`,
       symbol,
       name: `${symbol} Perp`,
-      image: null,
+      image: mappedImage,
       chain: null,
       contract: null,
       currentPrice,
@@ -568,7 +637,7 @@ export async function fetchTradeMarketDetail(
                 chain,
                 contract,
               },
-            ),
+            ) ?? detail.image,
             chain: chain || null,
             contract: contract ?? null,
             currentPrice: detail.currentPrice,
@@ -587,7 +656,7 @@ export async function fetchTradeMarketDetail(
   }
 
   if (options.type === 'perp') {
-    const perps = await fetchPerps();
+    const perps = await fetchPerps(env);
     return perps.find((item) => item.id === id) ?? null;
   }
 
@@ -869,7 +938,7 @@ export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseRespon
       safeFetch(() => fetchTopMovers(env), []),
       safeFetch(() => fetchTrendings(env), []),
       safeFetch(() => fetchStocks(env), []),
-      safeFetch(() => fetchPerps().then((items) => items.slice(0, 10)), []),
+      safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 10)), []),
       safeFetch(() => fetchPredictions(10), []),
     ]);
 

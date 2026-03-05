@@ -2,6 +2,7 @@ const BINANCE_ALPHA_BASE = 'https://www.binance.com';
 const BINANCE_DATA_API_BASE = 'https://data-api.binance.vision';
 const TOKEN_LIST_CACHE_TTL_MS = 120_000;
 const TICKER_CACHE_TTL_MS = 20_000;
+const DEFAULT_SPOT_KLINE_QUOTES = ['USDT', 'USDC', 'FDUSD', 'BUSD'];
 
 type BinanceAlphaToken = {
   tokenId: string;
@@ -159,28 +160,41 @@ const ALPHA_KLINE_INTERVAL_MAP: Record<string, string> = {
   '1d': '1d',
 };
 
-export async function fetchBinanceStockKlines(
-  alphaId: string,
-  period: string,
-  size: number,
-): Promise<BinanceKlineCandle[]> {
-  const interval = ALPHA_KLINE_INTERVAL_MAP[period] ?? '1h';
-  const clampedSize = Math.max(10, Math.min(size, 500));
-  const symbol = `${alphaId.toUpperCase()}USDT`;
-  const query = new URLSearchParams({ symbol, interval, limit: String(clampedSize) });
+const SPOT_KLINE_INTERVAL_MAP: Record<string, string> = {
+  '1m': '1m',
+  '5m': '5m',
+  '15m': '15m',
+  '30m': '30m',
+  '1h': '1h',
+  '4h': '4h',
+  '1d': '1d',
+  '1w': '1w',
+};
 
-  const response = await fetch(
-    `${BINANCE_ALPHA_BASE}/bapi/defi/v1/public/alpha-trade/klines?${query.toString()}`,
-    { headers: { Accept: 'application/json', 'Accept-Encoding': 'gzip' } },
-  );
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`binance_alpha_kline_http_${response.status}:${detail.slice(0, 200)}`);
+function normalizeSpotBaseSymbol(raw: string): string | null {
+  const value = raw.trim().toUpperCase();
+  if (!value) return null;
+  const cleaned = value.replace(/[^A-Z0-9]/g, '');
+  return cleaned || null;
+}
+
+function buildSpotPairCandidates(baseSymbol: string, quotes?: string[]): string[] {
+  const normalizedBase = normalizeSpotBaseSymbol(baseSymbol);
+  if (!normalizedBase) return [];
+  const quoteList = (quotes ?? DEFAULT_SPOT_KLINE_QUOTES)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+
+  for (const quote of quoteList) {
+    if (normalizedBase.endsWith(quote) && normalizedBase.length > quote.length) {
+      return [normalizedBase];
+    }
   }
 
-  const payload = (await response.json()) as { data?: unknown[] };
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  return quoteList.map((quote) => `${normalizedBase}${quote}`);
+}
 
+function parseBinanceKlineRows(rows: unknown[]): BinanceKlineCandle[] {
   return rows
     .map((row) => {
       if (!Array.isArray(row) || row.length < 6) return null;
@@ -202,6 +216,74 @@ export async function fetchBinanceStockKlines(
     })
     .filter((item): item is BinanceKlineCandle => item != null)
     .sort((a, b) => a.time - b.time);
+}
+
+async function fetchBinanceSpotKlinesByPair(
+  pair: string,
+  interval: string,
+  limit: number,
+): Promise<BinanceKlineCandle[]> {
+  const query = new URLSearchParams({
+    symbol: pair,
+    interval,
+    limit: String(limit),
+  });
+  const response = await fetch(`${BINANCE_DATA_API_BASE}/api/v3/klines?${query.toString()}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`binance_spot_kline_http_${response.status}:${detail.slice(0, 200)}`);
+  }
+  const payload = (await response.json()) as unknown;
+  const rows = Array.isArray(payload) ? payload : [];
+  return parseBinanceKlineRows(rows);
+}
+
+export async function fetchBinanceSpotKlines(
+  symbol: string,
+  period: string,
+  size: number,
+): Promise<BinanceKlineCandle[]> {
+  const base = normalizeSpotBaseSymbol(symbol);
+  if (!base) return [];
+  const interval = SPOT_KLINE_INTERVAL_MAP[(period ?? '').trim().toLowerCase()];
+  if (!interval) return [];
+  const limit = Math.max(10, Math.min(Math.trunc(size || 60), 500));
+  const pairs = buildSpotPairCandidates(base);
+  for (const pair of pairs) {
+    try {
+      const candles = await fetchBinanceSpotKlinesByPair(pair, interval, limit);
+      if (candles.length > 0) return candles;
+    } catch {
+      // Try next quote pair.
+    }
+  }
+  return [];
+}
+
+export async function fetchBinanceStockKlines(
+  alphaId: string,
+  period: string,
+  size: number,
+): Promise<BinanceKlineCandle[]> {
+  const interval = ALPHA_KLINE_INTERVAL_MAP[period] ?? '1h';
+  const clampedSize = Math.max(10, Math.min(size, 500));
+  const symbol = `${alphaId.toUpperCase()}USDT`;
+  const query = new URLSearchParams({ symbol, interval, limit: String(clampedSize) });
+
+  const response = await fetch(
+    `${BINANCE_ALPHA_BASE}/bapi/defi/v1/public/alpha-trade/klines?${query.toString()}`,
+    { headers: { Accept: 'application/json', 'Accept-Encoding': 'gzip' } },
+  );
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`binance_alpha_kline_http_${response.status}:${detail.slice(0, 200)}`);
+  }
+
+  const payload = (await response.json()) as { data?: unknown[] };
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  return parseBinanceKlineRows(rows);
 }
 
 export async function searchBinanceTokens(

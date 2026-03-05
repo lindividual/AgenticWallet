@@ -522,18 +522,28 @@ export async function fetchBitgetTokenKline(
   if (cached && cached.expiresAt > now) {
     return cached.value;
   }
+  const staleValue = cached?.value ?? null;
   const inFlight = tokenKlineInFlightCache.get(normalized.cacheKey);
   if (inFlight) {
     return inFlight;
   }
 
   const task = (async () => {
-    const result = await bitgetPost<{ list?: BitgetKlineRow[] }>(env, '/bgw-pro/market/v3/coin/getKline', {
-      chain: normalized.chain,
-      contract: contractKeyToUpstreamContract(normalized.contract),
-      period: normalized.period,
-      size: normalized.size,
-    });
+    let result: BitgetEnvelope<{ list?: BitgetKlineRow[] }>;
+    try {
+      result = await bitgetPost<{ list?: BitgetKlineRow[] }>(env, '/bgw-pro/market/v3/coin/getKline', {
+        chain: normalized.chain,
+        contract: contractKeyToUpstreamContract(normalized.contract),
+        period: normalized.period,
+        size: normalized.size,
+      });
+    } catch (error) {
+      // Upstream rate limiting is common; keep chart usable with stale cache.
+      if (staleValue && staleValue.length > 0) {
+        return staleValue;
+      }
+      throw error;
+    }
     const rows = Array.isArray(result.data?.list) ? result.data?.list : [];
 
     const value = rows

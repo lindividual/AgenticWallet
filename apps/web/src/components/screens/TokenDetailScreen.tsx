@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
@@ -19,7 +19,7 @@ import {
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
 import { formatUsdAdaptive } from '../../utils/currency';
-import { normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
+import { computeAdaptiveChartWindowSeconds, normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
 import { cloneTradeToken, getChainIdByMarketChain, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { CachedIconImage } from '../CachedIconImage';
 import { Modal } from '../modals/Modal';
@@ -184,12 +184,28 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         nameHint: routePreview?.name,
       }),
     staleTime: 5 * 60_000,
-    enabled: !previewInstrumentId,
+    enabled: Boolean(normalizedChain),
   });
 
-  const activeInstrumentId = previewInstrumentId
-    || resolvedIdentity?.instrument_id?.trim()
+  const resolvedInstrumentId = resolvedIdentity?.instrument_id?.trim() || null;
+  const activeInstrumentId = resolvedInstrumentId
+    || previewInstrumentId
     || null;
+
+  const fetchTokenCandles = useCallback(
+    async (period: KlinePeriod, size: number) => {
+      if (activeInstrumentId) {
+        try {
+          const byInstrument = await getMarketCandlesByInstrumentId(activeInstrumentId, period, size);
+          if (byInstrument.length > 0) return byInstrument;
+        } catch {
+          // Fall through to legacy endpoint for resilience when instrument route is stale or rate-limited.
+        }
+      }
+      return getTokenKline(normalizedChain, normalizedContract, period, size);
+    },
+    [activeInstrumentId, normalizedChain, normalizedContract],
+  );
 
   const { data: instrumentMarket, isLoading: isInstrumentDetailLoading } = useQuery({
     queryKey: ['trade-token-market-by-instrument', activeInstrumentId],
@@ -212,14 +228,14 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     enabled: !activeInstrumentId,
   });
 
-  const { data: klineData, isLoading: isKlineLoading } = useQuery({
+  const {
+    data: klineData,
+    isLoading: isKlineLoading,
+    isError: isKlineError,
+    error: klineError,
+  } = useQuery({
     queryKey: ['trade-token-kline', normalizedChain, normalizedContract, activeInstrumentId, klinePeriod],
-    queryFn: () => {
-      if (activeInstrumentId) {
-        return getMarketCandlesByInstrumentId(activeInstrumentId, klinePeriod, 60);
-      }
-      return getTokenKline(normalizedChain, normalizedContract, klinePeriod, 60);
-    },
+    queryFn: () => fetchTokenCandles(klinePeriod, 60),
     staleTime: 20_000,
     refetchInterval: 30_000,
   });
@@ -257,12 +273,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
   const { data: fallbackChangeKlineData } = useQuery({
     queryKey: ['trade-token-kline-change-fallback', normalizedChain, normalizedContract, activeInstrumentId],
-    queryFn: () => {
-      if (activeInstrumentId) {
-        return getMarketCandlesByInstrumentId(activeInstrumentId, '1h', 48);
-      }
-      return getTokenKline(normalizedChain, normalizedContract, '1h', 48);
-    },
+    queryFn: () => fetchTokenCandles('1h', 48),
     staleTime: 20_000,
     refetchInterval: 30_000,
     enabled: shouldUseKlineChangeFallback,
@@ -298,7 +309,10 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         ?? 0;
 
   const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
-  const chartWindow = Math.max(candleWidth * Math.min(chartCandles.length || 30, 60), candleWidth * 10);
+  const chartWindow = useMemo(
+    () => computeAdaptiveChartWindowSeconds(chartCandles, candleWidth, 60),
+    [candleWidth, chartCandles],
+  );
   const displayContract = (providerDetail?.contract ?? detail?.contract ?? normalizedContract).trim();
   const displayChain = (providerDetail?.chain ?? detail?.chain ?? normalizedChain).trim().toUpperCase();
   const displayName = providerDetail?.name ?? detail?.name ?? routePreview?.name ?? displayContract;
@@ -337,12 +351,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     try {
       await queryClient.fetchQuery({
         queryKey: ['trade-token-kline', normalizedChain, normalizedContract, activeInstrumentId, nextPeriod],
-        queryFn: () => {
-          if (activeInstrumentId) {
-            return getMarketCandlesByInstrumentId(activeInstrumentId, nextPeriod, 60);
-          }
-          return getTokenKline(normalizedChain, normalizedContract, nextPeriod, 60);
-        },
+        queryFn: () => fetchTokenCandles(nextPeriod, 60),
         staleTime: 20_000,
       });
       setKlinePeriod(nextPeriod);
@@ -591,7 +600,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             </div>
           </div>
         ) : chartCandles.length === 0 ? (
-          <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.noKline')}</p>
+          <p className="m-0 mt-3 text-sm text-base-content/60">
+            {isKlineError
+              ? t('trade.loadFailed', { message: klineError instanceof Error ? klineError.message : t('common.error') })
+              : t('trade.noKline')}
+          </p>
         ) : (
           <div className="mt-2 h-72 overflow-hidden p-0">
             <Liveline

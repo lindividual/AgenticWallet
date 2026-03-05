@@ -23,7 +23,7 @@ import {
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { formatUsdAdaptive } from '../../utils/currency';
-import { normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
+import { computeAdaptiveChartWindowSeconds, normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
 import {
   normalizeTradeMarketDetailType,
   normalizeWatchlistItemId,
@@ -253,8 +253,6 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const {
     data: klineData,
     isLoading: isKlineLoading,
-    isError: isKlineError,
-    error: klineError,
   } = useQuery({
     queryKey: [
       'trade-market-kline',
@@ -321,7 +319,10 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       ? Number(selectedPredictionOption?.probability ?? displayProbability ?? 0)
       : Number(displayPrice ?? 0);
   const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
-  const chartWindow = Math.max(candleWidth * Math.min(chartCandles.length || 30, 60), candleWidth * 10);
+  const chartWindow = useMemo(
+    () => computeAdaptiveChartWindowSeconds(chartCandles, candleWidth, 60),
+    [candleWidth, chartCandles],
+  );
   const isChartLoading = hasKlineSupport && isKlineLoading && chartCandles.length === 0;
   const chartColor = useMemo(
     () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
@@ -336,41 +337,6 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       source: 'trade_market_detail',
     }).catch(() => undefined);
   }, [displayName, displaySymbol, normalizedItemId, normalizedType]);
-
-  useEffect(() => {
-    console.log('[trade-kline-debug][web][state]', {
-      type: normalizedType,
-      id: normalizedItemId,
-      hasKlineSupport,
-      selectedPredictionTokenId,
-      activeInstrumentId,
-      klinePeriod,
-    });
-  }, [activeInstrumentId, hasKlineSupport, klinePeriod, normalizedItemId, normalizedType, selectedPredictionTokenId]);
-
-  useEffect(() => {
-    if (!klineData) return;
-    console.log('[trade-kline-debug][web][kline_data]', {
-      type: normalizedType,
-      id: normalizedItemId,
-      period: klinePeriod,
-      candles: klineData.length,
-      firstTs: klineData[0]?.time ?? null,
-      lastTs: klineData[klineData.length - 1]?.time ?? null,
-      firstRenderTs: chartCandles[0]?.time ?? null,
-      lastRenderTs: chartCandles[chartCandles.length - 1]?.time ?? null,
-    });
-  }, [chartCandles, klineData, klinePeriod, normalizedItemId, normalizedType]);
-
-  useEffect(() => {
-    if (!isKlineError) return;
-    console.error('[trade-kline-debug][web][kline_error]', {
-      type: normalizedType,
-      id: normalizedItemId,
-      period: klinePeriod,
-      message: klineError instanceof Error ? klineError.message : String(klineError),
-    });
-  }, [isKlineError, klineError, klinePeriod, normalizedItemId, normalizedType]);
 
   useEffect(() => {
     if (normalizedType !== 'prediction') {
