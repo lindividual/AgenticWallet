@@ -222,6 +222,8 @@
     "betAmount": "Bet amount (USDC)",
     "betAmountPlaceholder": "Enter amount",
     "betNow": "Bet now",
+    "buyYes": "Buy Yes",
+    "buyNo": "Buy No",
     "betAmountInvalid": "Please enter a valid bet amount.",
     "betTokenUnavailable": "This option is not available for betting yet.",
     "betSuccess": "Bet submitted.",

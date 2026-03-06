@@ -222,6 +222,8 @@
     "betAmount": "下注金额（USDC）",
     "betAmountPlaceholder": "输入金额",
     "betNow": "立即下注",
+    "buyYes": "买入 Yes",
+    "buyNo": "买入 No",
     "betAmountInvalid": "请输入有效的下注金额。",
     "betTokenUnavailable": "该选项暂不支持下注。",
     "betSuccess": "下注已提交。",

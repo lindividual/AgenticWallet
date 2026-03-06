@@ -33,7 +33,7 @@ import {
 import { MarketInfoSection } from './marketDetail/MarketInfoSection';
 import { MarketKlineSection } from './marketDetail/MarketKlineSection';
 import { MarketSummarySection } from './marketDetail/MarketSummarySection';
-import { PredictionBetOptionsSection } from './marketDetail/PredictionBetOptionsSection';
+import { PredictionBetOptionsSection, type PredictionBetTarget } from './marketDetail/PredictionBetOptionsSection';
 
 type MarketDetailScreenProps = {
   marketType: TradeMarketDetailType;
@@ -213,6 +213,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const activeMarketItem = normalizedType === 'stock' ? stockItem : normalizedType === 'perp' ? perpItem : null;
   const activePredictionItem = normalizedType === 'prediction' ? predictionItem : null;
   const isSummaryLoading = (isLoading || isDetailLoading || isInstrumentLoading) && !activeMarketItem && !activePredictionItem;
+  const predictionLayout = activePredictionItem?.layout === 'winner' ? 'winner' : 'binary';
+  const predictionOutcomeRows = activePredictionItem?.outcomeRows ?? [];
   const predictionOptions = activePredictionItem?.options ?? [];
   const selectedPredictionOption = useMemo<TradeBrowsePredictionOption | null>(() => {
     if (!predictionOptions.length) return null;
@@ -455,7 +457,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     window.open(displayExternalUrl, '_blank', 'noopener,noreferrer');
   }
 
-  async function submitPredictionBetOrder(option: TradeBrowsePredictionOption): Promise<void> {
+  async function submitPredictionBetOrder(option: PredictionBetTarget): Promise<void> {
     if (pendingPredictionOptionId != null) return;
     if (!option.tokenId) {
       showError(t('trade.betTokenUnavailable'));
@@ -557,7 +559,9 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
       {normalizedType === 'prediction' && (
         <PredictionBetOptionsSection
+          layout={predictionLayout}
           options={predictionOptions}
+          outcomeRows={predictionOutcomeRows}
           selectedOptionId={selectedPredictionOption?.id ?? null}
           onSelectOption={setSelectedPredictionOptionId}
           betAmount={predictionBetAmount}

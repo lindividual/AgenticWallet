@@ -375,6 +375,9 @@ export type TradeBrowsePredictionItem = {
   probability: number | null;
   volume24h: number | null;
   url: string | null;
+  layout?: 'binary' | 'winner';
+  eventId?: string | null;
+  outcomeRows?: TradeBrowsePredictionOutcomeRow[];
   options: TradeBrowsePredictionOption[];
   source: 'polymarket';
 };
@@ -384,6 +387,16 @@ export type TradeBrowsePredictionOption = {
   label: string;
   tokenId: string | null;
   probability: number | null;
+};
+
+export type TradeBrowsePredictionOutcomeRow = {
+  id: string;
+  marketId: string;
+  label: string;
+  yesTokenId: string | null;
+  noTokenId: string | null;
+  yesProbability: number | null;
+  noProbability: number | null;
 };
 
 export type TradeBrowseResponse = {

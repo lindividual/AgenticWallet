@@ -33,6 +33,9 @@ export type TradeBrowsePredictionItem = {
   probability: number | null;
   volume24h: number | null;
   url: string | null;
+  layout: 'binary' | 'winner';
+  eventId: string | null;
+  outcomeRows: TradeBrowsePredictionOutcomeRow[];
   options: TradeBrowsePredictionOption[];
   source: 'polymarket';
 };
@@ -42,6 +45,16 @@ export type TradeBrowsePredictionOption = {
   label: string;
   tokenId: string | null;
   probability: number | null;
+};
+
+export type TradeBrowsePredictionOutcomeRow = {
+  id: string;
+  marketId: string;
+  label: string;
+  yesTokenId: string | null;
+  noTokenId: string | null;
+  yesProbability: number | null;
+  noProbability: number | null;
 };
 
 export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
@@ -67,6 +80,7 @@ export type TradeBrowseResponse = {
 const TRADE_BROWSE_CACHE_TTL_MS = 20_000;
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
+const POLYMARKET_EVENTS_BASE_URL = 'https://gamma-api.polymarket.com/events';
 const POLYMARKET_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
 const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 const STABLECOIN_SYMBOLS = new Set([
@@ -518,6 +532,9 @@ function parsePredictionItemFromRow(row: Record<string, unknown>): TradeBrowsePr
 
   const directUrl = normalizeText(row.url);
   const slug = normalizeText(row.slug);
+  const events = Array.isArray(row.events) ? row.events : [];
+  const primaryEvent = asRecord(events[0]);
+  const eventId = normalizeText(primaryEvent?.id);
 
   return {
     id: `polymarket:${rawId}`,
@@ -526,8 +543,154 @@ function parsePredictionItemFromRow(row: Record<string, unknown>): TradeBrowsePr
     probability,
     volume24h,
     url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : null),
+    layout: 'binary',
+    eventId: eventId ?? null,
+    outcomeRows: [],
     options,
     source: 'polymarket',
+  };
+}
+
+function getBinaryOutcomeIndex(outcomes: string[], side: 'yes' | 'no'): number {
+  return outcomes.findIndex((label) => label.trim().toLowerCase() === side);
+}
+
+type WinnerOutcomeBuildResult = {
+  option: TradeBrowsePredictionOption;
+  row: TradeBrowsePredictionOutcomeRow;
+};
+
+function buildWinnerOutcomeFromMarket(
+  market: Record<string, unknown>,
+  eventId: string,
+  index: number,
+): WinnerOutcomeBuildResult | null {
+  const marketId =
+    normalizeText(market.id)
+    ?? normalizeText(market.slug)
+    ?? normalizeText(market.conditionId)
+    ?? `${eventId}-${index + 1}`;
+  const label =
+    normalizeText(market.groupItemTitle)
+    ?? normalizeText(market.question)
+    ?? normalizeText(market.title)
+    ?? `Outcome ${index + 1}`;
+  const outcomes = parseStringArray(market.outcomes);
+  const yesIndex = getBinaryOutcomeIndex(outcomes, 'yes');
+  const noIndex = getBinaryOutcomeIndex(outcomes, 'no');
+  if (yesIndex < 0 || noIndex < 0) return null;
+
+  const outcomePrices = parseNumberArray(market.outcomePrices).map((item) => normalizeProbabilityPercent(item));
+  const clobTokenIds = parseStringArray(market.clobTokenIds);
+  const yesProbability =
+    outcomePrices[yesIndex]
+    ?? normalizeProbabilityPercent(market.probability)
+    ?? normalizeProbabilityPercent(market.lastTradePrice);
+  const noProbability = outcomePrices[noIndex] ?? (yesProbability == null ? null : clampProbabilityPercent(100 - yesProbability));
+  const optionId = `${eventId}:${marketId}`;
+  const yesTokenId = clobTokenIds[yesIndex] ?? null;
+  const noTokenId = clobTokenIds[noIndex] ?? null;
+
+  return {
+    option: {
+      id: optionId,
+      label,
+      tokenId: yesTokenId,
+      probability: yesProbability,
+    },
+    row: {
+      id: optionId,
+      marketId,
+      label,
+      yesTokenId,
+      noTokenId,
+      yesProbability,
+      noProbability,
+    },
+  };
+}
+
+function marketLikelyTradable(row: Record<string, unknown>): boolean {
+  const closed = typeof row.closed === 'boolean' ? row.closed : false;
+  const active = typeof row.active === 'boolean' ? row.active : true;
+  return active && !closed;
+}
+
+async function fetchPolymarketEventById(eventId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const response = await fetch(`${POLYMARKET_EVENTS_BASE_URL}/${encodeURIComponent(eventId)}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as unknown;
+    return asRecord(payload);
+  } catch {
+    return null;
+  }
+}
+
+function buildWinnerPredictionItemFromEvent(
+  eventRow: Record<string, unknown>,
+  fallbackItem: TradeBrowsePredictionItem,
+): TradeBrowsePredictionItem | null {
+  const eventId = normalizeText(eventRow.id);
+  if (!eventId) return null;
+
+  const allMarkets = Array.isArray(eventRow.markets)
+    ? eventRow.markets.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => entry != null)
+    : [];
+  const activeMarkets = allMarkets.filter((entry) => marketLikelyTradable(entry));
+  const candidateMarkets = activeMarkets.length >= 2 ? activeMarkets : allMarkets;
+  if (candidateMarkets.length < 2) return null;
+
+  const built = candidateMarkets
+    .map((market, index) => buildWinnerOutcomeFromMarket(market, eventId, index))
+    .filter((entry): entry is WinnerOutcomeBuildResult => entry != null);
+  if (built.length < 2) return null;
+
+  const options = built.map((entry) => entry.option);
+  const outcomeRows = built.map((entry) => entry.row);
+  const title = normalizeText(eventRow.title) ?? fallbackItem.title;
+  const knownYesProbabilities = options
+    .map((entry) => entry.probability)
+    .filter((entry): entry is number => entry != null);
+  const summedYesProbability = knownYesProbabilities.reduce((acc, value) => acc + value, 0);
+  const probabilityLooksMutuallyExclusive =
+    knownYesProbabilities.length >= 2
+    && summedYesProbability >= 85
+    && summedYesProbability <= 115;
+  const titleSuggestsWinner = /\bwinner\b/i.test(title);
+  if (!probabilityLooksMutuallyExclusive && !titleSuggestsWinner) return null;
+
+  const probability = options
+    .map((entry) => entry.probability)
+    .filter((entry): entry is number => entry != null)
+    .sort((a, b) => b - a)[0]
+    ?? fallbackItem.probability;
+  const image = normalizeText(eventRow.icon) ?? normalizeText(eventRow.image) ?? fallbackItem.image;
+  const volume24h =
+    toFiniteNumber(eventRow.volume24hr)
+    ?? toFiniteNumber(eventRow.volume24h)
+    ?? toFiniteNumber(eventRow.oneDayVolume)
+    ?? toFiniteNumber(eventRow.volume)
+    ?? fallbackItem.volume24h;
+  const directUrl = normalizeText(eventRow.url);
+  const slug = normalizeText(eventRow.slug);
+
+  return {
+    ...fallbackItem,
+    title,
+    image,
+    probability,
+    volume24h,
+    url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : fallbackItem.url),
+    layout: 'winner',
+    eventId,
+    outcomeRows,
+    options,
   };
 }
 
@@ -589,7 +752,16 @@ async function fetchPredictionById(id: string): Promise<TradeBrowsePredictionIte
       const row = asRecord(payload);
       if (row) {
         const parsed = parsePredictionItemFromRow(row);
-        if (parsed) return parsed;
+        if (parsed) {
+          if (parsed.eventId) {
+            const eventRow = await fetchPolymarketEventById(parsed.eventId);
+            if (eventRow) {
+              const winnerView = buildWinnerPredictionItemFromEvent(eventRow, parsed);
+              if (winnerView) return winnerView;
+            }
+          }
+          return parsed;
+        }
       }
     }
   } catch {

@@ -236,10 +236,21 @@ function resolvePredictionSignatureType(
 
 function normalizeTickSize(value: unknown): TickSize {
   const text = normalizeNonEmptyText(value);
-  if (!text || !SUPPORTED_TICK_SIZES.has(text as TickSize)) {
-    throw new Error('invalid_prediction_tick_size');
+  if (text && SUPPORTED_TICK_SIZES.has(text as TickSize)) {
+    return text as TickSize;
   }
-  return text as TickSize;
+
+  const numeric = normalizeNumber(value) ?? (text ? normalizeNumber(text) : null);
+  if (numeric != null && numeric > 0) {
+    for (const candidate of SUPPORTED_TICK_SIZES) {
+      if (Math.abs(numeric - Number(candidate)) < 1e-10) {
+        return candidate;
+      }
+    }
+    throw new Error('unsupported_prediction_tick_size');
+  }
+
+  throw new Error('invalid_prediction_tick_size');
 }
 
 function tickSizeDecimals(tickSize: TickSize): number {

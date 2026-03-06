@@ -222,6 +222,8 @@
     "betAmount": "قيمة المراهنة (USDC)",
     "betAmountPlaceholder": "أدخل المبلغ",
     "betNow": "راهن الآن",
+    "buyYes": "شراء نعم",
+    "buyNo": "شراء لا",
     "betAmountInvalid": "يرجى إدخال مبلغ مراهنة صحيح.",
     "betTokenUnavailable": "هذا الخيار غير متاح للمراهنة حالياً.",
     "betSuccess": "تم إرسال المراهنة.",
