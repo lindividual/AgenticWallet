@@ -20,7 +20,7 @@ type AgentAssistantProps = {
 
 type ChatMessage = AgentChatMessage & { id: string };
 
-const IDLE_TIMEOUT_MS = 3000;
+const IDLE_TIMEOUT_MS = 5000;
 const HELP_PROMPT_KEYS: Record<string, string> = {
   home: 'agent.helpPromptHome',
   trade: 'agent.helpPromptTrade',

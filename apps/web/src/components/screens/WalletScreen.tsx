@@ -6,7 +6,6 @@ import type { LivelinePoint } from 'liveline';
 import {
   getAppConfig,
   getCoinDetailsBatch,
-  getPredictionDepositInfo,
   getWalletPortfolio,
   getWalletPortfolioSnapshots,
   type PortfolioSnapshotPeriod,
@@ -36,6 +35,7 @@ import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 type WalletScreenProps = {
   auth: AuthState;
   onLogout: () => void;
+  onOpenAssetDetail: (chain: string, contract: string) => void;
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
@@ -140,12 +140,6 @@ function formatDisplayAmount(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
-function truncateAddress(address: string, start = 6, end = 4): string {
-  const normalized = address.trim();
-  if (normalized.length <= start + end + 3) return normalized;
-  return `${normalized.slice(0, start)}...${normalized.slice(-end)}`;
-}
-
 const BALANCE_CHART_PERIOD_OPTIONS: Array<{
   value: PortfolioSnapshotPeriod;
   labelKey: string;
@@ -228,7 +222,7 @@ function TokenAvatar({
   );
 }
 
-export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
+export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
   const { showError, showSuccess } = useToast();
@@ -600,31 +594,6 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     }
   }
 
-  async function handleCopyPredictionDepositAddress() {
-    const depositAddress = predictionAccount?.depositAddress?.trim();
-    if (!depositAddress) {
-      showError(t('wallet.addressUnavailable'));
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(depositAddress);
-      showSuccess(t('wallet.predictionAddressCopied'));
-    } catch (err) {
-      showError(`${t('common.error')}: ${(err as Error).message}`);
-    }
-  }
-
-  async function handlePredictionTopUp() {
-    try {
-      const info = await getPredictionDepositInfo();
-      await navigator.clipboard.writeText(info.depositAddress);
-      showSuccess(t('wallet.predictionAddressCopied'));
-    } catch (err) {
-      showError(`${t('common.error')}: ${(err as Error).message}`);
-    }
-  }
-
   function showModal(originRect: RectSnapshot | null) {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
@@ -695,27 +664,6 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
     setPresetTransferAsset(null);
     setActiveModalContent('transfer');
     showModal(snapshotRect(transferButtonRef.current));
-  }
-
-  function openTransferModalFromAsset(asset: SimEvmBalance) {
-    const tokenAddress = asset.address?.trim();
-    const isValidTokenAddress = /^0x[a-fA-F0-9]{40}$/.test(tokenAddress ?? '');
-    const isZeroAddress = (tokenAddress ?? '').toLowerCase() === '0x0000000000000000000000000000000000000000';
-    const shouldPresetToken = isValidTokenAddress && !isZeroAddress;
-
-    setPresetTransferAsset(
-      shouldPresetToken
-        ? {
-            chainId: asset.chain_id,
-            tokenAddress: tokenAddress!,
-            tokenSymbol: asset.symbol,
-            tokenDecimals: asset.decimals,
-          }
-        : null,
-    );
-    setTradePreset(null);
-    setActiveModalContent('transfer');
-    showModal(null);
   }
 
   function openReceiveModal() {
@@ -845,7 +793,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         <button
           ref={topUpButtonRef}
           type="button"
-          className="btn btn-lg text-base font-semibold"
+          className="btn btn-outline text-base font-semibold"
           onClick={openTopUpModal}
         >
           {t('wallet.topUp')}
@@ -853,7 +801,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         <button
           ref={transferButtonRef}
           type="button"
-          className="btn btn-primary text-base font-semibold"
+          className="btn btn-outline text-base font-semibold"
           onClick={openTransferModal}
         >
           {t('wallet.transfer')}
@@ -867,56 +815,7 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
         </button>
       </section>
 
-      {predictionAccount?.available && predictionAccount.depositAddress ? (
-        <article className="rounded-2xl border border-base-300 bg-base-100 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="m-0 text-base font-semibold">{t('wallet.predictionAccount')}</h3>
-            <p className="m-0 text-base font-semibold tabular-nums">
-              {formatUsdAdaptive(Number(predictionAccount.balanceUsd ?? 0), i18n.language)}
-            </p>
-          </div>
-          <p className="m-0 mt-1 text-xs text-base-content/60">
-            {t('wallet.predictionDepositHint')}
-          </p>
-          <p className="m-0 mt-2 font-mono text-sm text-base-content/80">
-            {truncateAddress(predictionAccount.depositAddress)}
-          </p>
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              className="btn btn-sm btn-outline h-8 min-h-0 px-3"
-              onClick={() => {
-                void handleCopyPredictionDepositAddress();
-              }}
-            >
-              {t('wallet.copy')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary h-8 min-h-0 px-3"
-              onClick={() => {
-                void handlePredictionTopUp();
-              }}
-            >
-              {t('wallet.topUp')}
-            </button>
-          </div>
-        </article>
-      ) : null}
-
       <section className="flex flex-col gap-4">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="m-0 text-xl font-bold">{t('wallet.holdings')}</h2>
-          <button
-            type="button"
-            className="btn btn-outline btn-sm h-8 min-h-0 px-3"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-          >
-            {isFetching ? t('wallet.refreshing') : t('wallet.refresh')}
-          </button>
-        </div>
-
         {shouldShowLoading && (
           <div className="flex flex-col gap-1" aria-label={t('wallet.loadingAssets')}>
             {Array.from({ length: 6 }).map((_, index) => (
@@ -933,24 +832,24 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
           <div className="bg-base-200 p-4 text-base">{t('wallet.noAssetsFound')}</div>
         )}
         {!shouldShowLoading && !shouldShowError && holdings.length > 0 && (
-          <div className="flex flex-col gap-3">
-            <article className="rounded-2xl border border-base-300 bg-base-100 px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="m-0 text-base font-semibold">{t('wallet.stables')}</h3>
-                <p className="m-0 text-base font-semibold tabular-nums">
+          <div className="flex flex-col">
+            <article className="border-b border-base-300 py-5">
+              <div className="flex flex-col gap-1">
+                <h3 className="m-0 text-sm text-base-content">{t('wallet.stables')}</h3>
+                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
                   {formatUsdAdaptive(stableAndCryptos.stablesUsd, i18n.language)}
                 </p>
               </div>
             </article>
 
-            <article className="rounded-2xl border border-base-300 bg-base-100 px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="m-0 text-base font-semibold">{t('wallet.cryptos')}</h3>
-                <p className="m-0 text-base font-semibold tabular-nums">
+            <article className="border-b border-base-300 py-5">
+              <div className="flex flex-col gap-1">
+                <h3 className="m-0 text-sm text-base-content">{t('wallet.cryptos')}</h3>
+                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
                   {formatUsdAdaptive(stableAndCryptos.cryptosUsd, i18n.language)}
                 </p>
               </div>
-              <div className="mt-2 flex flex-col">
+              <div className="mt-3 flex flex-col">
                 {stableAndCryptos.cryptoHoldings.length === 0 && (
                   <div className="py-2 text-sm text-base-content/60">{t('wallet.noAssetsFound')}</div>
                 )}
@@ -966,7 +865,16 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
                     <AssetListItem
                       key={asset.key}
                       className="py-3"
-                      onClick={() => openTransferModalFromAsset(asset.transferAsset)}
+                      onClick={() => {
+                        const routeAsset = asset.transferAsset as SimEvmBalance & {
+                          market_chain?: string;
+                          contract_key?: string;
+                        };
+                        onOpenAssetDetail(
+                          routeAsset.market_chain ?? routeAsset.chain,
+                          routeAsset.contract_key ?? routeAsset.address ?? '',
+                        );
+                      }}
                       leftIcon={
                         <TokenAvatar
                           icon={asset.logo}
@@ -984,6 +892,17 @@ export function WalletScreen({ auth, onLogout }: WalletScreenProps) {
                 })}
               </div>
             </article>
+
+            {predictionAccount?.available && predictionAccount.depositAddress ? (
+              <article className="border-b border-base-300 py-5">
+                <div className="flex flex-col gap-1">
+                  <h3 className="m-0 text-sm text-base-content">{t('wallet.predictionAccount')}</h3>
+                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                    {formatUsdAdaptive(Number(predictionAccount.balanceUsd ?? 0), i18n.language)}
+                  </p>
+                </div>
+              </article>
+            ) : null}
           </div>
         )}
       </section>

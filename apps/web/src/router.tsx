@@ -23,6 +23,12 @@ const walletRoute = createRoute({
   component: App,
 });
 
+const walletAssetRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/wallet/asset/$chain/$contract',
+  component: App,
+});
+
 const articleRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/article/$articleId',
@@ -41,7 +47,7 @@ const marketRoute = createRoute({
   component: App,
 });
 
-const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, articleRoute, tokenRoute, marketRoute]);
+const routeTree = rootRoute.addChildren([homeRoute, tradeRoute, walletRoute, walletAssetRoute, articleRoute, tokenRoute, marketRoute]);
 
 export const router = createRouter({
   routeTree,

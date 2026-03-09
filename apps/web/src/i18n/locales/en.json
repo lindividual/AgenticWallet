@@ -114,7 +114,21 @@
     "balanceChartEmpty": "No balance history yet.",
     "balanceChartPeriod24h": "24h",
     "balanceChartPeriod7d": "7d",
-    "balanceChartPeriod30d": "30d"
+    "balanceChartPeriod30d": "30d",
+    "assetDetailOpenToken": "Open token detail",
+    "assetDetailEarnTitle": "Earn",
+    "assetDetailEarnSummary": "3.4% APY",
+    "assetDetailPerpsTitle": "{{symbol}}USD Perps",
+    "assetDetailPerpsSummary": "150x perpetual trading",
+    "assetDetailHistory": "History",
+    "assetDetailMore": "More",
+    "assetDetailHistoryEmpty": "No matching records yet.",
+    "assetDetailSecurityTitle": "Passed security checks",
+    "assetDetailSecuritySummary": "12 checks completed",
+    "assetDetailTokenInfo": "Token info",
+    "assetDetailEventReceive": "Receive",
+    "assetDetailEventTransfer": "Transfer",
+    "assetDetailEventTrade": "Trade"
   },
   "settings": {
     "language": "Language",

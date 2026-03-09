@@ -10,6 +10,7 @@ import { HomeScreen } from './components/screens/HomeScreen';
 import { MarketDetailScreen } from './components/screens/MarketDetailScreen';
 import { TokenDetailScreen } from './components/screens/TokenDetailScreen';
 import { TradeScreen } from './components/screens/TradeScreen';
+import { WalletAssetDetailScreen } from './components/screens/WalletAssetDetailScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
 import { setAgentPreferredLocale, type TopMarketAsset } from './api';
 import { useWalletApp } from './hooks/useWalletApp';
@@ -22,6 +23,7 @@ import {
 const ARTICLE_EXIT_MS = 220;
 const TOKEN_EXIT_MS = 220;
 const MARKET_EXIT_MS = 220;
+const WALLET_ASSET_EXIT_MS = 220;
 const TOKEN_ROUTE_PREVIEW_QUERY_KEY = 'trade-token-route-preview';
 
 export function App() {
@@ -32,6 +34,7 @@ export function App() {
   const location = useLocation();
   const articleMatch = useMatch({ from: '/article/$articleId', shouldThrow: false });
   const tokenMatch = useMatch({ from: '/token/$chain/$contract', shouldThrow: false });
+  const walletAssetMatch = useMatch({ from: '/wallet/asset/$chain/$contract', shouldThrow: false });
   const marketMatch = useMatch({ from: '/market/$marketType/$itemId', shouldThrow: false });
   const routeArticleId = articleMatch?.params.articleId ?? null;
   const isArticleRoute = Boolean(routeArticleId);
@@ -42,6 +45,13 @@ export function App() {
       }
     : null;
   const isTokenRoute = Boolean(routeToken);
+  const routeWalletAsset = walletAssetMatch?.params
+    ? {
+        chain: walletAssetMatch.params.chain.trim(),
+        contract: decodeTokenContractParam(walletAssetMatch.params.contract),
+      }
+    : null;
+  const isWalletAssetRoute = Boolean(routeWalletAsset);
   const routeMarket = marketMatch?.params
     ? {
         marketType: normalizeTradeMarketDetailType(marketMatch.params.marketType),
@@ -56,6 +66,9 @@ export function App() {
   const [activeTokenRoute, setActiveTokenRoute] = useState(routeToken);
   const [isTokenExiting, setIsTokenExiting] = useState(false);
   const tokenExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [activeWalletAssetRoute, setActiveWalletAssetRoute] = useState(routeWalletAsset);
+  const [isWalletAssetExiting, setIsWalletAssetExiting] = useState(false);
+  const walletAssetExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeMarketRoute, setActiveMarketRoute] = useState<{
     marketType: TradeMarketDetailType;
     itemId: string;
@@ -83,6 +96,9 @@ export function App() {
       }
       if (tokenExitTimerRef.current) {
         clearTimeout(tokenExitTimerRef.current);
+      }
+      if (walletAssetExitTimerRef.current) {
+        clearTimeout(walletAssetExitTimerRef.current);
       }
       if (marketExitTimerRef.current) {
         clearTimeout(marketExitTimerRef.current);
@@ -117,6 +133,16 @@ export function App() {
     setActiveTokenRoute(null);
     setIsTokenExiting(false);
   }, [routeToken?.chain, routeToken?.contract]);
+
+  useEffect(() => {
+    if (routeWalletAsset) {
+      setActiveWalletAssetRoute(routeWalletAsset);
+      setIsWalletAssetExiting(false);
+      return;
+    }
+    setActiveWalletAssetRoute(null);
+    setIsWalletAssetExiting(false);
+  }, [routeWalletAsset?.chain, routeWalletAsset?.contract]);
 
   useEffect(() => {
     if (routeMarket?.marketType && routeMarket.itemId) {
@@ -219,6 +245,24 @@ export function App() {
     });
   }
 
+  function handleOpenWalletAsset(chain: string, contract: string) {
+    const normalizedChain = chain.trim();
+    const normalizedContract = contract.trim();
+    if (walletAssetExitTimerRef.current) {
+      clearTimeout(walletAssetExitTimerRef.current);
+      walletAssetExitTimerRef.current = null;
+    }
+    setIsWalletAssetExiting(false);
+    setActiveWalletAssetRoute({ chain: normalizedChain, contract: normalizedContract });
+    void navigate({
+      to: '/wallet/asset/$chain/$contract',
+      params: {
+        chain: normalizedChain,
+        contract: encodeTokenContractParam(normalizedContract),
+      },
+    });
+  }
+
   function handleCloseToken() {
     if (!activeTokenRoute || isTokenExiting) return;
     setIsTokenExiting(true);
@@ -249,6 +293,22 @@ export function App() {
       }
       marketExitTimerRef.current = null;
     }, MARKET_EXIT_MS);
+  }
+
+  function handleCloseWalletAsset() {
+    if (!activeWalletAssetRoute || isWalletAssetExiting) return;
+    setIsWalletAssetExiting(true);
+    if (walletAssetExitTimerRef.current) {
+      clearTimeout(walletAssetExitTimerRef.current);
+    }
+    walletAssetExitTimerRef.current = setTimeout(() => {
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        void navigate({ to: '/wallet' });
+      }
+      walletAssetExitTimerRef.current = null;
+    }, WALLET_ASSET_EXIT_MS);
   }
 
   function handleTabChange(tab: AppTab) {
@@ -283,7 +343,7 @@ export function App() {
         />
       );
     }
-    return <WalletScreen auth={authenticatedState} onLogout={handleLogout} />;
+    return <WalletScreen auth={authenticatedState} onLogout={handleLogout} onOpenAssetDetail={handleOpenWalletAsset} />;
   }
 
   const agentPageContext: PageContext = activeArticleId
@@ -292,6 +352,8 @@ export function App() {
       ? { page: 'token', tokenChain: activeTokenRoute.chain, tokenContract: activeTokenRoute.contract }
       : isMarketRoute && activeMarketRoute
         ? { page: 'market', marketType: activeMarketRoute.marketType, marketItemId: activeMarketRoute.itemId }
+        : isWalletAssetRoute
+          ? { page: 'wallet' }
         : { page: activeTab };
 
   return (
@@ -309,6 +371,15 @@ export function App() {
               onBack={handleCloseToken}
             />
           </div>
+        ) : isWalletAssetRoute && activeWalletAssetRoute ? (
+          <div className={isWalletAssetExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
+            <WalletAssetDetailScreen
+              auth={authenticatedState}
+              chain={activeWalletAssetRoute.chain}
+              contract={activeWalletAssetRoute.contract}
+              onBack={handleCloseWalletAsset}
+            />
+          </div>
         ) : isMarketRoute && activeMarketRoute ? (
           <div className={isMarketExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
             <MarketDetailScreen
@@ -321,7 +392,7 @@ export function App() {
           renderBaseScreen()
         )}
       </div>
-      {!activeArticleId && !isTokenRoute && !isMarketRoute && (
+      {!activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute && (
         <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />
       )}
       <AgentAssistant pageContext={agentPageContext} />

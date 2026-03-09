@@ -114,7 +114,21 @@
     "balanceChartEmpty": "暂无余额历史数据。",
     "balanceChartPeriod24h": "24h",
     "balanceChartPeriod7d": "7d",
-    "balanceChartPeriod30d": "30d"
+    "balanceChartPeriod30d": "30d",
+    "assetDetailOpenToken": "打开币详情",
+    "assetDetailEarnTitle": "理财",
+    "assetDetailEarnSummary": "年化 3.4% 收益",
+    "assetDetailPerpsTitle": "{{symbol}}USD合约",
+    "assetDetailPerpsSummary": "150倍合约交易",
+    "assetDetailHistory": "交易历史",
+    "assetDetailMore": "更多",
+    "assetDetailHistoryEmpty": "暂无相关记录",
+    "assetDetailSecurityTitle": "通过安全检测",
+    "assetDetailSecuritySummary": "共 12 条检测内容",
+    "assetDetailTokenInfo": "币种信息",
+    "assetDetailEventReceive": "收款",
+    "assetDetailEventTransfer": "转账",
+    "assetDetailEventTrade": "交易"
   },
   "settings": {
     "language": "语言",

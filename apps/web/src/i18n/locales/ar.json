@@ -114,7 +114,21 @@
     "balanceChartEmpty": "لا يوجد سجل للرصيد بعد.",
     "balanceChartPeriod24h": "24س",
     "balanceChartPeriod7d": "7أيام",
-    "balanceChartPeriod30d": "30يوم"
+    "balanceChartPeriod30d": "30يوم",
+    "assetDetailOpenToken": "فتح تفاصيل الأصل",
+    "assetDetailEarnTitle": "الربح",
+    "assetDetailEarnSummary": "عائد سنوي 3.4%",
+    "assetDetailPerpsTitle": "عقد {{symbol}}USD",
+    "assetDetailPerpsSummary": "تداول عقود برافعة 150x",
+    "assetDetailHistory": "السجل",
+    "assetDetailMore": "المزيد",
+    "assetDetailHistoryEmpty": "لا توجد سجلات مطابقة بعد.",
+    "assetDetailSecurityTitle": "تم اجتياز فحوصات الأمان",
+    "assetDetailSecuritySummary": "تم إكمال 12 فحصًا",
+    "assetDetailTokenInfo": "معلومات الرمز",
+    "assetDetailEventReceive": "استلام",
+    "assetDetailEventTransfer": "تحويل",
+    "assetDetailEventTrade": "تداول"
   },
   "settings": {
     "language": "اللغة",
