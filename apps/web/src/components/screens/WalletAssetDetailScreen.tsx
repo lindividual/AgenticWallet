@@ -6,9 +6,11 @@ import type { KlineCandle, SimEvmBalance, WalletPortfolioResponse } from '../../
 import {
   getAppConfig,
   getCoinDetail,
+  getMarketByInstrumentId,
   getTokenKline,
   getTransferHistory,
   getWalletPortfolio,
+  resolveAssetIdentity,
 } from '../../api';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { encodeTokenContractParam } from '../../utils/tokenRoute';
@@ -306,6 +308,31 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
+  const perpContractHint = normalizeContractForMatch(normalizedContract) === 'native'
+    ? 'native'
+    : (normalizeText(selectedHolding?.transferAsset.address) || normalizedContract);
+  const { data: perpResolvedIdentity } = useQuery({
+    queryKey: ['wallet-asset-perp-identity', normalizedChain, perpContractHint, selectedHolding?.symbol ?? '', selectedHolding?.name ?? ''],
+    queryFn: () =>
+      resolveAssetIdentity({
+        chain: normalizedChain,
+        contract: perpContractHint,
+        marketType: 'perp',
+        symbol: selectedHolding?.symbol || undefined,
+        nameHint: selectedHolding?.name || undefined,
+      }),
+    enabled: Boolean(normalizedChain && (selectedHolding?.symbol || selectedHolding?.name)),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const perpInstrumentId = perpResolvedIdentity?.instrument_id?.trim() || null;
+  const { data: perpInstrumentMarket } = useQuery({
+    queryKey: ['wallet-asset-perp-market', perpInstrumentId],
+    queryFn: () => getMarketByInstrumentId(perpInstrumentId ?? ''),
+    enabled: Boolean(perpInstrumentId),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
 
   const supportedChains = appConfig?.supportedChains ?? [];
   const displaySymbol = (selectedHolding?.symbol ?? detail?.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
@@ -329,6 +356,10 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
       && tradeTokenConfig
       && /^0x[a-fA-F0-9]{40}$/.test(tradeTokenAddress)
       && normalizeContractForMatch(tradeTokenAddress) !== 'native',
+  );
+  const hasPerpCard = Boolean(
+    perpInstrumentMarket?.instrument?.market_type === 'perp'
+      && perpInstrumentMarket.instrument.venue?.trim().toLowerCase() === 'hyperliquid',
   );
 
   const historyRows = useMemo(() => {
@@ -469,14 +500,12 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   }
 
   const promoCards = [
-    {
-      title: t('wallet.assetDetailEarnTitle'),
-      summary: t('wallet.assetDetailEarnSummary'),
-    },
-    {
-      title: t('wallet.assetDetailPerpsTitle', { symbol: displaySymbol }),
-      summary: t('wallet.assetDetailPerpsSummary'),
-    },
+    ...(hasPerpCard
+      ? [{
+          title: t('wallet.assetDetailPerpsTitle', { symbol: displaySymbol }),
+          summary: t('wallet.assetDetailPerpsSummary'),
+        }]
+      : []),
   ];
 
   const tokenInfoSummary = detailContract
@@ -577,14 +606,16 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         </button>
       </section>
 
-      <section className="grid grid-cols-2 gap-3">
-        {promoCards.map((card) => (
-          <article key={card.title} className="bg-base-200/40 p-3">
-            <p className="m-0 text-sm text-base-content/60">{card.title}</p>
-            <p className="m-0 mt-1 text-lg font-medium leading-tight">{card.summary}</p>
-          </article>
-        ))}
-      </section>
+      {promoCards.length > 0 ? (
+        <section className="grid grid-cols-2 gap-3">
+          {promoCards.map((card) => (
+            <article key={card.title} className="bg-base-200/40 p-3">
+              <p className="m-0 text-sm text-base-content/60">{card.title}</p>
+              <p className="m-0 mt-1 text-lg font-medium leading-tight">{card.summary}</p>
+            </article>
+          ))}
+        </section>
+      ) : null}
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
@@ -626,7 +657,11 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         <p className="m-0 mt-1 text-sm text-base-content/60">{tokenInfoSummary}</p>
       </article>
 
-      <div className="fixed bottom-0 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 border-t border-base-300 bg-base-100 px-4 py-3">
+      <button
+        type="button"
+        className="fixed bottom-0 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 border-t border-base-300 bg-base-100 px-4 py-3 text-left"
+        onClick={openTokenDetail}
+      >
         <div className="flex items-center justify-between gap-4">
           <div className="flex flex-col">
             <span className="text-sm uppercase text-base-content/60">{displaySymbol}</span>
@@ -642,7 +677,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
             )}
           </div>
         </div>
-      </div>
+      </button>
 
       {isModalOpen && (
         <Modal visible originRect={null} onClose={closeModal}>

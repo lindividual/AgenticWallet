@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { ArrowDownToLine, ArrowLeft, Clock3, Copy, Info, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import encodeQR from 'qr';
 import { AssetListItem } from '../AssetListItem';
 
 type ReceiveCryptoContentProps = {
@@ -91,12 +92,14 @@ export function ReceiveCryptoContent({
     [availableChains, selectedChainId],
   );
 
-  const qrCodeUrl = useMemo(() => {
-    if (!walletAddress || !selectedToken || !selectedChain) return '';
+  const qrCodeSvgMarkup = useMemo(() => {
+    if (!walletAddress) return '';
 
-    const payload = `${selectedToken} (${selectedChain.name}): ${walletAddress}`;
-    return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(payload)}`;
-  }, [walletAddress, selectedChain, selectedToken]);
+    return encodeQR(walletAddress, 'svg', {
+      border: 2,
+      scale: 8,
+    });
+  }, [walletAddress]);
 
   useEffect(() => {
     setSelectedChainId(null);
@@ -273,11 +276,10 @@ export function ReceiveCryptoContent({
                       </span>
                     </div>
                     {walletAddress ? (
-                      <img
-                        src={qrCodeUrl}
-                        alt={`${selectedToken}-${selectedChain.name} QR`}
-                        className="mx-auto h-56 w-56 rounded-2xl border border-base-300 bg-white p-2"
-                        loading="lazy"
+                      <div
+                        aria-label={`${selectedToken}-${selectedChain.name} QR`}
+                        className="mx-auto h-56 w-56 rounded-2xl border border-base-300 bg-white p-2 [&_svg]:h-full [&_svg]:w-full"
+                        dangerouslySetInnerHTML={{ __html: qrCodeSvgMarkup }}
                       />
                     ) : null}
                     <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-base-100 px-4 py-3">
