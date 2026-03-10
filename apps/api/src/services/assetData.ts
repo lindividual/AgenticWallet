@@ -650,9 +650,10 @@ async function resolveByItemId(env: Bindings, itemId: string): Promise<ResolvedA
     });
   }
 
-  const chainAssetPrefix = 'evm:';
-  if (lower.startsWith(chainAssetPrefix)) {
-    const rest = normalized.slice(chainAssetPrefix.length);
+  const chainAssetPrefixes = ['evm:', 'svm:'];
+  const matchedPrefix = chainAssetPrefixes.find((prefix) => lower.startsWith(prefix)) ?? null;
+  if (matchedPrefix) {
+    const rest = normalized.slice(matchedPrefix.length);
     const [chain, contract = NATIVE_CONTRACT_KEY] = rest.split(':');
     if (!chain) {
       throw new Error('invalid_chain_asset_id');

@@ -5,22 +5,22 @@ import {
 } from '../services/market';
 import { listUserPortfolioSnapshots, saveUserPortfolioSnapshot } from '../services/agent';
 import { getPredictionAccountSafe } from '../services/prediction';
-import { getWallet } from '../services/wallet';
+import { ensureWalletForUser } from '../services/wallet';
 import type { AppEnv } from '../types';
 
 export function registerWalletRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/wallet/portfolio', async (c) => {
     const userId = c.get('userId');
-    const wallet = await getWallet(c.env.DB, userId);
+    const wallet = await ensureWalletForUser(c.env, userId);
     const walletAddress = wallet?.address;
 
-    if (!walletAddress) {
+    if (!walletAddress || !wallet) {
       return c.json({ error: 'wallet_not_found' }, 404);
     }
 
     let result;
     try {
-      result = await fetchWalletPortfolio(c.env, walletAddress);
+      result = await fetchWalletPortfolio(c.env, wallet);
     } catch (error) {
       return c.json(
         {
@@ -67,13 +67,13 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
     let points = await listUserPortfolioSnapshots(c.env, userId, period);
 
     if (!points.length) {
-      const wallet = await getWallet(c.env.DB, userId);
+      const wallet = await ensureWalletForUser(c.env, userId);
       const walletAddress = wallet?.address;
-      if (!walletAddress) {
+      if (!walletAddress || !wallet) {
         return c.json({ error: 'wallet_not_found' }, 404);
       }
 
-      const result = await fetchWalletPortfolio(c.env, walletAddress);
+      const result = await fetchWalletPortfolio(c.env, wallet);
       await saveUserPortfolioSnapshot(c.env, userId, {
         totalUsd: result.totalUsd,
         holdings: result.holdings,

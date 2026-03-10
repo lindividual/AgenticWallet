@@ -40,6 +40,7 @@ function pickPreferredMarketAsset(
     ['eth', 0],
     ['base', 1],
     ['bnb', 2],
+    ['sol', 3],
   ]);
   const sorted = [...assets].sort((a, b) => {
     const aChainRank = chainRank.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
@@ -157,12 +158,12 @@ export function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): 
 
 export function getPortfolioHoldings(
   sql: SqlStorage,
-  supportedChains: Array<'eth' | 'base' | 'bnb'>,
+  supportedChains: Array<'eth' | 'base' | 'bnb' | 'sol'>,
 ): Array<{ symbol: string; valueUsd: number }> {
   const snapshot = getLatestPortfolioSnapshot(sql);
   if (!snapshot?.holdings_json) return [];
   const chainIdAllowlist = new Set<number>(
-    supportedChains.map((chain) => (chain === 'eth' ? 1 : chain === 'base' ? 8453 : 56)),
+    supportedChains.map((chain) => (chain === 'eth' ? 1 : chain === 'base' ? 8453 : chain === 'bnb' ? 56 : 101)),
   );
   try {
     const holdings = JSON.parse(snapshot.holdings_json) as Array<{

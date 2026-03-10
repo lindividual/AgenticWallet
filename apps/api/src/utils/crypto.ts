@@ -5,6 +5,12 @@ export function generatePrivateKeyHex(): `0x${string}` {
   return `0x${hex}`;
 }
 
+export function generateRandomBytes(length: number): Uint8Array {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return bytes;
+}
+
 export async function encryptString(plainText: string, secret: string): Promise<string> {
   const key = await deriveAesGcmKey(secret, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -55,4 +61,12 @@ function fromBase64(input: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+export function encodeBase64(input: Uint8Array): string {
+  return toBase64(input);
+}
+
+export function decodeBase64(input: string): Uint8Array {
+  return fromBase64(input);
 }

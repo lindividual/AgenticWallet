@@ -30,6 +30,7 @@ import { formatUsdAdaptive } from '../../utils/currency';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 import { buildChainAssetId } from '../../utils/assetIdentity';
+import { buildWalletAccountsFingerprint, normalizeContractForChain } from '../../utils/chainIdentity';
 import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { getHiddenWalletAssetKeys } from '../../utils/walletHiddenAssets';
 
@@ -83,7 +84,7 @@ function normalizeAssetId(raw: string | null | undefined): string | null {
 }
 
 function normalizeChainAssetId(raw: string | null | undefined): string | null {
-  const value = (raw ?? '').trim().toLowerCase();
+  const value = (raw ?? '').trim();
   return value || null;
 }
 
@@ -182,8 +183,10 @@ function resolvePriceChangeLookupParams(
 ): { cacheKey: string; chain: string; contract: string } | null {
   const transferAsset = asset.transferAsset as SimEvmBalance & { market_chain?: string; contract_key?: string };
   const chain = (transferAsset.market_chain ?? transferAsset.chain ?? '').trim().toLowerCase();
-  const contractCandidate = (transferAsset.contract_key ?? transferAsset.address ?? '').trim().toLowerCase();
-  const isValidContract = /^0x[a-f0-9]{40}$/.test(contractCandidate);
+  const contractCandidate = normalizeContractForChain(chain, transferAsset.contract_key ?? transferAsset.address);
+  const isValidContract = chain === 'sol'
+    ? contractCandidate !== 'native'
+    : /^0x[a-f0-9]{40}$/.test(contractCandidate);
   if (!chain || !isValidContract) return null;
   if (contractCandidate === '0x0000000000000000000000000000000000000000') return null;
   return {
@@ -198,7 +201,7 @@ function isHoldingVariantHidden(variant: SimEvmBalance, hiddenAssetKeys: Set<str
   const hiddenKey = buildChainAssetId(
     (variant as SimEvmBalance & { market_chain?: string }).market_chain ?? variant.chain,
     (variant as SimEvmBalance & { contract_key?: string }).contract_key ?? variant.address,
-  ).trim().toLowerCase();
+  ).trim();
   return hiddenAssetKeys.has(hiddenKey);
 }
 
@@ -251,12 +254,13 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
+  const walletFingerprint = buildWalletAccountsFingerprint(auth.wallet?.chainAccounts, auth.wallet?.address);
   const [hiddenAssetKeys, setHiddenAssetKeys] = useState<Set<string>>(() => getHiddenWalletAssetKeys(walletAddress));
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
-    queryKey: ['wallet-portfolio', walletAddress],
+    queryKey: ['wallet-portfolio', walletFingerprint],
     queryFn: () => getWalletPortfolio(),
-    enabled: Boolean(walletAddress),
+    enabled: Boolean(walletFingerprint),
     staleTime: 15_000,
     refetchInterval: 20_000,
     refetchOnWindowFocus: true,
@@ -271,9 +275,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   const [pendingChartPeriod, setPendingChartPeriod] = useState<PortfolioSnapshotPeriod | null>(null);
 
   const { data: snapshotData, isLoading: isSnapshotLoading } = useQuery({
-    queryKey: ['wallet-portfolio-snapshots', balanceChartPeriod],
+    queryKey: ['wallet-portfolio-snapshots', walletFingerprint, balanceChartPeriod],
     queryFn: () => getWalletPortfolioSnapshots(balanceChartPeriod),
-    enabled: Boolean(walletAddress),
+    enabled: Boolean(walletFingerprint),
     staleTime: 60_000,
     refetchInterval: 120_000,
   });
@@ -290,15 +294,15 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   useEffect(() => {
     setCachedPortfolio(null);
     setDetailPriceChangeByHoldingKey({});
-  }, [walletAddress]);
+  }, [walletFingerprint]);
 
   useEffect(() => {
     setHiddenAssetKeys(getHiddenWalletAssetKeys(walletAddress));
   }, [walletAddress]);
 
   useEffect(() => {
-    if (!walletAddress) return;
-    const cacheKey = `wallet-portfolio:v1:${walletAddress.toLowerCase()}`;
+    if (!walletFingerprint) return;
+    const cacheKey = `wallet-portfolio:v2:${walletFingerprint}`;
     if (data) {
       void writeCache<WalletPortfolioResponse>(
         cacheStores.query,
@@ -312,7 +316,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
       if (!value) return;
       setCachedPortfolio(value);
     });
-  }, [data, walletAddress]);
+  }, [data, walletFingerprint]);
 
   const holdings = useMemo<WalletHoldingListItem[]>(() => {
     if (!portfolioData) {
@@ -597,14 +601,14 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
     [],
   );
 
-  async function handleCopyAddress() {
-    if (!walletAddress) {
+  async function handleCopyAddress(address = walletAddress) {
+    if (!address) {
       showError(t('wallet.addressUnavailable'));
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(walletAddress);
+      await navigator.clipboard.writeText(address);
       showSuccess(t('wallet.addressCopied'));
     } catch (err) {
       showError(`${t('common.error')}: ${(err as Error).message}`);
@@ -950,10 +954,11 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
             >
               <ReceiveCryptoContent
                 walletAddress={walletAddress}
+                chainAccounts={auth.wallet?.chainAccounts}
                 supportedChains={supportedChains}
                 onBack={backToTopUp}
-                onCopyAddress={() => {
-                  void handleCopyAddress();
+                onCopyAddress={(address) => {
+                  void handleCopyAddress(address);
                 }}
                 onClose={closeActiveModal}
               />

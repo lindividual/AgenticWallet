@@ -11,7 +11,7 @@
     "loginWithPasskey": "تسجيل الدخول باستخدام Passkey",
     "alreadyHaveAccount": "لدي حساب بالفعل",
     "createNewAccount": "إنشاء حساب جديد",
-    "registerSuccess": "تم التسجيل بنجاح، تم تهيئة المحفظة.",
+    "registerSuccess": "تم التسجيل بنجاح.",
     "loginSuccess": "تم تسجيل الدخول بنجاح.",
     "logoutSuccess": "تم تسجيل الخروج."
   },

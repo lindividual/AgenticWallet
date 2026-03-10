@@ -11,7 +11,7 @@
     "loginWithPasskey": "Login with Passkey",
     "alreadyHaveAccount": "I already have an account",
     "createNewAccount": "Create a new account",
-    "registerSuccess": "Registration successful, wallet initialized.",
+    "registerSuccess": "Registration successful.",
     "loginSuccess": "Login successful.",
     "logoutSuccess": "Logged out."
   },

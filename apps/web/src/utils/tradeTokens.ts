@@ -62,6 +62,23 @@ const TRADE_TOKENS_BY_CHAIN: Record<number, TradeTokenConfig> = {
       decimals: 18,
     },
   },
+  101: {
+    usdc: {
+      address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      symbol: 'USDC',
+      decimals: 6,
+    },
+    usdt: {
+      address: 'Es9vMFrzaCERmJfrF4H2o6GfV6B1iKsFcfoTmya4A1R',
+      symbol: 'USDT',
+      decimals: 6,
+    },
+    defaultBuy: {
+      address: 'So11111111111111111111111111111111111111112',
+      symbol: 'SOL',
+      decimals: 9,
+    },
+  },
 };
 
 const MARKET_CHAIN_TO_CHAIN_ID: Record<string, number> = {
@@ -74,6 +91,8 @@ const MARKET_CHAIN_TO_CHAIN_ID: Record<string, number> = {
   'bnb chain': 56,
   bnbchain: 56,
   'binance smart chain': 56,
+  sol: 101,
+  solana: 101,
 };
 
 export function getTradeTokenConfig(chainId: number): TradeTokenConfig | null {

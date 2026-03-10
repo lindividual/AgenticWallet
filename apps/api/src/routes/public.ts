@@ -11,7 +11,7 @@ import { getWebAuthnConfig, sanitizeDisplayName } from '../config/webauthn';
 import { saveChallenge, getChallenge } from '../services/challenge';
 import { createSession } from '../services/session';
 import { getUserSummary } from '../services/user';
-import { bootstrapWalletForUser, getWallet } from '../services/wallet';
+import { tryEnsureWalletForUser } from '../services/wallet';
 import type {
   AppEnv,
   LoginVerifyRequest,
@@ -30,6 +30,7 @@ function isUniqueConstraintError(error: unknown, field: string): boolean {
 async function cleanupPartialRegistration(db: D1Database, userId: string): Promise<void> {
   await db.batch([
     db.prepare('DELETE FROM wallet_chain_accounts WHERE user_id = ?').bind(userId),
+    db.prepare('DELETE FROM wallet_protocol_keys WHERE user_id = ?').bind(userId),
     db.prepare('DELETE FROM wallets WHERE user_id = ?').bind(userId),
     db.prepare('DELETE FROM users WHERE id = ?').bind(userId),
   ]);
@@ -145,24 +146,6 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
       );
     }
 
-    let wallet;
-    try {
-      wallet = await bootstrapWalletForUser(c.env, body.userId);
-    } catch (error) {
-      await cleanupPartialRegistration(c.env.DB, body.userId);
-      console.error('[auth/register/verify] bootstrap_failed', {
-        userId: body.userId,
-        error: error instanceof Error ? error.message : 'unknown_error',
-      });
-      return c.json(
-        {
-          error: 'wallet_bootstrap_failed',
-          message: error instanceof Error ? error.message : 'unknown_error',
-        },
-        502,
-      );
-    }
-
     try {
       await c.env.DB.batch([
         c.env.DB.prepare(
@@ -203,6 +186,7 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
 
     const session = await createSession(c.env.DB, body.userId);
     const user = await getUserSummary(c.env.DB, body.userId);
+    const wallet = await tryEnsureWalletForUser(c.env, body.userId, 'auth/register/verify');
 
     return c.json({
       verified: true,
@@ -303,7 +287,7 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
 
     const session = await createSession(c.env.DB, passkey.user_id);
     const user = await getUserSummary(c.env.DB, passkey.user_id);
-    const wallet = await getWallet(c.env.DB, passkey.user_id);
+    const wallet = await tryEnsureWalletForUser(c.env, passkey.user_id, 'auth/login/verify');
 
     return c.json({
       verified: true,
@@ -316,13 +300,25 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/chains', (c) => {
     return c.json({
-      chains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol }) => ({ chainId, name, symbol })),
+      chains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol, marketChain, protocol }) => ({
+        chainId,
+        name,
+        symbol,
+        marketChain,
+        protocol,
+      })),
     });
   });
 
   app.get('/v1/app-config', (c) => {
     return c.json({
-      supportedChains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol }) => ({ chainId, name, symbol })),
+      supportedChains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol, marketChain, protocol }) => ({
+        chainId,
+        name,
+        symbol,
+        marketChain,
+        protocol,
+      })),
       defaultReceiveTokens: APP_CONFIG.defaultReceiveTokens,
     });
   });

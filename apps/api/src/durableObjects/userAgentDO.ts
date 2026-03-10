@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { AgentEventRecord } from '../agent/events';
 import {
+  buildMissingArticleMarkdownFallback,
   generateDailyDigestContent,
   generateTopicArticleContent,
   getArticleMarkdownContent,
@@ -194,6 +195,21 @@ export class UserAgentDO extends DurableObject<Bindings> {
     await this.ensureDailyDigestJobs();
     await this.alarm();
     return { ok: true };
+  }
+
+  async regenerateTodayDailyRpc(userId: string): Promise<{
+    ok: true;
+    deletedArticleIds: string[];
+    article: ArticleRow | null;
+  }> {
+    this.ensureOwner(userId);
+    const dateKey = isoDate(new Date());
+    const { deletedArticleIds, article } = await this.regenerateTodayDaily(dateKey, 'manual_regenerate');
+    return {
+      ok: true,
+      deletedArticleIds,
+      article,
+    };
   }
 
   async savePortfolioSnapshotRpc(
@@ -1215,9 +1231,35 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
     if (article) {
       const markdown = await this.getArticleMarkdown(article.id, article.r2_key);
+      if (!markdown && article.article_type === 'daily' && article.created_at.slice(0, 10) === isoDate(new Date())) {
+        const regenerated = await this.regenerateTodayDaily(article.created_at.slice(0, 10), 'missing_markdown_repair');
+        if (regenerated.article) {
+          const regeneratedMarkdown = await this.getArticleMarkdown(regenerated.article.id, regenerated.article.r2_key);
+          if (regeneratedMarkdown) {
+            return {
+              article: regenerated.article,
+              markdown: regeneratedMarkdown,
+            };
+          }
+          return {
+            article: regenerated.article,
+            markdown: buildMissingArticleMarkdownFallback({
+              title: regenerated.article.title,
+              summary: regenerated.article.summary,
+              articleType: regenerated.article.article_type,
+              createdAt: regenerated.article.created_at,
+            }),
+          };
+        }
+      }
       return {
         article,
-        markdown,
+        markdown: markdown || buildMissingArticleMarkdownFallback({
+          title: article.title,
+          summary: article.summary,
+          articleType: article.article_type,
+          createdAt: article.created_at,
+        }),
       };
     }
 
@@ -1255,7 +1297,12 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const markdown = object ? await object.text() : '';
     return {
       article: topicArticle,
-      markdown,
+      markdown: markdown || buildMissingArticleMarkdownFallback({
+        title: topicArticle.title,
+        summary: topicArticle.summary,
+        articleType: topicArticle.article_type,
+        createdAt: topicArticle.created_at,
+      }),
     };
   }
 
@@ -1351,6 +1398,29 @@ export class UserAgentDO extends DurableObject<Bindings> {
     );
   }
 
+  private getDailyArticlesForDate(dateKey: string): ArticleRow[] {
+    return this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          article_type,
+          title,
+          summary,
+          r2_key,
+          tags_json,
+          created_at,
+          status
+         FROM article_index
+         WHERE article_type = 'daily'
+           AND created_at >= ?
+           AND created_at < ?
+         ORDER BY created_at DESC`,
+        `${dateKey}T00:00:00.000Z`,
+        `${tomorrowDate(dateKey)}T00:00:00.000Z`,
+      )
+      .toArray() as ArticleRow[];
+  }
+
   private getLatestDailyBefore(dateKey: string): ArticleRow | null {
     return (
       (this.ctx.storage.sql
@@ -1395,6 +1465,54 @@ export class UserAgentDO extends DurableObject<Bindings> {
       return 'generating';
     }
     return 'stale';
+  }
+
+  private async deleteDailyArticlesForDate(dateKey: string): Promise<string[]> {
+    const articles = this.getDailyArticlesForDate(dateKey);
+    for (const article of articles) {
+      try {
+        await this.env.AGENT_ARTICLES.delete(article.r2_key);
+      } catch (error) {
+        console.error('article_markdown_delete_failed', {
+          articleId: article.id,
+          r2Key: article.r2_key,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    this.ctx.storage.sql.exec(
+      `DELETE FROM article_index
+       WHERE article_type = 'daily'
+         AND created_at >= ?
+         AND created_at < ?`,
+      `${dateKey}T00:00:00.000Z`,
+      `${tomorrowDate(dateKey)}T00:00:00.000Z`,
+    );
+    return articles.map((article) => article.id);
+  }
+
+  private deleteTodayDailyJobs(dateKey: string): void {
+    this.ctx.storage.sql.exec(
+      `DELETE FROM jobs
+       WHERE job_type = 'daily_digest'
+         AND (job_key = ? OR job_key = ?)`,
+      `daily_digest:${dateKey}`,
+      `manual_daily_digest:${dateKey}`,
+    );
+  }
+
+  private async regenerateTodayDaily(
+    dateKey: string,
+    trigger: 'manual_regenerate' | 'missing_markdown_repair',
+  ): Promise<{ deletedArticleIds: string[]; article: ArticleRow | null }> {
+    const deletedArticleIds = await this.deleteDailyArticlesForDate(dateKey);
+    this.deleteTodayDailyJobs(dateKey);
+    await this.generateDailyDigest({ trigger });
+    return {
+      deletedArticleIds,
+      article: this.getTodayDailyArticle(dateKey),
+    };
   }
 
   private async enqueueJob(

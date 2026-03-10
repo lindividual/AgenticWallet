@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-02-22"
 compatibility_flags = ["nodejs_compat"]
 
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [assets]
 directory = "../web/dist"
 binding = "ASSETS"
@@ -12,7 +16,7 @@ run_worker_first = ["/v1/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "agentic_wallet_db"
-database_id = "replace-with-your-d1-database-id"
+database_id = "931f7f71-e632-4964-95ff-6177f58d6181"
 migrations_dir = "migrations"
 
 [[r2_buckets]]

@@ -12,7 +12,14 @@ import {
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, TradeQuoteRequest, TradeQuoteResponse } from '../types';
 import { decryptString } from '../utils/crypto';
-import { createBiconomyMultichainAccount, getWalletWithPrivateKey } from './wallet';
+import { createBiconomyMultichainAccount, ensureWalletWithPrivateKey } from './wallet';
+import {
+  prepareSolanaTrade,
+  refreshSolanaTradeStatusByHash,
+  sendPreparedSolanaTrade,
+  waitForPreparedSolanaTrade,
+  type PreparedSolanaTrade,
+} from './solanaTrade';
 
 const ERC20_ABI = [
   {
@@ -88,6 +95,12 @@ export type PreparedTrade = {
   calls: TradeCall[];
   nexusClient: ReturnType<typeof createNexusClient>;
 };
+
+export type PreparedAnyTrade = PreparedTrade | PreparedSolanaTrade;
+
+function isPreparedSolanaTrade(prepared: PreparedAnyTrade): prepared is PreparedSolanaTrade {
+  return 'mode' in prepared && prepared.mode === 'solana';
+}
 
 function resolveChainConfig(env: Bindings, chainId: number): ChainRuntimeConfig {
   if (chainId === mainnet.id) {
@@ -291,10 +304,7 @@ async function fetchZeroExQuote(
 }
 
 async function buildTradeContext(env: Bindings, userId: string, chainId: number) {
-  const wallet = await getWalletWithPrivateKey(env.DB, userId);
-  if (!wallet) {
-    throw new Error('wallet_not_found');
-  }
+  const wallet = await ensureWalletWithPrivateKey(env, userId);
 
   let privateKey: string;
   try {
@@ -331,10 +341,13 @@ export async function prepareTrade(
   env: Bindings,
   userId: string,
   input: TradeQuoteRequest,
-): Promise<PreparedTrade> {
+): Promise<PreparedAnyTrade> {
   const chainId = Number(input.chainId);
   if (!Number.isFinite(chainId)) {
     throw new Error('invalid_chain_id');
+  }
+  if (chainId === 101) {
+    return prepareSolanaTrade(env, userId, input);
   }
 
   const { chain } = resolveChainConfig(env, chainId);
@@ -466,15 +479,21 @@ export async function prepareTrade(
   };
 }
 
-export async function sendPreparedTrade(prepared: PreparedTrade): Promise<Hash> {
+export async function sendPreparedTrade(prepared: PreparedAnyTrade): Promise<Hash> {
+  if (isPreparedSolanaTrade(prepared)) {
+    return await sendPreparedSolanaTrade(prepared) as Hash;
+  }
   const hash = await prepared.nexusClient.sendTransaction({ calls: prepared.calls });
   return hash;
 }
 
 export async function waitForTradeReceipt(
-  prepared: PreparedTrade,
+  prepared: PreparedAnyTrade,
   txHash: Hash,
 ): Promise<'confirmed' | 'failed' | 'pending'> {
+  if (isPreparedSolanaTrade(prepared)) {
+    return waitForPreparedSolanaTrade(prepared, txHash);
+  }
   try {
     const receipt = await prepared.nexusClient.waitForTransactionReceipt({
       hash: txHash,
@@ -492,6 +511,9 @@ export async function refreshTradeStatusByHash(
   chainId: number,
   txHash: Hash,
 ): Promise<'confirmed' | 'failed' | 'pending'> {
+  if (chainId === 101) {
+    return refreshSolanaTradeStatusByHash(env, txHash);
+  }
   const { chain, rpcUrl } = resolveChainConfig(env, chainId);
   const publicClient = createPublicClient({
     chain,

@@ -11,7 +11,7 @@
     "loginWithPasskey": "使用 Passkey 登录",
     "alreadyHaveAccount": "我已有账号",
     "createNewAccount": "创建新账号",
-    "registerSuccess": "注册成功，钱包已初始化。",
+    "registerSuccess": "注册成功。",
     "loginSuccess": "登录成功。",
     "logoutSuccess": "已退出登录。"
   },

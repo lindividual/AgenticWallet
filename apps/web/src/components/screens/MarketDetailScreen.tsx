@@ -82,10 +82,39 @@ function buildSyntheticWatchKey(watchType: 'stock' | 'perps' | 'prediction', ite
   };
 }
 
-function isTradeBrowseMarketItem(value: unknown): value is TradeBrowseMarketItem {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+function toFiniteNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function toTradeBrowseMarketItemLike(value: unknown): TradeBrowseMarketItem | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  return typeof row.symbol === 'string' && typeof row.name === 'string';
+  if (typeof row.symbol !== 'string' || typeof row.name !== 'string') return null;
+
+  const source = row.source;
+  const normalizedSource =
+    source === 'bitget' || source === 'coingecko' || source === 'hyperliquid' || source === 'binance'
+      ? source
+      : 'bitget';
+
+  return {
+    id: typeof row.id === 'string' ? row.id : '',
+    asset_id: typeof row.asset_id === 'string' ? row.asset_id : undefined,
+    instrument_id: typeof row.instrument_id === 'string' ? row.instrument_id : undefined,
+    symbol: row.symbol,
+    name: row.name,
+    image: typeof row.image === 'string' ? row.image : null,
+    chain: typeof row.chain === 'string' ? row.chain : null,
+    contract: typeof row.contract === 'string' ? row.contract : null,
+    currentPrice: toFiniteNumber(row.currentPrice) ?? toFiniteNumber(row.currentPriceUsd),
+    change24h: toFiniteNumber(row.change24h) ?? toFiniteNumber(row.priceChange24h),
+    volume24h: toFiniteNumber(row.volume24h),
+    source: normalizedSource,
+    metaLabel: typeof row.metaLabel === 'string' ? row.metaLabel : null,
+    metaValue: toFiniteNumber(row.metaValue),
+    externalUrl: typeof row.externalUrl === 'string' ? row.externalUrl : null,
+  };
 }
 
 function isTradeBrowsePredictionItem(value: unknown): value is TradeBrowsePredictionItem {
@@ -163,14 +192,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
   const stockItem = useMemo<TradeBrowseMarketItem | null>(
     () => {
-      const fromInstrument = normalizedType === 'stock' && isTradeBrowseMarketItem(instrumentMarket?.providerDetail)
-        ? instrumentMarket.providerDetail
+      const fromInstrument = normalizedType === 'stock'
+        ? toTradeBrowseMarketItemLike(instrumentMarket?.providerDetail)
         : null;
       if (fromInstrument) return fromInstrument;
       const fromDetail = normalizedType === 'stock'
-        && detailItem
-        && 'symbol' in detailItem
-        ? detailItem as TradeBrowseMarketItem
+        ? toTradeBrowseMarketItemLike(detailItem)
         : null;
       if (fromDetail) return fromDetail;
       return browseData?.stocks.find((item) => item.id === normalizedItemId) ?? null;
@@ -179,14 +206,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   );
   const perpItem = useMemo<TradeBrowseMarketItem | null>(
     () => {
-      const fromInstrument = normalizedType === 'perp' && isTradeBrowseMarketItem(instrumentMarket?.providerDetail)
-        ? instrumentMarket.providerDetail
+      const fromInstrument = normalizedType === 'perp'
+        ? toTradeBrowseMarketItemLike(instrumentMarket?.providerDetail)
         : null;
       if (fromInstrument) return fromInstrument;
       const fromDetail = normalizedType === 'perp'
-        && detailItem
-        && 'symbol' in detailItem
-        ? detailItem as TradeBrowseMarketItem
+        ? toTradeBrowseMarketItemLike(detailItem)
         : null;
       if (fromDetail) return fromDetail;
       return browseData?.perps.find((item) => item.id === normalizedItemId) ?? null;

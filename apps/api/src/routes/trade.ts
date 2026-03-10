@@ -5,6 +5,7 @@ import {
   sendPreparedTrade,
   waitForTradeReceipt,
 } from '../services/trade';
+import { isSolanaSignature } from '../services/solana';
 import type { AppEnv, TradeQuoteRequest, TradeSubmitRequest } from '../types';
 
 function toErrorStatus(error: unknown): 400 | 404 | 502 {
@@ -139,7 +140,8 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
     const chainId = Number(c.req.param('chainId'));
     const txHash = c.req.param('txHash') as `0x${string}`;
 
-    if (!Number.isFinite(chainId) || !txHash?.startsWith('0x')) {
+    const isValidHash = chainId === 101 ? isSolanaSignature(txHash) : txHash?.startsWith('0x');
+    if (!Number.isFinite(chainId) || !isValidHash) {
       return c.json({ error: 'invalid_trade_status_query' }, 400);
     }
 

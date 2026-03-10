@@ -11,6 +11,7 @@ export type Bindings = {
   ETHEREUM_RPC_URL?: string;
   BASE_RPC_URL?: string;
   BNB_RPC_URL?: string;
+  SOLANA_RPC_URL?: string;
   BICONOMY_MEE_VERSION?: string;
   BICONOMY_BUNDLER_API_KEY?: string;
   BICONOMY_BUNDLER_URL?: string;
@@ -34,9 +35,12 @@ export type Bindings = {
   TRADE_AGGREGATOR_BASE_URL?: string;
   TRADE_AGGREGATOR_API_KEY?: string;
   TRADE_DEFAULT_SLIPPAGE_BPS?: string;
+  JUPITER_API_BASE_URL?: string;
   PREDICTION_CLOB_HOST?: string;
   PREDICTION_SIGNATURE_TYPE?: string;
 };
+
+export type WalletProtocol = 'evm' | 'svm';
 
 export type Variables = {
   userId: string;
@@ -86,6 +90,7 @@ export type WalletSummary = {
   provider: string;
   chainAccounts: Array<{
     chainId: number;
+    protocol: WalletProtocol;
     address: string;
   }>;
 };
@@ -167,7 +172,7 @@ export type TradeQuoteResponse = {
     maxFeePerGas: string | null;
     maxPriorityFeePerGas: string | null;
   };
-  provider: '0x';
+  provider: '0x' | 'jupiter';
 };
 
 export type TradeSubmitRequest = TradeQuoteRequest & {

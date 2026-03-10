@@ -109,6 +109,7 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
   const createdAt = now.toISOString();
 
   const r2Key = buildArticleR2Key(ownerUserId, dateKey, 'daily', articleId);
+  await putArticleMarkdownContent(deps.env, articleId, r2Key, markdown);
   deps.sql.exec(
     `INSERT INTO article_index (
       id,
@@ -129,8 +130,6 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     createdAt,
     'ready',
   );
-
-  await putArticleMarkdownContent(deps.env, articleId, r2Key, markdown);
 }
 
 function buildDailyDigestSystemPrompt(language: DailyLanguage): string {

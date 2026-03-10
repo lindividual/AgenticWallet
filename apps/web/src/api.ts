@@ -1,3 +1,5 @@
+import { normalizeContractForChain } from './utils/chainIdentity';
+
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
 const TOKEN_KEY = 'agentic_wallet_access_token';
 
@@ -31,6 +33,7 @@ export type AuthVerifyResponse = {
     provider: string;
     chainAccounts?: Array<{
       chainId: number;
+      protocol: 'evm' | 'svm';
       address: string;
     }>;
   } | null;
@@ -53,6 +56,7 @@ export type MeResponse = {
     provider: string;
     chainAccounts?: Array<{
       chainId: number;
+      protocol: 'evm' | 'svm';
       address: string;
     }>;
   } | null;
@@ -63,6 +67,8 @@ export type ChainsResponse = {
     chainId: number;
     name: string;
     symbol: string;
+    marketChain: string;
+    protocol: 'evm' | 'svm';
   }>;
 };
 
@@ -71,11 +77,14 @@ export type AppConfigResponse = {
     chainId: number;
     name: string;
     symbol: string;
+    marketChain: string;
+    protocol: 'evm' | 'svm';
   }>;
   defaultReceiveTokens: string[];
 };
 
 export type SimEvmBalance = {
+  protocol?: 'evm' | 'svm';
   chain: string;
   chain_id: number;
   address: string;
@@ -282,7 +291,7 @@ export type TradeQuoteResponse = {
     maxFeePerGas: string | null;
     maxPriorityFeePerGas: string | null;
   };
-  provider: '0x';
+  provider: '0x' | 'jupiter';
 };
 
 export type TradeSubmitResponse = {
@@ -735,7 +744,7 @@ export async function getTopMarketAssets(params?: {
 
 export async function getCoinDetail(chain: string, contract: string): Promise<CoinDetail> {
   const normalizedChain = chain.trim().toLowerCase();
-  const normalizedContract = contract.trim().toLowerCase();
+  const normalizedContract = normalizeContractForChain(normalizedChain, contract);
   const query = new URLSearchParams();
   query.set('chain', normalizedChain);
   query.set('contract', normalizedContract);
@@ -747,7 +756,7 @@ export async function getCoinDetailsBatch(tokens: Array<{ chain: string; contrac
   const normalizedTokens = tokens
     .map((item) => ({
       chain: item.chain.trim().toLowerCase(),
-      contract: item.contract.trim().toLowerCase(),
+      contract: normalizeContractForChain(item.chain, item.contract),
     }))
     .filter((item) => Boolean(item.chain));
   if (normalizedTokens.length === 0) return [];
@@ -764,7 +773,7 @@ export async function getTokenSecurityAudit(
   contract: string,
 ): Promise<TokenSecurityAudit | null> {
   const normalizedChain = chain.trim().toLowerCase();
-  const normalizedContract = contract.trim().toLowerCase();
+  const normalizedContract = normalizeContractForChain(normalizedChain, contract);
   const query = new URLSearchParams();
   query.set('chain', normalizedChain);
   query.set('contract', normalizedContract);
@@ -782,7 +791,7 @@ export async function getTokenKline(
   size = 60,
 ): Promise<KlineCandle[]> {
   const normalizedChain = chain.trim().toLowerCase();
-  const normalizedContract = contract.trim().toLowerCase();
+  const normalizedContract = normalizeContractForChain(normalizedChain, contract);
   const query = new URLSearchParams();
   query.set('chain', normalizedChain);
   query.set('contract', normalizedContract);

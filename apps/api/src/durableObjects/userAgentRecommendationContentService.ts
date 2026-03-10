@@ -49,23 +49,38 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
   deps.sql.exec('DELETE FROM recommendations WHERE generated_at < ?', dayStart);
 
   const supportedChains = getSupportedMarketChains();
-  let marketAssets: MarketTopAsset[] = [];
-  try {
-    marketAssets = await fetchTopMarketAssets(deps.env, {
+  const [topGainersResult, marketCapResult, trendingResult] = await Promise.allSettled([
+    fetchTopMarketAssets(deps.env, {
       name: 'topGainers',
       limit: 20,
       source: 'auto',
       chains: supportedChains,
-    });
-  } catch {
-    // Market APIs may be unavailable; continue with empty market data.
-  }
+    }),
+    fetchTopMarketAssets(deps.env, {
+      name: 'marketCap',
+      limit: 80,
+      source: 'auto',
+      chains: supportedChains,
+    }),
+    fetchTopMarketAssets(deps.env, {
+      name: 'trending',
+      limit: 40,
+      source: 'auto',
+      chains: supportedChains,
+    }),
+  ]);
+  const marketAssets = topGainersResult.status === 'fulfilled' ? topGainersResult.value : [];
+  const metadataAssets: MarketTopAsset[] = [
+    ...marketAssets,
+    ...(marketCapResult.status === 'fulfilled' ? marketCapResult.value : []),
+    ...(trendingResult.status === 'fulfilled' ? trendingResult.value : []),
+  ];
 
   const userTopAssets = mergePreferredAssets(eventSummary.topAssets, watchlistSymbols, 10).slice(0, 5);
   const portfolioHoldings = getPortfolioHoldings(deps.sql, supportedChains);
 
   let rows = buildFallbackRecommendations(userTopAssets, portfolioHoldings, marketAssets);
-  const marketAssetLookup = buildRecommendationAssetLookup(marketAssets);
+  const marketAssetLookup = buildRecommendationAssetLookup(metadataAssets);
 
   const preferredLocale = deps.getPreferredLocale?.() ?? null;
   const language = resolveRecommendationLanguage(preferredLocale);
@@ -192,7 +207,7 @@ function buildRecommendationUserPrompt(
   marketAssets: MarketTopAsset[],
   userTopAssets: string[],
   language: RecommendationLanguage,
-  supportedChains: Array<'eth' | 'base' | 'bnb'>,
+  supportedChains: Array<'eth' | 'base' | 'bnb' | 'sol'>,
 ): string {
   const marketLines = marketAssets
     .slice(0, 10)
@@ -217,7 +232,7 @@ function buildRecommendationUserPrompt(
     ``,
     `--- Market Trending (CoinGecko + Bitget) ---`,
     marketLines || '  No market data available.',
-    `Supported chains: ${supportedChains.join(', ') || 'eth,base,bnb'}`,
+    `Supported chains: ${supportedChains.join(', ') || 'eth,base,bnb,sol'}`,
     ``,
     `Return a JSON array with exactly 5 objects. Each object must have:`,
     `- "category": one of "trending", "portfolio", "interest", "diversify", "momentum"`,

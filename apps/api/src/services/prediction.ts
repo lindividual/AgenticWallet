@@ -16,7 +16,7 @@ import {
   type Address,
 } from 'viem';
 import type { Bindings } from '../types';
-import { getWalletWithPrivateKey } from './wallet';
+import { ensureWalletWithPrivateKey } from './wallet';
 import { decryptString } from '../utils/crypto';
 import { nowIso } from '../utils/time';
 
@@ -607,10 +607,7 @@ async function toPredictionRuntimeContext(
   env: Bindings,
   userId: string,
 ): Promise<PredictionRuntimeContext> {
-  const wallet = await getWalletWithPrivateKey(env.DB, userId);
-  if (!wallet) {
-    throw new Error('wallet_not_found');
-  }
+  const wallet = await ensureWalletWithPrivateKey(env, userId);
 
   let privateKey: string;
   try {

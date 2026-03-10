@@ -284,7 +284,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
       <header className="mt-4 flex items-center justify-between gap-3">
         <div>
           <h1 className="m-0 text-2xl font-bold tracking-tight">{t('trade.browse')}</h1>
-          <p className="m-0 mt-1 text-sm text-base-content/65">{t('trade.title')}</p>
         </div>
         <div className="flex items-center gap-1">
           <button

@@ -1,6 +1,7 @@
 import { formatUnits } from 'viem';
 import { APP_CONFIG } from '../config/appConfig';
 import type { Bindings, TransferStatus, WalletSummary } from '../types';
+import { SOLANA_CHAIN_ID } from './wallet';
 
 export type TransferHistoryRecord = {
   id: string;
@@ -70,8 +71,20 @@ function normalizeAddress(raw: unknown): string | null {
   return value;
 }
 
-function normalizeTokenAddress(raw: unknown): string | null {
+function normalizeAddressForChain(chainId: number, raw: unknown): string | null {
+  if (chainId === SOLANA_CHAIN_ID) {
+    return normalizeText(raw);
+  }
   return normalizeAddress(raw);
+}
+
+function normalizeTokenAddress(raw: unknown): string | null {
+  const value = normalizeText(raw);
+  if (!value) return null;
+  if (value.startsWith('0x')) {
+    return normalizeAddress(value);
+  }
+  return value === 'native' ? null : value;
 }
 
 function normalizeTokenSymbol(raw: unknown): string | null {
@@ -90,7 +103,7 @@ function buildExternalRowId(activity: SimActivityItem, walletAddress: string): s
   const type = normalizeText(activity.type) ?? 'unknown';
   const tokenAddress = normalizeTokenAddress(activity.token_address) ?? 'native';
   const value = normalizeText(activity.value) ?? '0';
-  return `sim:${chainId}:${walletAddress.toLowerCase()}:${txHash}:${type}:${tokenAddress}:${value}`;
+  return `sim:${chainId}:${walletAddress}:${txHash}:${type}:${tokenAddress}:${value}`;
 }
 
 function getChainNativeSymbol(chainId: number): string | null {
@@ -100,6 +113,7 @@ function getChainNativeSymbol(chainId: number): string | null {
 function getChainAccountMap(wallet: WalletSummary | null | undefined): Map<number, string> {
   const byChainId = new Map<number, string>();
   for (const account of wallet?.chainAccounts ?? []) {
+    if (account.protocol !== 'evm') continue;
     const address = normalizeAddress(account.address);
     if (!address) continue;
     byChainId.set(account.chainId, address);
@@ -116,7 +130,9 @@ function getOwnedAddresses(wallet: WalletSummary | null | undefined): Set<string
   const primary = normalizeAddress(wallet?.address);
   if (primary) owned.add(primary);
   for (const account of wallet?.chainAccounts ?? []) {
-    const address = normalizeAddress(account.address);
+    const address = account.protocol === 'svm'
+      ? normalizeText(account.address)
+      : normalizeAddress(account.address);
     if (address) owned.add(address);
   }
   return owned;
@@ -163,12 +179,16 @@ export function matchesTransferHistoryFilters(
 }
 
 function buildDeduplicationKey(row: TransferHistoryRecord, ownedAddresses: Set<string>): string {
-  const direction = ownedAddresses.has(normalizeAddress(row.toAddress) ?? '')
+  const normalizedTo = normalizeAddressForChain(row.chainId, row.toAddress) ?? '';
+  const normalizedFrom = normalizeAddressForChain(row.chainId, row.fromAddress) ?? '';
+  const direction = ownedAddresses.has(normalizedTo)
     ? 'receive'
-    : ownedAddresses.has(normalizeAddress(row.fromAddress) ?? '')
+    : ownedAddresses.has(normalizedFrom)
       ? 'send'
       : 'unknown';
-  const tokenKey = normalizeTokenAddress(row.tokenAddress) ?? 'native';
+  const tokenKey = row.chainId === SOLANA_CHAIN_ID
+    ? (normalizeText(row.tokenAddress) ?? 'native')
+    : (normalizeTokenAddress(row.tokenAddress) ?? 'native');
   const amountKey = normalizeText(row.amountRaw) ?? normalizeText(row.txValue) ?? '0';
   const txKey = normalizeText(row.txHash) ?? row.id;
   return [row.chainId, txKey.toLowerCase(), direction, tokenKey, amountKey].join(':');
@@ -216,7 +236,7 @@ export async function fetchExternalTransferHistory(
   const requestedLimit = clampLimit(filters.limit);
   const requestedChains = filters.chainId
     ? [filters.chainId]
-    : [...new Set(APP_CONFIG.supportedChains.map((item) => item.chainId))];
+    : [...new Set(APP_CONFIG.supportedChains.filter((item) => item.protocol === 'evm').map((item) => item.chainId))];
   const assetType = filters.assetType === 'native'
     ? 'native'
     : filters.tokenAddress

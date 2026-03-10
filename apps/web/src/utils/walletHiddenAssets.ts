@@ -1,7 +1,9 @@
 import { buildChainAssetId } from './assetIdentity';
+import { normalizeWalletAddress } from './chainIdentity';
 
 function buildWalletHiddenAssetsStorageKey(walletAddress: string): string | null {
-  const normalizedWalletAddress = walletAddress.trim().toLowerCase();
+  const protocol = walletAddress.startsWith('0x') ? 'evm' : 'svm';
+  const normalizedWalletAddress = normalizeWalletAddress(protocol, walletAddress);
   if (!normalizedWalletAddress) return null;
   return `wallet-hidden-assets:v1:${normalizedWalletAddress}`;
 }
@@ -10,7 +12,7 @@ function normalizeHiddenAssetKeys(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((item): item is string => typeof item === 'string')
-    .map((item) => item.trim().toLowerCase())
+    .map((item) => item.trim())
     .filter(Boolean);
 }
 
@@ -31,7 +33,7 @@ export function getHiddenWalletAssetKeys(walletAddress: string): Set<string> {
 export function hideWalletAsset(walletAddress: string, chain: string, contract: string): Set<string> {
   const storageKey = buildWalletHiddenAssetsStorageKey(walletAddress);
   const nextKeys = getHiddenWalletAssetKeys(walletAddress);
-  nextKeys.add(buildChainAssetId(chain, contract).trim().toLowerCase());
+  nextKeys.add(buildChainAssetId(chain, contract).trim());
 
   if (typeof window !== 'undefined' && storageKey) {
     try {

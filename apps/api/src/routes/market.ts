@@ -25,6 +25,7 @@ import {
   normalizeTradeMarketDetailType,
 } from '../services/tradeBrowse';
 import { fetchBinanceSpotKlines, searchBinanceTokens } from '../services/binance';
+import { fetchSolanaTokenDetails } from '../services/solana';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 import {
   resolveAssetIdentity,
@@ -47,6 +48,11 @@ function normalizeContractAddress(raw: unknown): string | null {
   if (!value) return null;
   if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
   return value;
+}
+
+function normalizeContractQuery(chain: string, raw: unknown): string {
+  const value = normalizeText(raw) ?? '';
+  return chain === 'sol' ? value : value.toLowerCase();
 }
 
 function toUpperSymbol(raw: unknown): string | null {
@@ -756,9 +762,18 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/market/token-detail', async (c) => {
     const chain = (c.req.query('chain') ?? '').trim().toLowerCase();
-    const contract = (c.req.query('contract') ?? '').trim().toLowerCase();
+    const contract = normalizeContractQuery(chain, c.req.query('contract'));
     if (!chain) {
       return c.json({ error: 'invalid_chain' }, 400);
+    }
+
+    if (chain === 'sol') {
+      const details = await fetchSolanaTokenDetails(c.env, [contract || 'native']);
+      const detail = details.get(contract || 'native') ?? details.get('native') ?? null;
+      if (!detail) {
+        return c.json({ error: 'token_not_found' }, 404);
+      }
+      return c.json({ detail });
     }
 
     if (isNativeLikeContract(contract)) {
@@ -835,9 +850,12 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/market/token-security', async (c) => {
     const chain = (c.req.query('chain') ?? '').trim().toLowerCase();
-    const contract = (c.req.query('contract') ?? '').trim().toLowerCase();
+    const contract = normalizeContractQuery(chain, c.req.query('contract'));
     if (!chain) {
       return c.json({ error: 'invalid_chain' }, 400);
+    }
+    if (chain === 'sol') {
+      return c.json({ audit: null });
     }
     if (isNativeLikeContract(contract)) {
       return c.json({ audit: null });
@@ -875,7 +893,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     const tokens = (body?.tokens ?? [])
       .map((item) => ({
         chain: (item?.chain ?? '').trim().toLowerCase(),
-        contract: (item?.contract ?? '').trim().toLowerCase(),
+        contract: normalizeContractQuery((item?.chain ?? '').trim().toLowerCase(), item?.contract),
       }))
       .filter((item) => Boolean(item.chain))
       .slice(0, 100);
@@ -885,12 +903,26 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     }
 
     try {
-      const details = await fetchBitgetTokenDetails(c.env, tokens);
+      const solanaTokens = tokens.filter((item) => item.chain === 'sol');
+      const nonSolanaTokens = tokens.filter((item) => item.chain !== 'sol');
+      const [bitgetDetails, solanaDetailsMap] = await Promise.all([
+        nonSolanaTokens.length ? fetchBitgetTokenDetails(c.env, nonSolanaTokens) : Promise.resolve([]),
+        solanaTokens.length ? fetchSolanaTokenDetails(c.env, solanaTokens.map((item) => item.contract || 'native')) : Promise.resolve(new Map()),
+      ]);
+      const details = [
+        ...bitgetDetails,
+        ...solanaTokens.map((item) => ({
+          key: `${item.chain}:${item.contract || 'native'}`,
+          chain: item.chain,
+          contract: item.contract,
+          detail: solanaDetailsMap.get(item.contract || 'native') ?? null,
+        })),
+      ];
       const missingImageChains = [
         ...new Set(
           details
             .map((item) => item.detail)
-            .filter((detail): detail is BitgetTokenDetail => detail != null && !normalizeText(detail.image))
+            .filter((detail): detail is BitgetTokenDetail => detail != null && !normalizeText((detail as { image?: string | null }).image))
             .map((detail) => detail.chain.trim().toLowerCase())
             .filter(Boolean),
         ),
@@ -951,12 +983,15 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/market/kline', async (c) => {
     const chain = (c.req.query('chain') ?? '').trim().toLowerCase();
-    const contract = (c.req.query('contract') ?? '').trim().toLowerCase();
+    const contract = normalizeContractQuery(chain, c.req.query('contract'));
     const period = (c.req.query('period') ?? '1h').trim();
     const sizeRaw = Number(c.req.query('size'));
     const size = Number.isFinite(sizeRaw) ? sizeRaw : 60;
     if (!chain) {
       return c.json({ error: 'invalid_chain' }, 400);
+    }
+    if (chain === 'sol') {
+      return c.json({ candles: [] });
     }
 
     try {

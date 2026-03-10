@@ -21,6 +21,7 @@ import { SettingsDropdown } from '../SettingsDropdown';
 import { CachedIconImage } from '../CachedIconImage';
 import { SkeletonAssetListItem, SkeletonBlock } from '../Skeleton';
 import { buildChainAssetId } from '../../utils/assetIdentity';
+import { buildWalletAccountsFingerprint, normalizeContractForChain } from '../../utils/chainIdentity';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 
 type HomeScreenProps = {
@@ -67,9 +68,9 @@ function isOpenableCryptoWatch(asset: WatchlistAsset): boolean {
   if (asset.watch_type !== 'crypto') return false;
   if (asset.chain.startsWith('watch:')) return false;
   if (!asset.chain || asset.contract == null) return false;
-  const contract = asset.contract.trim().toLowerCase();
+  const contract = normalizeContractForChain(asset.chain, asset.contract);
   if (!contract || contract === 'native') return true;
-  return /^0x[a-f0-9]{40}$/.test(contract);
+  return asset.chain.trim().toLowerCase() === 'sol' ? contract !== 'native' : /^0x[a-f0-9]{40}$/.test(contract);
 }
 
 function normalizeLookupChain(raw: string | null | undefined): string | null {
@@ -110,7 +111,7 @@ function buildTopMarketAssetPreview(input: {
   instrumentId?: string | null;
 }): TopMarketAsset {
   const chain = input.chain.trim().toLowerCase();
-  const contract = input.contract.trim().toLowerCase();
+  const contract = normalizeContractForChain(chain, input.contract);
   const chainAssetId = buildChainAssetId(chain, contract);
   return {
     id: chainAssetId,
@@ -136,13 +137,14 @@ const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
 export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeScreenProps) {
   const { t, i18n } = useTranslation();
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
+  const walletFingerprint = buildWalletAccountsFingerprint(auth.wallet?.chainAccounts, auth.wallet?.address);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
   const [watchlistCategory, setWatchlistCategory] = useState<WatchlistCategory>('crypto');
 
   const { data: portfolio, isFetching: isPortfolioFetching, isPending: isPortfolioPending } = useQuery({
-    queryKey: ['wallet-portfolio', walletAddress],
+    queryKey: ['wallet-portfolio', walletFingerprint],
     queryFn: () => getWalletPortfolio(),
-    enabled: Boolean(walletAddress),
+    enabled: Boolean(walletFingerprint),
     staleTime: 15_000,
     refetchInterval: 20_000,
     refetchOnWindowFocus: true,
@@ -150,11 +152,11 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
 
   useEffect(() => {
     setCachedPortfolio(null);
-  }, [walletAddress]);
+  }, [walletFingerprint]);
 
   useEffect(() => {
-    if (!walletAddress) return;
-    const cacheKey = `wallet-portfolio:v1:${walletAddress.toLowerCase()}`;
+    if (!walletFingerprint) return;
+    const cacheKey = `wallet-portfolio:v2:${walletFingerprint}`;
     if (portfolio) {
       void writeCache<WalletPortfolioResponse>(
         cacheStores.query,
@@ -168,7 +170,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
       if (!value) return;
       setCachedPortfolio(value);
     });
-  }, [portfolio, walletAddress]);
+  }, [portfolio, walletFingerprint]);
 
   const { data: recommendationsData, isLoading: isRecommendationsLoading } = useQuery({
     queryKey: ['home-agent-recommendations'],
@@ -190,7 +192,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     const append = (chainRaw: string | null | undefined, contractRaw: string | null | undefined) => {
       const chain = normalizeLookupChain(chainRaw);
       if (!chain) return;
-      const contract = (contractRaw ?? '').trim().toLowerCase();
+      const contract = normalizeContractForChain(chain, contractRaw);
       const key = buildChainAssetId(chain, contract);
       if (seen.has(key)) return;
       seen.add(key);

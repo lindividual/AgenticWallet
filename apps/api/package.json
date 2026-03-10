@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev src/index.ts --persist-to .wrangler/state",
+    "migrate:local": "wrangler d1 migrations apply agentic_wallet_db --local",
+    "dev": "npm run migrate:local && wrangler dev src/index.ts --persist-to .wrangler/state",
     "deploy": "wrangler deploy",
     "build": "tsc --noEmit",
     "test:agent-local": "bash scripts/e2e-agent-local.sh",
@@ -14,6 +15,8 @@
   "dependencies": {
     "@biconomy/abstractjs": "^1.1.21",
     "@polymarket/clob-client": "^5.7.0",
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.4",
     "@simplewebauthn/server": "^13.2.2",
     "hono": "^4.6.12",
     "viem": "^2.22.11"

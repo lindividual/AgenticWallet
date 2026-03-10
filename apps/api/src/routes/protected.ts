@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import { requireAuth } from '../middleware/auth';
 import { deleteSessionByToken } from '../services/session';
 import { getUserSummary } from '../services/user';
-import { getWallet } from '../services/wallet';
+import { tryEnsureWalletForUser } from '../services/wallet';
 import type { AppEnv } from '../types';
 import { registerAgentRoutes } from './agent';
 import { registerAssetRoutes } from './assets';
@@ -25,7 +25,7 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/me', async (c) => {
     const userId = c.get('userId');
     const user = await getUserSummary(c.env.DB, userId);
-    const wallet = await getWallet(c.env.DB, userId);
+    const wallet = await tryEnsureWalletForUser(c.env, userId, 'me');
 
     return c.json({ user, wallet });
   });

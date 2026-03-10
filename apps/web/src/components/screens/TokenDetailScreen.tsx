@@ -26,6 +26,7 @@ import { Modal } from '../modals/Modal';
 import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { SkeletonBlock } from '../Skeleton';
 import { useTheme } from '../../contexts/ThemeContext';
+import { normalizeContractForChain } from '../../utils/chainIdentity';
 
 type TokenDetailScreenProps = {
   chain: string;
@@ -103,7 +104,7 @@ function compute24hChangePctFromHourlyCandles(
 }
 
 function toWatchlistKey(chain: string, contract: string): string {
-  return `${chain.trim().toLowerCase()}:${contract.trim().toLowerCase()}`;
+  return `${chain.trim().toLowerCase()}:${normalizeContractForChain(chain, contract)}`;
 }
 
 type TokenDetailLike = {
@@ -155,7 +156,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
 
   const normalizedChain = chain.trim().toLowerCase();
-  const normalizedContract = contract.trim().toLowerCase();
+  const normalizedContract = normalizeContractForChain(normalizedChain, contract);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });

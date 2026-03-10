@@ -28,6 +28,20 @@ function toUpperSymbol(raw: unknown): string | null {
   return value || null;
 }
 
+function augmentTokenDetailAliases<T extends {
+  currentPriceUsd?: number | null;
+  priceChange24h?: number | null;
+}>(detail: T): T & {
+  currentPrice: number | null;
+  change24h: number | null;
+} {
+  return {
+    ...detail,
+    currentPrice: detail.currentPriceUsd ?? null,
+    change24h: detail.priceChange24h ?? null,
+  };
+}
+
 export function registerAssetRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/assets/resolve', async (c) => {
     const body = await c.req
@@ -163,7 +177,8 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
         } else {
           const spotLookup = toSpotLookupFromInstrument(instrument);
           if (spotLookup) {
-            providerDetail = await fetchBitgetTokenDetail(c.env, spotLookup.chain, spotLookup.contract);
+            const detail = await fetchBitgetTokenDetail(c.env, spotLookup.chain, spotLookup.contract);
+            providerDetail = detail ? augmentTokenDetailAliases(detail) : null;
           }
         }
       } else if (instrument.market_type === 'perp') {

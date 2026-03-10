@@ -93,6 +93,7 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
   const articleId = crypto.randomUUID();
   const createdAt = now.toISOString();
   const r2Key = buildArticleR2Key(ownerUserId, dateKey, 'topic', articleId, topic);
+  await putArticleMarkdownContent(deps.env, articleId, r2Key, markdown);
   deps.sql.exec(
     `INSERT INTO article_index (
       id,
@@ -113,5 +114,4 @@ export async function generateTopicArticleContent(payload: Record<string, unknow
     createdAt,
     'ready',
   );
-  await putArticleMarkdownContent(deps.env, articleId, r2Key, markdown);
 }

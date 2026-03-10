@@ -18,7 +18,7 @@ import {
   type TransferHistoryFilters,
   type TransferHistoryRecord,
 } from '../services/transferHistory';
-import { getWallet } from '../services/wallet';
+import { tryEnsureWalletForUser } from '../services/wallet';
 import type { AppEnv, TransferQuoteRequest, TransferSubmitRequest, TransferStatus } from '../types';
 
 const VALID_TRANSFER_STATUS = new Set<TransferStatus>(['created', 'submitted', 'confirmed', 'failed']);
@@ -43,10 +43,11 @@ function normalizeChainId(raw: string | undefined): number | undefined {
 
 function normalizeTokenAddress(raw: string | undefined): string | null | undefined {
   if (raw == null) return undefined;
-  const value = raw.trim().toLowerCase();
+  const value = raw.trim();
   if (!value) return undefined;
-  if (value === 'native' || value === '0x0000000000000000000000000000000000000000') return null;
-  return /^0x[a-f0-9]{40}$/.test(value) ? value : undefined;
+  if (value.toLowerCase() === 'native' || value === '0x0000000000000000000000000000000000000000') return null;
+  if (/^0x[a-f0-9]{40}$/i.test(value)) return value.toLowerCase();
+  return value;
 }
 
 function normalizeTokenSymbol(raw: string | undefined): string | undefined {
@@ -360,7 +361,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       limit: localLimit,
       status,
     });
-    const wallet = await getWallet(c.env.DB, userId);
+    const wallet = await tryEnsureWalletForUser(c.env, userId, 'transfer/history');
     const externalRows = status && status !== 'confirmed'
       ? []
       : await fetchExternalTransferHistory(c.env, wallet, filters);

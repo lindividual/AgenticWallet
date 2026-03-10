@@ -57,6 +57,12 @@ type AgentTodayDailyResponse = {
   lastReadyArticle: AgentArticle | null;
 };
 
+type AgentRegenerateTodayDailyResponse = {
+  ok: true;
+  deletedArticleIds: string[];
+  article: AgentArticle | null;
+};
+
 type AgentPortfolioSnapshotPoint = {
   ts: string;
   total_usd: number;
@@ -126,6 +132,7 @@ type UserAgentRpcStub = DurableObjectStub & {
   ): Promise<AgentArticlesResponse>;
   getArticleDetailRpc(userId: string, articleId: string): Promise<AgentArticleDetailResponse | null>;
   getTodayDailyRpc(userId: string): Promise<AgentTodayDailyResponse>;
+  regenerateTodayDailyRpc(userId: string): Promise<AgentRegenerateTodayDailyResponse>;
   enqueueJobRpc(
     userId: string,
     options: {
@@ -321,6 +328,14 @@ export async function enqueueUserAgentJob(
 export async function runUserAgentJobsNow(env: Bindings, userId: string): Promise<void> {
   const stub = getUserAgentStub(env, userId);
   await stub.runJobsNowRpc(userId);
+}
+
+export async function regenerateUserTodayDaily(
+  env: Bindings,
+  userId: string,
+): Promise<AgentRegenerateTodayDailyResponse> {
+  const stub = getUserAgentStub(env, userId);
+  return stub.regenerateTodayDailyRpc(userId);
 }
 
 export async function saveUserPortfolioSnapshot(

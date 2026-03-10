@@ -1,10 +1,13 @@
 import type { Bindings } from '../types';
 import { nowIso } from '../utils/time';
 import { getMarketChainByChainId, getSupportedChainIds } from '../config/appConfig';
-import { buildAssetId, buildChainAssetId, NATIVE_CONTRACT_KEY } from './assetIdentity';
+import { buildAssetId, buildChainAssetId, inferProtocolFromChain, NATIVE_CONTRACT_KEY } from './assetIdentity';
 import { resolveCoinGeckoAssetIdForContract } from './coingecko';
+import { fetchSolanaPortfolio } from './solana';
+import type { WalletSummary } from '../types';
 
-type SimBalanceRow = {
+type PortfolioBalanceRow = {
+  protocol?: 'evm' | 'svm';
   chain: string;
   chain_id: number;
   address: string;
@@ -14,19 +17,19 @@ type SimBalanceRow = {
   symbol?: string;
   name?: string;
   decimals?: number;
-  price_usd?: number;
-  value_usd?: number;
-  logo?: string;
-  logo_uri?: string;
-  url?: string;
+  price_usd?: number | null;
+  value_usd?: number | null;
+  logo?: string | null;
+  logo_uri?: string | null;
+  url?: string | null;
   token_metadata?: {
-    logo?: string;
-    logoURI?: string;
-    url?: string;
+    logo?: string | null;
+    logoURI?: string | null;
+    url?: string | null;
   };
 };
 
-export type MergedHoldingVariant = SimBalanceRow & {
+export type MergedHoldingVariant = PortfolioBalanceRow & {
   market_chain: string;
   contract_key: string;
   chain_asset_id: string;
@@ -44,7 +47,7 @@ export type MergedPortfolioHolding = {
 
 type SimBalancesResponse = {
   wallet_address: string;
-  balances: SimBalanceRow[];
+  balances: PortfolioBalanceRow[];
   error?: string;
   message?: string;
 };
@@ -65,11 +68,16 @@ const FALLBACK_ASSET_NAME_BY_SYMBOL: Record<string, string> = {
   USDC: 'USD Coin',
 };
 
-function normalizeAddress(raw: string | undefined): string | null {
+function normalizeEvmAddress(raw: string | undefined): string | null {
   if (!raw) return null;
   const normalized = raw.trim().toLowerCase();
   if (!/^0x[a-f0-9]{40}$/.test(normalized)) return null;
   return normalized;
+}
+
+function normalizeBase58(raw: string | undefined): string | null {
+  const normalized = normalizeText(raw);
+  return normalized ?? null;
 }
 
 function normalizeText(raw: unknown): string | null {
@@ -84,7 +92,7 @@ function normalizeAssetId(raw: unknown): string | null {
   return value.toLowerCase();
 }
 
-function resolveHoldingLogo(row: SimBalanceRow): string | null {
+function resolveHoldingLogo(row: PortfolioBalanceRow): string | null {
   return (
     normalizeText(row.logo) ??
     normalizeText(row.logo_uri) ??
@@ -103,14 +111,22 @@ function normalizeMarketChain(raw: string | undefined): string {
   return value;
 }
 
-function resolveHoldingMarketChain(row: SimBalanceRow): string {
+function resolveHoldingMarketChain(row: PortfolioBalanceRow): string {
   const fromConfig = getMarketChainByChainId(Number(row.chain_id));
   if (fromConfig) return fromConfig;
   return normalizeMarketChain(row.chain);
 }
 
-function resolveHoldingContractKey(row: SimBalanceRow): string {
-  const address = normalizeAddress(row.address);
+function resolveHoldingContractKey(row: PortfolioBalanceRow): string {
+  const marketChain = resolveHoldingMarketChain(row);
+  const protocol = row.protocol ?? inferProtocolFromChain(marketChain);
+  if (protocol === 'svm') {
+    const address = normalizeBase58(row.address);
+    if (!address || address === NATIVE_CONTRACT_KEY) return NATIVE_CONTRACT_KEY;
+    return address;
+  }
+
+  const address = normalizeEvmAddress(row.address);
   if (!address || /^0x0{40}$/.test(address)) return NATIVE_CONTRACT_KEY;
   return address;
 }
@@ -144,13 +160,13 @@ function resolveFallbackAssetName(assetId: string | null | undefined, symbol: st
   return FALLBACK_ASSET_NAME_BY_SYMBOL[normalizedSymbol] ?? null;
 }
 
-export async function fetchWalletPortfolio(
+async function fetchEvmPortfolio(
   env: Bindings,
   walletAddress: string,
-): Promise<{ totalUsd: number; holdings: SimBalanceRow[]; asOf: string }> {
+): Promise<PortfolioBalanceRow[]> {
   const simApiKey = env.SIM_API_KEY?.trim();
   if (!simApiKey) {
-    throw new Error('sim_api_key_not_configured');
+    return [];
   }
 
   const chainIds = getSupportedChainIds().join(',');
@@ -169,11 +185,28 @@ export async function fetchWalletPortfolio(
     throw new Error(simData.message ?? simData.error ?? 'failed_to_fetch_portfolio');
   }
 
-  const holdings = (simData.balances ?? [])
+  return (simData.balances ?? [])
+    .map((row) => ({
+      ...row,
+      protocol: 'evm' as const,
+    }))
     .filter((row) => Number(row.value_usd ?? 0) > 0 || hasPositiveAmount(row.amount))
     .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
-  const totalUsd = holdings.reduce((acc, row) => acc + Number(row.value_usd ?? 0), 0);
+}
 
+export async function fetchWalletPortfolio(
+  env: Bindings,
+  wallet: WalletSummary,
+): Promise<{ totalUsd: number; holdings: PortfolioBalanceRow[]; asOf: string }> {
+  const evmAccounts = wallet.chainAccounts.filter((row) => row.protocol === 'evm');
+  const solanaAccount = wallet.chainAccounts.find((row) => row.chainId === 101);
+  const evmPrimary = evmAccounts[0]?.address ?? wallet.address;
+  const [evmHoldings, solanaHoldings] = await Promise.all([
+    evmPrimary ? fetchEvmPortfolio(env, evmPrimary).catch(() => []) : Promise.resolve([]),
+    solanaAccount ? fetchSolanaPortfolio(env, solanaAccount.address).catch(() => []) : Promise.resolve([]),
+  ]);
+  const holdings = [...evmHoldings, ...solanaHoldings].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+  const totalUsd = holdings.reduce((acc, row) => acc + Number(row.value_usd ?? 0), 0);
   return {
     totalUsd,
     holdings,
@@ -183,7 +216,7 @@ export async function fetchWalletPortfolio(
 
 export async function buildMergedPortfolioHoldings(
   env: Bindings,
-  holdings: SimBalanceRow[],
+  holdings: PortfolioBalanceRow[],
 ): Promise<MergedPortfolioHolding[]> {
   const byAssetId = new Map<string, MergedPortfolioHolding>();
   const preferredAssetIdByChainAssetId = new Map<string, string | null>();

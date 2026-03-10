@@ -12,7 +12,14 @@ import {
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, TransferQuoteRequest, TransferQuoteResponse } from '../types';
 import { decryptString } from '../utils/crypto';
-import { createBiconomyMultichainAccount, getWalletWithPrivateKey } from './wallet';
+import { createBiconomyMultichainAccount, ensureWalletWithPrivateKey } from './wallet';
+import {
+  prepareSolanaTransfer,
+  refreshSolanaTransferStatusByHash,
+  sendPreparedSolanaTransfer,
+  waitForPreparedSolanaTransfer,
+  type PreparedSolanaTransfer,
+} from './solanaTransfer';
 
 const ERC20_ABI = [
   {
@@ -68,7 +75,7 @@ type MeePreparedTransfer = {
   meeQuote: GetQuotePayload;
 };
 
-export type PreparedTransfer = NexusPreparedTransfer | MeePreparedTransfer;
+export type PreparedTransfer = NexusPreparedTransfer | MeePreparedTransfer | PreparedSolanaTransfer;
 
 function resolveChainConfig(env: Bindings, chainId: number): ChainRuntimeConfig {
   if (chainId === mainnet.id) {
@@ -177,10 +184,7 @@ function estimateFeeWei(userOp: Record<string, unknown>): {
 }
 
 async function buildTransferContext(env: Bindings, userId: string, chainId: number) {
-  const wallet = await getWalletWithPrivateKey(env.DB, userId);
-  if (!wallet) {
-    throw new Error('wallet_not_found');
-  }
+  const wallet = await ensureWalletWithPrivateKey(env, userId);
 
   let privateKey: string;
   try {
@@ -223,6 +227,9 @@ export async function prepareTransfer(
   const chainId = Number(input.chainId);
   if (!Number.isFinite(chainId)) {
     throw new Error('invalid_chain_id');
+  }
+  if (chainId === 101) {
+    return prepareSolanaTransfer(env, userId, input);
   }
 
   const { chain } = resolveChainConfig(env, chainId);
@@ -423,6 +430,9 @@ export async function sendPreparedTransfer(prepared: PreparedTransfer): Promise<
   if (prepared.quote.insufficientFeeTokenBalance) {
     throw new Error('insufficient_fee_token_balance');
   }
+  if (prepared.mode === 'solana') {
+    return await sendPreparedSolanaTransfer(prepared) as Hash;
+  }
 
   if (prepared.mode === 'mee') {
     const payload = await prepared.meeClient.executeQuote({ quote: prepared.meeQuote });
@@ -437,6 +447,9 @@ export async function waitForTransferReceipt(
   prepared: PreparedTransfer,
   txHash: Hash,
 ): Promise<'confirmed' | 'failed' | 'pending'> {
+  if (prepared.mode === 'solana') {
+    return waitForPreparedSolanaTransfer(prepared, txHash);
+  }
   if (prepared.mode === 'mee') {
     try {
       const receipt = await prepared.meeClient.waitForSupertransactionReceipt({ hash: txHash });
@@ -471,6 +484,9 @@ export async function refreshTransferStatusByHash(
   chainId: number,
   txHash: Hash,
 ): Promise<'confirmed' | 'failed' | 'pending'> {
+  if (chainId === 101) {
+    return refreshSolanaTransferStatusByHash(env, txHash);
+  }
   try {
     const { smartAccount } = await buildTransferContext(env, userId, chainId);
     const meeClient = await createMeeClient({ account: smartAccount });

@@ -4,6 +4,7 @@ import {
   type MarketTopAsset,
   type TopAssetListName,
 } from './bitgetWallet';
+import { buildChainAssetId } from './assetIdentity';
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
 
 export type TopAssetSource = 'auto' | 'coingecko' | 'bitget';
@@ -246,7 +247,7 @@ function dedupeAssets(assets: MarketTopAsset[]): MarketTopAsset[] {
   const output: MarketTopAsset[] = [];
   const seen = new Set<string>();
   for (const asset of assets) {
-    const key = asset.chain_asset_id || `${asset.chain}:${asset.contract.toLowerCase()}:${asset.symbol.toLowerCase()}`;
+    const key = asset.chain_asset_id || buildChainAssetId(asset.chain, asset.contract);
     if (seen.has(key)) continue;
     seen.add(key);
     output.push(asset);

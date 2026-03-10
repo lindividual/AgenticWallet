@@ -6,23 +6,31 @@ import { AssetListItem } from '../AssetListItem';
 
 type ReceiveCryptoContentProps = {
   walletAddress: string;
+  chainAccounts?: Array<{
+    chainId: number;
+    protocol?: 'evm' | 'svm';
+    address: string;
+  }>;
   supportedChains: Array<{
     chainId: number;
     name: string;
     symbol: string;
+    marketChain?: string;
+    protocol?: 'evm' | 'svm';
   }>;
   onBack: () => void;
-  onCopyAddress: () => void;
+  onCopyAddress: (address: string) => void;
   onClose: () => void;
 };
 
-const DEFAULT_RECEIVE_TOKENS = ['USDT', 'USDC', 'ETH', 'BNB'] as const;
+const DEFAULT_RECEIVE_TOKENS = ['USDT', 'USDC', 'ETH', 'BNB', 'SOL'] as const;
 
 const TOKEN_CHAIN_MATCHERS: Record<(typeof DEFAULT_RECEIVE_TOKENS)[number], string[]> = {
   USDT: ['ETH', 'BSC', 'BNB'],
   USDC: ['ETH', 'BSC', 'BNB', 'BASE'],
   ETH: ['ETH', 'BASE'],
   BNB: ['BSC', 'BNB'],
+  SOL: ['SOL'],
 };
 
 function getTokenIconPath(token: string): string | null {
@@ -31,6 +39,7 @@ function getTokenIconPath(token: string): string | null {
     USDC: '/usdc.svg',
     ETH: '/eth.svg',
     BNB: '/bnb.svg',
+    SOL: '/sol.svg',
   };
   return map[token.toUpperCase()] ?? null;
 }
@@ -40,6 +49,7 @@ function getChainIconPath(chainName: string, chainSymbol: string): string | null
   if (haystack.includes('BSC') || haystack.includes('BNB')) return '/bnb.svg';
   if (haystack.includes('BASE')) return '/base.svg';
   if (haystack.includes('ETH')) return '/eth.svg';
+  if (haystack.includes('SOL')) return '/sol.svg';
   return null;
 }
 
@@ -51,6 +61,7 @@ function truncateAddress(address: string, head = 6, tail = 6): string {
 
 export function ReceiveCryptoContent({
   walletAddress,
+  chainAccounts = [],
   supportedChains,
   onBack,
   onCopyAddress,
@@ -92,14 +103,22 @@ export function ReceiveCryptoContent({
     [availableChains, selectedChainId],
   );
 
-  const qrCodeSvgMarkup = useMemo(() => {
-    if (!walletAddress) return '';
+  const displayAddress = useMemo(() => {
+    if (selectedChain) {
+      const matched = chainAccounts.find((item) => item.chainId === selectedChain.chainId)?.address?.trim();
+      if (matched) return matched;
+    }
+    return walletAddress;
+  }, [chainAccounts, selectedChain, walletAddress]);
 
-    return encodeQR(walletAddress, 'svg', {
+  const qrCodeSvgMarkup = useMemo(() => {
+    if (!displayAddress) return '';
+
+    return encodeQR(displayAddress, 'svg', {
       border: 2,
       scale: 8,
     });
-  }, [walletAddress]);
+  }, [displayAddress]);
 
   useEffect(() => {
     setSelectedChainId(null);
@@ -149,7 +168,7 @@ export function ReceiveCryptoContent({
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', updateContentHeight);
     };
-  }, [step, availableChains.length, selectedToken, selectedChainId, walletAddress, MIN_CONTENT_HEIGHT]);
+  }, [step, availableChains.length, selectedToken, selectedChainId, displayAddress, MIN_CONTENT_HEIGHT]);
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -275,7 +294,7 @@ export function ReceiveCryptoContent({
                         {selectedChain.name}
                       </span>
                     </div>
-                    {walletAddress ? (
+                    {displayAddress ? (
                       <div
                         aria-label={`${selectedToken}-${selectedChain.name} QR`}
                         className="mx-auto h-56 w-56 rounded-2xl border border-base-300 bg-white p-2 [&_svg]:h-full [&_svg]:w-full"
@@ -286,14 +305,14 @@ export function ReceiveCryptoContent({
                       <div className="min-w-0">
                         <p className="m-0 text-xs text-base-content/60">{t('wallet.receiveAddressLabel')}</p>
                         <p className="m-0 truncate text-sm font-medium">
-                          {walletAddress ? truncateAddress(walletAddress) : t('wallet.addressUnavailable')}
+                          {displayAddress ? truncateAddress(displayAddress) : t('wallet.addressUnavailable')}
                         </p>
                       </div>
                       <button
                         type="button"
                         className="btn btn-circle btn-ghost h-10 min-h-0 w-10"
                         aria-label={t('wallet.copy')}
-                        onClick={handleButtonClick(onCopyAddress)}
+                        onClick={handleButtonClick(() => onCopyAddress(displayAddress))}
                       >
                         <Copy size={18} aria-hidden />
                       </button>

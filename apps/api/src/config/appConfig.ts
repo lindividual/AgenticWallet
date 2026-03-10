@@ -2,7 +2,8 @@ export type ChainConfig = {
   chainId: number;
   name: string;
   symbol: string;
-  marketChain: 'eth' | 'base' | 'bnb';
+  marketChain: 'eth' | 'base' | 'bnb' | 'sol';
+  protocol: 'evm' | 'svm';
 };
 
 export type AppConfig = {
@@ -12,18 +13,19 @@ export type AppConfig = {
 
 export const APP_CONFIG: AppConfig = {
   supportedChains: [
-    { chainId: 1, name: 'Ethereum', symbol: 'ETH', marketChain: 'eth' },
-    { chainId: 8453, name: 'Base', symbol: 'ETH', marketChain: 'base' },
-    { chainId: 56, name: 'BNB Chain', symbol: 'BNB', marketChain: 'bnb' },
+    { chainId: 1, name: 'Ethereum', symbol: 'ETH', marketChain: 'eth', protocol: 'evm' },
+    { chainId: 8453, name: 'Base', symbol: 'ETH', marketChain: 'base', protocol: 'evm' },
+    { chainId: 56, name: 'BNB Chain', symbol: 'BNB', marketChain: 'bnb', protocol: 'evm' },
+    { chainId: 101, name: 'Solana', symbol: 'SOL', marketChain: 'sol', protocol: 'svm' },
   ],
-  defaultReceiveTokens: ['ETH', 'USDC', 'USDT', 'BNB'],
+  defaultReceiveTokens: ['ETH', 'USDC', 'USDT', 'BNB', 'SOL'],
 };
 
 export function getSupportedChainIds(): number[] {
   return APP_CONFIG.supportedChains.map((item) => item.chainId);
 }
 
-export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb'> {
+export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb' | 'sol'> {
   return [...new Set(APP_CONFIG.supportedChains.map((item) => item.marketChain))];
 }
 

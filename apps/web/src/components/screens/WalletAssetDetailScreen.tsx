@@ -24,6 +24,7 @@ import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { TransferContent } from '../modals/TransferContent';
 import type { AuthState } from '../../hooks/useWalletApp';
 import { useToast } from '../../contexts/ToastContext';
+import { buildWalletAccountsFingerprint } from '../../utils/chainIdentity';
 import { hideWalletAsset } from '../../utils/walletHiddenAssets';
 
 type WalletAssetDetailScreenProps = {
@@ -123,9 +124,15 @@ function formatTokenAmount(rawAmount: string | undefined, decimals: number | und
 }
 
 function normalizeContractForMatch(raw: string | null | undefined): string {
-  const value = normalizeLower(raw);
+  const value = normalizeText(raw);
   if (!value || value === 'native' || value === '0x0000000000000000000000000000000000000000') return 'native';
-  return value;
+  return value.startsWith('0x') ? value.toLowerCase() : value;
+}
+
+function normalizeComparableAddress(raw: string | null | undefined): string {
+  const value = normalizeText(raw);
+  if (!value) return '';
+  return value.startsWith('0x') ? value.toLowerCase() : value;
 }
 
 function matchesAssetVariant(variant: SimEvmBalance, chain: string, contract: string): boolean {
@@ -277,11 +284,12 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   const normalizedChain = normalizeLower(chain);
   const normalizedContract = contract.trim();
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
+  const walletFingerprint = buildWalletAccountsFingerprint(auth.wallet?.chainAccounts, auth.wallet?.address);
   const ownedWalletAddresses = useMemo(
     () =>
       new Set(
         [auth.wallet?.address, ...(auth.wallet?.chainAccounts?.map((item) => item.address) ?? [])]
-          .map((value) => normalizeLower(value))
+          .map((value) => normalizeComparableAddress(value))
           .filter(Boolean),
       ),
     [auth.wallet?.address, auth.wallet?.chainAccounts],
@@ -294,9 +302,9 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     refetchOnWindowFocus: false,
   });
   const { data: portfolioData } = useQuery({
-    queryKey: ['wallet-portfolio', walletAddress],
+    queryKey: ['wallet-portfolio', walletFingerprint],
     queryFn: () => getWalletPortfolio(),
-    enabled: Boolean(walletAddress),
+    enabled: Boolean(walletFingerprint),
     staleTime: 15_000,
     refetchInterval: 20_000,
     refetchOnWindowFocus: true,
@@ -424,9 +432,9 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     return rows
       .slice(0, 3)
       .map((row) => {
-        const direction = ownedWalletAddresses.has(normalizeLower(row.toAddress))
+        const direction = ownedWalletAddresses.has(normalizeComparableAddress(row.toAddress))
           ? t('wallet.assetDetailEventReceive')
-          : ownedWalletAddresses.has(normalizeLower(row.fromAddress))
+          : ownedWalletAddresses.has(normalizeComparableAddress(row.fromAddress))
             ? t('wallet.assetDetailEventTransfer')
             : t('wallet.assetDetailEventTrade');
         const estimatedUsd = currentPrice != null && Number.isFinite(Number(row.amountInput))
@@ -823,13 +831,26 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         </section>
       ) : null}
 
-      <section className="flex flex-col gap-3">
+      <article className="bg-base-200/40 p-3">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="m-0 text-xl font-semibold">{t('wallet.assetDetailHistory')}</h2>
-          <span className="text-base font-medium text-base-content/80">{t('wallet.assetDetailMore')}</span>
+          <p className="m-0 text-base font-medium">{t('wallet.assetDetailHistory')}</p>
+          <span className="text-base-content/80" aria-hidden="true">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </span>
         </div>
         {historyRows.length > 0 ? (
-          <div className="flex flex-col">
+          <div className="mt-3 flex flex-col">
             {historyRows.map(({ row, direction, amountLabel, usdLabel }) => (
               <article key={row.id} className="flex items-center justify-between gap-3 py-3">
                 <div className="flex min-w-0 items-center gap-3">
@@ -849,9 +870,11 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
             ))}
           </div>
         ) : (
-          <div className="bg-base-200/40 p-4 text-sm text-base-content/60">{t('wallet.assetDetailHistoryEmpty')}</div>
+          <div className="mt-3 rounded-lg bg-base-100/60 p-4 text-sm text-base-content/60">
+            {t('wallet.assetDetailHistoryEmpty')}
+          </div>
         )}
-      </section>
+      </article>
 
       <article ref={securitySectionRef} className="bg-base-200/40 p-3">
         <p className="m-0 text-base font-medium">{t('wallet.assetDetailSecurityTitle')}</p>
@@ -877,7 +900,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
 
       <button
         type="button"
-        className="fixed bottom-0 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 border-t border-base-300 bg-base-100 px-4 py-3 text-left"
+        className="fixed bottom-0 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 border-t border-base-300 bg-base-100 px-5 py-3 text-left"
         onClick={openTokenDetail}
       >
         <div className="flex items-center justify-between gap-4">
@@ -923,11 +946,12 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
             >
               <ReceiveCryptoContent
                 walletAddress={walletAddress}
+                chainAccounts={auth.wallet?.chainAccounts}
                 supportedChains={supportedChains}
                 onBack={backToTopUp}
-                onCopyAddress={async () => {
-                  if (!walletAddress) return;
-                  await navigator.clipboard.writeText(walletAddress);
+                onCopyAddress={async (address) => {
+                  if (!address) return;
+                  await navigator.clipboard.writeText(address);
                 }}
                 onClose={closeModal}
               />

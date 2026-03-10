@@ -1,5 +1,7 @@
 import type { Hono } from 'hono';
 import { buildAgentEventRecord, isAgentEventType, type AgentEventIngestRequest } from '../agent/events';
+import { getSupportedMarketChains } from '../config/appConfig';
+import { buildRecommendationAssetLookup } from '../durableObjects/userAgentContentHelpers';
 import {
   chatWithUserAgent,
   enqueueUserAgentJob,
@@ -8,11 +10,13 @@ import {
   ingestUserAgentEvent,
   listUserAgentArticles,
   listUserAgentRecommendations,
+  regenerateUserTodayDaily,
   runUserAgentJobsNow,
   syncUserAgentPreferredLocale,
   syncUserAgentRequestLocale,
 } from '../services/agent';
 import { getLlmStatus } from '../services/llm';
+import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { generateTopicSpecialBatch } from '../services/topicSpecials';
 import type { AppEnv } from '../types';
 import { safeJsonParse } from '../utils/json';
@@ -103,25 +107,55 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     const userId = c.get('userId');
     await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const doRecommendations = await listUserAgentRecommendations(c.env, userId, 10);
+    const shouldBackfillMetadata = doRecommendations.some((row) => {
+      const symbol = (row.asset_symbol ?? row.asset_name ?? '').trim();
+      return Boolean(symbol) && (!row.asset_chain || row.asset_contract == null);
+    });
+    let recommendationLookup = buildRecommendationAssetLookup([]);
+    if (shouldBackfillMetadata) {
+      const supportedChains = getSupportedMarketChains();
+      const [marketCapResult, trendingResult] = await Promise.allSettled([
+        fetchTopMarketAssets(c.env, {
+          name: 'marketCap',
+          limit: 80,
+          source: 'auto',
+          chains: supportedChains,
+        }),
+        fetchTopMarketAssets(c.env, {
+          name: 'trending',
+          limit: 40,
+          source: 'auto',
+          chains: supportedChains,
+        }),
+      ]);
+      recommendationLookup = buildRecommendationAssetLookup([
+        ...(marketCapResult.status === 'fulfilled' ? marketCapResult.value : []),
+        ...(trendingResult.status === 'fulfilled' ? trendingResult.value : []),
+      ]);
+    }
     return c.json({
-      recommendations: doRecommendations.map((row) => ({
-        id: row.id,
-        kind: row.category,
-        title: row.asset_name,
-        content: row.reason,
-        asset: {
-          symbol: row.asset_symbol ?? row.asset_name,
-          chain: row.asset_chain,
-          contract: row.asset_contract,
-          name: row.asset_display_name ?? row.asset_name,
-          image: row.asset_image,
-          price_change_percentage_24h: row.asset_price_change_24h,
-        },
-        score: row.score,
-        created_at: row.generated_at,
-        valid_until: row.valid_until,
-        source: 'do',
-      })),
+      recommendations: doRecommendations.map((row) => {
+        const symbol = (row.asset_symbol ?? row.asset_name ?? '').trim().toUpperCase();
+        const snapshot = recommendationLookup.get(symbol);
+        return {
+          id: row.id,
+          kind: row.category,
+          title: row.asset_name,
+          content: row.reason,
+          asset: {
+            symbol: row.asset_symbol ?? row.asset_name,
+            chain: row.asset_chain ?? snapshot?.chain ?? null,
+            contract: row.asset_contract ?? snapshot?.contract ?? null,
+            name: row.asset_display_name ?? snapshot?.name ?? row.asset_name,
+            image: row.asset_image ?? snapshot?.image ?? null,
+            price_change_percentage_24h: row.asset_price_change_24h ?? snapshot?.priceChange24h ?? null,
+          },
+          score: row.score,
+          created_at: row.generated_at,
+          valid_until: row.valid_until,
+          source: 'do',
+        };
+      }),
     });
   });
 
@@ -234,6 +268,13 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
       payload: { trigger: 'manual' },
     });
     await runUserAgentJobsNow(c.env, userId);
+    return c.json(result);
+  });
+
+  app.post('/v1/agent/jobs/daily-digest/regenerate', async (c) => {
+    const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
+    const result = await regenerateUserTodayDaily(c.env, userId);
     return c.json(result);
   });
 
