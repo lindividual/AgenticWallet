@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
@@ -7,6 +7,7 @@ import {
   getAppConfig,
   getCoinDetail,
   getMarketByInstrumentId,
+  getTokenSecurityAudit,
   getTokenKline,
   getTransferHistory,
   getWalletPortfolio,
@@ -22,6 +23,8 @@ import { TopUpContent } from '../modals/TopUpContent';
 import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { TransferContent } from '../modals/TransferContent';
 import type { AuthState } from '../../hooks/useWalletApp';
+import { useToast } from '../../contexts/ToastContext';
+import { hideWalletAsset } from '../../utils/walletHiddenAssets';
 
 type WalletAssetDetailScreenProps = {
   auth: AuthState;
@@ -247,16 +250,29 @@ function formatTransferAmount(rawAmount: string | null | undefined): string {
   return numeric.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
+function formatTaxPercent(value: number | null | undefined): string {
+  if (!Number.isFinite(Number(value))) return '--';
+  const numeric = Number(value);
+  return `${numeric.toLocaleString(undefined, {
+    minimumFractionDigits: Number.isInteger(numeric) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}%`;
+}
+
 export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: WalletAssetDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const { showError, showSuccess } = useToast();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeModalContent, setActiveModalContent] = useState<ActiveModalContent>('topUp');
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
   const [tradeBackTarget, setTradeBackTarget] = useState<'topUp' | 'close'>('close');
   const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const securitySectionRef = useRef<HTMLElement | null>(null);
 
   const normalizedChain = normalizeLower(chain);
   const normalizedContract = contract.trim();
@@ -302,6 +318,18 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     enabled: Boolean(detailChain && detailContract),
     staleTime: 30_000,
     refetchInterval: 60_000,
+  });
+  const {
+    data: securityAudit,
+    isLoading: isSecurityAuditLoading,
+    isError: isSecurityAuditError,
+  } = useQuery({
+    queryKey: ['wallet-asset-security', detailChain, detailContract],
+    queryFn: () => getTokenSecurityAudit(detailChain, detailContract),
+    enabled: Boolean(detailChain && detailContract),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: false,
   });
   const { data: klineData } = useQuery({
     queryKey: ['wallet-asset-kline', detailChain, detailContract],
@@ -412,6 +440,81 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         };
       });
   }, [currentPrice, displaySymbol, i18n.language, ownedWalletAddresses, t, transferHistory?.transfers]);
+
+  const securitySummary = useMemo(() => {
+    if (!detailContract) return t('wallet.assetDetailSecurityUnsupported');
+    if (isSecurityAuditLoading) return t('wallet.assetDetailSecurityLoading');
+    if (isSecurityAuditError || !securityAudit) return t('wallet.assetDetailSecurityUnavailable');
+    if (!securityAudit.supported) return t('wallet.assetDetailSecurityUnsupported');
+    if (securityAudit.checking) return t('wallet.assetDetailSecurityChecking');
+    if (securityAudit.highRisk) {
+      return t('wallet.assetDetailSecurityHighRisk', { count: securityAudit.riskCount });
+    }
+    if (securityAudit.riskCount > 0 || securityAudit.warnCount > 0) {
+      return t('wallet.assetDetailSecurityWarnings', {
+        riskCount: securityAudit.riskCount,
+        warnCount: securityAudit.warnCount,
+      });
+    }
+    return t('wallet.assetDetailSecurityPassed', { count: securityAudit.totalChecks });
+  }, [detailContract, isSecurityAuditError, isSecurityAuditLoading, securityAudit, t]);
+
+  const securityMetrics = useMemo(() => {
+    if (!securityAudit || !securityAudit.supported) return [] as Array<{
+      label: string;
+      value: string;
+      valueClassName?: string;
+    }>;
+
+    const metrics: Array<{ label: string; value: string; valueClassName?: string }> = [
+      {
+        label: t('wallet.assetDetailSecurityRiskCount'),
+        value: String(securityAudit.riskCount),
+        valueClassName: securityAudit.riskCount > 0 ? 'text-error' : 'text-success',
+      },
+      {
+        label: t('wallet.assetDetailSecurityWarnCount'),
+        value: String(securityAudit.warnCount),
+        valueClassName: securityAudit.warnCount > 0 ? 'text-warning' : 'text-base-content',
+      },
+      {
+        label: t('wallet.assetDetailSecurityCheckCount'),
+        value: String(securityAudit.totalChecks),
+      },
+      {
+        label: t('wallet.assetDetailSecurityBuyTax'),
+        value: formatTaxPercent(securityAudit.buyTax),
+        valueClassName: Number(securityAudit.buyTax ?? 0) > 0 ? 'text-warning' : 'text-base-content',
+      },
+      {
+        label: t('wallet.assetDetailSecuritySellTax'),
+        value: formatTaxPercent(securityAudit.sellTax),
+        valueClassName: Number(securityAudit.sellTax ?? 0) > 0 ? 'text-warning' : 'text-base-content',
+      },
+    ];
+
+    const extraFlags: Array<{ enabled: boolean; label: string }> = [
+      { enabled: securityAudit.highRisk, label: t('wallet.assetDetailSecurityHighRiskFlag') },
+      { enabled: securityAudit.freezeAuth, label: t('wallet.assetDetailSecurityFreezeAuth') },
+      { enabled: securityAudit.mintAuth, label: t('wallet.assetDetailSecurityMintAuth') },
+      { enabled: securityAudit.cannotSellAll, label: t('wallet.assetDetailSecurityCannotSellAll') },
+      { enabled: securityAudit.isProxy, label: t('wallet.assetDetailSecurityProxy') },
+      { enabled: securityAudit.token2022, label: t('wallet.assetDetailSecurityToken2022') },
+      { enabled: Number(securityAudit.top10HolderRiskLevel ?? 0) > 0, label: t('wallet.assetDetailSecurityTopHolderRisk') },
+      { enabled: securityAudit.lpLock, label: t('wallet.assetDetailSecurityLpLock') },
+    ];
+
+    for (const flag of extraFlags) {
+      if (!flag.enabled) continue;
+      metrics.push({
+        label: flag.label,
+        value: t('wallet.assetDetailSecurityFlagged'),
+        valueClassName: 'text-warning',
+      });
+    }
+
+    return metrics.slice(0, 6);
+  }, [securityAudit, t]);
 
   function openTokenDetail(): void {
     const nextChain = normalizeText(selectedHolding?.transferAsset.chain ?? normalizedChain);
@@ -528,6 +631,58 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     ? truncateMiddle(detailContract)
     : `${normalizeText(selectedHolding?.transferAsset.chain).toUpperCase() || normalizedChain.toUpperCase()} · ${t('trade.nativeToken')}`;
 
+  useEffect(() => {
+    if (!isMoreMenuOpen) return undefined;
+
+    function handlePointerDown(event: PointerEvent): void {
+      if (!moreMenuRef.current?.contains(event.target as Node)) {
+        setIsMoreMenuOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        setIsMoreMenuOpen(false);
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isMoreMenuOpen]);
+
+  function toggleMoreMenu(): void {
+    setIsMoreMenuOpen((current) => !current);
+  }
+
+  function openSecuritySection(): void {
+    setIsMoreMenuOpen(false);
+    securitySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function copyContractAddress(): Promise<void> {
+    if (!detailContract) return;
+    setIsMoreMenuOpen(false);
+    try {
+      await navigator.clipboard.writeText(detailContract);
+      showSuccess(t('wallet.assetDetailContractCopied'));
+    } catch (error) {
+      showError(`${t('common.error')}: ${(error as Error).message}`);
+    }
+  }
+
+  function handleDeleteToken(): void {
+    const hiddenChain = normalizeText(selectedHolding?.transferAsset.chain ?? normalizedChain);
+    const hiddenContract = normalizeText(selectedHolding?.transferAsset.address ?? normalizedContract);
+    hideWalletAsset(walletAddress, hiddenChain, hiddenContract);
+    setIsMoreMenuOpen(false);
+    showSuccess(t('wallet.assetDetailTokenDeleted'));
+    onBack();
+  }
+
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-32">
       <header className="mt-4 flex items-center justify-between gap-3">
@@ -566,16 +721,51 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
           </p>
         </div>
 
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost border-0 px-2"
-          onClick={openTokenDetail}
-          aria-label={t('wallet.assetDetailOpenToken')}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M9 18l6-6-6-6" />
-          </svg>
-        </button>
+        <div ref={moreMenuRef} className="relative shrink-0">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost border-0 px-2"
+            onClick={toggleMoreMenu}
+            aria-label={t('wallet.assetDetailMenu')}
+            aria-expanded={isMoreMenuOpen}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+          {isMoreMenuOpen ? (
+            <div className="absolute right-0 top-full z-30 mt-2 w-48 rounded-2xl border border-base-300 bg-base-100 p-2 shadow-lg">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-base-content hover:bg-base-200/70"
+                onClick={openSecuritySection}
+              >
+                <span>{t('wallet.assetDetailMenuSecurity')}</span>
+              </button>
+              {detailContract ? (
+                <button
+                  type="button"
+                  className="flex w-full flex-col items-start rounded-xl px-3 py-2 text-left hover:bg-base-200/70"
+                  onClick={() => {
+                    void copyContractAddress();
+                  }}
+                >
+                  <span className="text-sm text-base-content">{t('wallet.assetDetailMenuContract')}</span>
+                  <span className="mt-1 text-xs text-base-content/60">{truncateMiddle(detailContract, 8, 6)}</span>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-error hover:bg-error/10"
+                onClick={handleDeleteToken}
+              >
+                <span>{t('wallet.assetDetailMenuDelete')}</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
       </header>
 
       <section className="flex flex-col gap-2">
@@ -663,9 +853,21 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         )}
       </section>
 
-      <article className="bg-base-200/40 p-3">
+      <article ref={securitySectionRef} className="bg-base-200/40 p-3">
         <p className="m-0 text-base font-medium">{t('wallet.assetDetailSecurityTitle')}</p>
-        <p className="m-0 mt-1 text-sm text-base-content/60">{t('wallet.assetDetailSecuritySummary')}</p>
+        <p className="m-0 mt-1 text-sm text-base-content/60">{securitySummary}</p>
+        {securityMetrics.length > 0 ? (
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {securityMetrics.map((metric) => (
+              <div key={metric.label} className="rounded-lg bg-base-100/60 px-3 py-2">
+                <p className="m-0 text-xs text-base-content/50">{metric.label}</p>
+                <p className={`m-0 mt-1 text-sm font-semibold ${metric.valueClassName ?? 'text-base-content'}`}>
+                  {metric.value}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </article>
 
       <article className="bg-base-200/40 p-3">

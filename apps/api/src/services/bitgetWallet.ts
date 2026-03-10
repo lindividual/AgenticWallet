@@ -10,6 +10,7 @@ import {
 const BGW_BASE_URL = 'https://bopenapi.bgwapi.io';
 const TOKEN_DETAIL_CACHE_TTL_MS = 15_000;
 const TOKEN_KLINE_CACHE_TTL_MS = 12_000;
+const TOKEN_SECURITY_CACHE_TTL_MS = 30_000;
 
 type JsonLike = null | boolean | number | string | JsonLike[] | { [key: string]: JsonLike };
 
@@ -69,10 +70,43 @@ type BitgetKlineRow = {
   turnover?: number | string;
 };
 
+type BitgetSecurityCheckRow = {
+  labelName?: string;
+  status?: number | string;
+  priority?: number | string;
+  type?: number | string;
+  values?: Record<string, unknown>;
+};
+
+type BitgetSecurityAuditRow = {
+  chain?: string;
+  contract?: string;
+  riskChecks?: BitgetSecurityCheckRow[];
+  warnChecks?: BitgetSecurityCheckRow[];
+  lowChecks?: BitgetSecurityCheckRow[];
+  riskCount?: number | string;
+  warnCount?: number | string;
+  checkStatus?: number | string;
+  support?: number | string | boolean;
+  checking?: boolean | number | string;
+  buyTax?: number | string;
+  sellTax?: number | string;
+  freezeAuth?: boolean | number | string;
+  mintAuth?: boolean | number | string;
+  token2022?: boolean | number | string;
+  lpLock?: boolean | number | string;
+  top_10_holder_risk_level?: number | string;
+  highRisk?: boolean | number | string;
+  cannotSellAll?: boolean | number | string;
+  isProxy?: boolean | number | string;
+};
+
 const tokenDetailValueCache = new Map<string, { expiresAt: number; value: BitgetTokenDetail | null }>();
 const tokenDetailInFlightCache = new Map<string, Promise<BitgetTokenDetail | null>>();
 const tokenKlineValueCache = new Map<string, { expiresAt: number; value: BitgetKlineCandle[] }>();
 const tokenKlineInFlightCache = new Map<string, Promise<BitgetKlineCandle[]>>();
+const tokenSecurityValueCache = new Map<string, { expiresAt: number; value: BitgetTokenSecurityAudit | null }>();
+const tokenSecurityInFlightCache = new Map<string, Promise<BitgetTokenSecurityAudit | null>>();
 
 function normalizeFiniteNumber(raw: unknown): number | null {
   const value = Number(raw);
@@ -83,6 +117,16 @@ function normalizeText(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   return value ? value : null;
+}
+
+function normalizeBoolean(raw: unknown): boolean {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') return raw !== 0;
+  if (typeof raw === 'string') {
+    const value = raw.trim().toLowerCase();
+    return value === '1' || value === 'true';
+  }
+  return false;
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -578,5 +622,156 @@ export async function fetchBitgetTokenKline(
   });
 
   tokenKlineInFlightCache.set(normalized.cacheKey, task);
+  return task;
+}
+
+export type BitgetTokenSecurityCheck = {
+  labelName: string | null;
+  status: number | null;
+  priority: number | null;
+  type: number | null;
+  values: Record<string, string | number | boolean | null> | null;
+};
+
+export type BitgetTokenSecurityAudit = {
+  asset_id: string;
+  chain_asset_id: string;
+  chain: string;
+  contract: string;
+  riskChecks: BitgetTokenSecurityCheck[];
+  warnChecks: BitgetTokenSecurityCheck[];
+  lowChecks: BitgetTokenSecurityCheck[];
+  riskCount: number;
+  warnCount: number;
+  totalChecks: number;
+  checkStatus: number | null;
+  supported: boolean;
+  checking: boolean;
+  buyTax: number | null;
+  sellTax: number | null;
+  freezeAuth: boolean;
+  mintAuth: boolean;
+  token2022: boolean;
+  lpLock: boolean;
+  top10HolderRiskLevel: number | null;
+  highRisk: boolean;
+  cannotSellAll: boolean;
+  isProxy: boolean;
+};
+
+function normalizeSecurityCheckValues(
+  raw: Record<string, unknown> | undefined,
+): Record<string, string | number | boolean | null> | null {
+  if (!raw) return null;
+  const output: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      output[key] = value;
+    }
+  }
+  return Object.keys(output).length > 0 ? output : null;
+}
+
+function mapSecurityCheck(row: BitgetSecurityCheckRow): BitgetTokenSecurityCheck {
+  return {
+    labelName: normalizeText(row.labelName),
+    status: normalizeFiniteNumber(row.status),
+    priority: normalizeFiniteNumber(row.priority),
+    type: normalizeFiniteNumber(row.type),
+    values: normalizeSecurityCheckValues(row.values),
+  };
+}
+
+function mapBitgetSecurityAuditRow(
+  row: BitgetSecurityAuditRow,
+  fallback: {
+    chain: string;
+    contract: string;
+  },
+): BitgetTokenSecurityAudit {
+  const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? fallback.chain);
+  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(fallback.contract);
+  const riskChecks = Array.isArray(row.riskChecks) ? row.riskChecks.map(mapSecurityCheck) : [];
+  const warnChecks = Array.isArray(row.warnChecks) ? row.warnChecks.map(mapSecurityCheck) : [];
+  const lowChecks = Array.isArray(row.lowChecks) ? row.lowChecks.map(mapSecurityCheck) : [];
+  return {
+    asset_id: buildAssetId(normalizedChain, normalizedContract),
+    chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
+    chain: normalizedChain,
+    contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
+    riskChecks,
+    warnChecks,
+    lowChecks,
+    riskCount: normalizeFiniteNumber(row.riskCount) ?? riskChecks.length,
+    warnCount: normalizeFiniteNumber(row.warnCount) ?? warnChecks.length,
+    totalChecks: riskChecks.length + warnChecks.length + lowChecks.length,
+    checkStatus: normalizeFiniteNumber(row.checkStatus),
+    supported: normalizeBoolean(row.support),
+    checking: normalizeBoolean(row.checking),
+    buyTax: normalizeFiniteNumber(row.buyTax),
+    sellTax: normalizeFiniteNumber(row.sellTax),
+    freezeAuth: normalizeBoolean(row.freezeAuth),
+    mintAuth: normalizeBoolean(row.mintAuth),
+    token2022: normalizeBoolean(row.token2022),
+    lpLock: normalizeBoolean(row.lpLock),
+    top10HolderRiskLevel: normalizeFiniteNumber(row.top_10_holder_risk_level),
+    highRisk: normalizeBoolean(row.highRisk),
+    cannotSellAll: normalizeBoolean(row.cannotSellAll),
+    isProxy: normalizeBoolean(row.isProxy),
+  };
+}
+
+export async function fetchBitgetTokenSecurityAudit(
+  env: Bindings,
+  chain: string,
+  contract: string,
+): Promise<BitgetTokenSecurityAudit | null> {
+  const normalized = normalizeTokenDetailLookup({ chain, contract });
+  if (!normalized) return null;
+
+  const cached = tokenSecurityValueCache.get(normalized.cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const inFlight = tokenSecurityInFlightCache.get(normalized.cacheKey);
+  if (inFlight) return inFlight;
+
+  const task = (async () => {
+    const result = await bitgetPost<BitgetSecurityAuditRow[]>(env, '/bgw-pro/market/v3/coin/security/audits', {
+      list: [
+        {
+          chain: normalized.chain,
+          contract: contractKeyToUpstreamContract(normalized.contract),
+        },
+      ],
+      source: 'bg',
+    });
+    const rows = Array.isArray(result.data) ? result.data : [];
+    const matchedRow =
+      rows.find((row) => {
+        const rowLookup = normalizeTokenDetailLookup({
+          chain: normalizeText(row.chain) ?? normalized.chain,
+          contract: normalizeText(row.contract) ?? contractKeyToUpstreamContract(normalized.contract),
+        });
+        return rowLookup?.cacheKey === normalized.cacheKey;
+      })
+      ?? rows[0];
+    const value = matchedRow
+      ? mapBitgetSecurityAuditRow(matchedRow, {
+          chain: normalized.chain,
+          contract: normalized.contract,
+        })
+      : null;
+    tokenSecurityValueCache.set(normalized.cacheKey, {
+      expiresAt: Date.now() + TOKEN_SECURITY_CACHE_TTL_MS,
+      value,
+    });
+    return value;
+  })().finally(() => {
+    tokenSecurityInFlightCache.delete(normalized.cacheKey);
+  });
+
+  tokenSecurityInFlightCache.set(normalized.cacheKey, task);
   return task;
 }

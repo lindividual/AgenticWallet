@@ -1,7 +1,12 @@
 import type { Hono } from 'hono';
 import type { AppEnv } from '../types';
-import type { BitgetTokenDetail, MarketTopAsset } from '../services/bitgetWallet';
-import { fetchBitgetTokenDetail, fetchBitgetTokenDetails, fetchBitgetTokenKline } from '../services/bitgetWallet';
+import type { BitgetTokenDetail, BitgetTokenSecurityAudit, MarketTopAsset } from '../services/bitgetWallet';
+import {
+  fetchBitgetTokenDetail,
+  fetchBitgetTokenDetails,
+  fetchBitgetTokenKline,
+  fetchBitgetTokenSecurityAudit,
+} from '../services/bitgetWallet';
 import { getCoinGeckoCoinListSyncStatus, syncCoinGeckoCoinListPlatforms } from '../services/coingecko';
 import {
   fetchTopMarketAssets,
@@ -114,6 +119,10 @@ type BitgetTokenDetailWithIdentity = BitgetTokenDetail & {
   instrument_id?: string;
 };
 
+type BitgetTokenSecurityAuditWithIdentity = BitgetTokenSecurityAudit & {
+  instrument_id?: string;
+};
+
 function buildTopAssetResolveRequest(asset: MarketTopAsset): IdentityResolveRequest | null {
   const chain = normalizeText(asset.chain);
   if (!chain) return null;
@@ -200,6 +209,35 @@ function applyTokenDetailIdentity(
   return {
     ...detail,
     asset_id: resolved.asset_id,
+    instrument_id: resolved.instrument_id,
+  };
+}
+
+function buildTokenSecurityResolveRequest(audit: BitgetTokenSecurityAudit): IdentityResolveRequest | null {
+  const chain = normalizeText(audit.chain);
+  if (!chain) return null;
+  const contract = normalizeText(audit.contract) ?? 'native';
+  const normalizedChain = normalizeMarketChain(chain);
+  return {
+    key: `spot:${normalizedChain}:${toContractKey(contract)}`,
+    input: {
+      marketType: 'spot',
+      chain: normalizedChain,
+      contract,
+    },
+  };
+}
+
+function applyTokenSecurityIdentity(
+  audit: BitgetTokenSecurityAudit,
+  identityMap: Map<string, ResolvedAsset>,
+): BitgetTokenSecurityAuditWithIdentity {
+  const request = buildTokenSecurityResolveRequest(audit);
+  if (!request) return audit;
+  const resolved = identityMap.get(request.key);
+  if (!resolved?.instrument_id) return audit;
+  return {
+    ...audit,
     instrument_id: resolved.instrument_id,
   };
 }
@@ -788,6 +826,43 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json(
         {
           error: 'bitget_token_detail_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/market/token-security', async (c) => {
+    const chain = (c.req.query('chain') ?? '').trim().toLowerCase();
+    const contract = (c.req.query('contract') ?? '').trim().toLowerCase();
+    if (!chain) {
+      return c.json({ error: 'invalid_chain' }, 400);
+    }
+    if (isNativeLikeContract(contract)) {
+      return c.json({ audit: null });
+    }
+
+    try {
+      const audit = await fetchBitgetTokenSecurityAudit(c.env, chain, contract);
+      if (!audit) {
+        return c.json({ audit: null });
+      }
+      const request = buildTokenSecurityResolveRequest(audit);
+      const identityResults = request
+        ? await resolveAssetIdentityBatch(c.env, [request.input])
+        : [];
+      const identityMap = new Map<string, ResolvedAsset>();
+      if (request && identityResults[0]?.ok) {
+        identityMap.set(request.key, identityResults[0].result);
+      }
+      return c.json({
+        audit: applyTokenSecurityIdentity(audit, identityMap),
+      });
+    } catch (error) {
+      return c.json(
+        {
+          error: 'bitget_token_security_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,

@@ -331,6 +331,41 @@ export type CoinDetail = {
   lockLpPercent: number | null;
 };
 
+export type TokenSecurityCheck = {
+  labelName: string | null;
+  status: number | null;
+  priority: number | null;
+  type: number | null;
+  values: Record<string, string | number | boolean | null> | null;
+};
+
+export type TokenSecurityAudit = {
+  asset_id: string;
+  instrument_id?: string;
+  chain_asset_id: string;
+  chain: string;
+  contract: string;
+  riskChecks: TokenSecurityCheck[];
+  warnChecks: TokenSecurityCheck[];
+  lowChecks: TokenSecurityCheck[];
+  riskCount: number;
+  warnCount: number;
+  totalChecks: number;
+  checkStatus: number | null;
+  supported: boolean;
+  checking: boolean;
+  buyTax: number | null;
+  sellTax: number | null;
+  freezeAuth: boolean;
+  mintAuth: boolean;
+  token2022: boolean;
+  lpLock: boolean;
+  top10HolderRiskLevel: number | null;
+  highRisk: boolean;
+  cannotSellAll: boolean;
+  isProxy: boolean;
+};
+
 export type CoinDetailBatchItem = {
   key: string;
   chain: string;
@@ -722,6 +757,22 @@ export async function getCoinDetailsBatch(tokens: Array<{ chain: string; contrac
     true,
   );
   return response.details;
+}
+
+export async function getTokenSecurityAudit(
+  chain: string,
+  contract: string,
+): Promise<TokenSecurityAudit | null> {
+  const normalizedChain = chain.trim().toLowerCase();
+  const normalizedContract = contract.trim().toLowerCase();
+  const query = new URLSearchParams();
+  query.set('chain', normalizedChain);
+  query.set('contract', normalizedContract);
+  const response = await getJson<{ audit: TokenSecurityAudit | null }>(
+    `/v1/market/token-security?${query.toString()}`,
+    true,
+  );
+  return response.audit;
 }
 
 export async function getTokenKline(

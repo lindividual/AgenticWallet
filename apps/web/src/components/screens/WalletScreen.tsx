@@ -31,6 +31,7 @@ import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 import { buildChainAssetId } from '../../utils/assetIdentity';
 import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
+import { getHiddenWalletAssetKeys } from '../../utils/walletHiddenAssets';
 
 type WalletScreenProps = {
   auth: AuthState;
@@ -192,6 +193,15 @@ function resolvePriceChangeLookupParams(
   };
 }
 
+function isHoldingVariantHidden(variant: SimEvmBalance, hiddenAssetKeys: Set<string>): boolean {
+  if (hiddenAssetKeys.size === 0) return false;
+  const hiddenKey = buildChainAssetId(
+    (variant as SimEvmBalance & { market_chain?: string }).market_chain ?? variant.chain,
+    (variant as SimEvmBalance & { contract_key?: string }).contract_key ?? variant.address,
+  ).trim().toLowerCase();
+  return hiddenAssetKeys.has(hiddenKey);
+}
+
 function TokenAvatar({
   icon,
   symbol,
@@ -241,6 +251,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
+  const [hiddenAssetKeys, setHiddenAssetKeys] = useState<Set<string>>(() => getHiddenWalletAssetKeys(walletAddress));
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['wallet-portfolio', walletAddress],
@@ -282,6 +293,10 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   }, [walletAddress]);
 
   useEffect(() => {
+    setHiddenAssetKeys(getHiddenWalletAssetKeys(walletAddress));
+  }, [walletAddress]);
+
+  useEffect(() => {
     if (!walletAddress) return;
     const cacheKey = `wallet-portfolio:v1:${walletAddress.toLowerCase()}`;
     if (data) {
@@ -307,6 +322,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
     const merged = portfolioData.mergedHoldings ?? [];
     if (merged.length > 0) {
       return [...merged]
+        .filter((item) => !(item.variants ?? []).some((variant) => isHoldingVariantHidden(variant, hiddenAssetKeys)))
         .sort((a, b) => Number(b.total_value_usd ?? 0) - Number(a.total_value_usd ?? 0))
         .slice(0, 10)
         .flatMap((item) => {
@@ -381,6 +397,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
     );
 
     return Array.from(grouped.values())
+      .filter((group) => !group.variants.some((variant) => isHoldingVariantHidden(variant, hiddenAssetKeys)))
       .sort((a, b) => b.totalValueUsd - a.totalValueUsd)
       .slice(0, 10)
       .flatMap((group) => {
@@ -434,7 +451,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
         } satisfies WalletHoldingListItem;
       })
       .sort((a, b) => b.valueUsd - a.valueUsd);
-  }, [chainNameById, portfolioData, t]);
+  }, [chainNameById, hiddenAssetKeys, portfolioData, t]);
 
   const stableAndCryptos = useMemo(() => {
     const stableHoldings = holdings.filter((asset) => {

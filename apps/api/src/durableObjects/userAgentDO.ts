@@ -481,12 +481,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
       const payload = event.payload ?? {};
       const chain = typeof payload.chain === 'string' ? payload.chain : '';
       const contract = typeof payload.contract === 'string' ? payload.contract : '';
+      const itemId = typeof payload.itemId === 'string' ? payload.itemId : null;
+      const marketType = typeof payload.marketType === 'string' ? payload.marketType : null;
       try {
         this.upsertWatchlistAsset({
-          watchType: 'crypto',
+          watchType: this.resolveWatchTypeFromFavoriteEvent(marketType),
           chain,
           contract,
-          itemId: chain && contract ? `${chain.trim().toLowerCase()}:${contract.trim().toLowerCase()}` : null,
+          itemId: itemId ?? (chain && contract ? `${chain.trim().toLowerCase()}:${contract.trim().toLowerCase()}` : null),
           symbol: typeof payload.asset === 'string' ? payload.asset : typeof payload.symbol === 'string' ? payload.symbol : null,
           name: typeof payload.name === 'string' ? payload.name : null,
           image: typeof payload.image === 'string' ? payload.image : null,
@@ -619,7 +621,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private getWatchlistAssets(limit = 50): WatchlistAssetRow[] {
-    return this.ctx.storage.sql
+    const sanitizedLimit = sanitizeLimit(limit, 1, MAX_WATCHLIST_SIZE);
+    const candidateLimit = Math.min(MAX_WATCHLIST_SIZE, Math.max(sanitizedLimit * 3, sanitizedLimit));
+    const rows = this.ctx.storage.sql
       .exec(
         `SELECT
           id,
@@ -638,9 +642,13 @@ export class UserAgentDO extends DurableObject<Bindings> {
          FROM user_watchlist_assets
          ORDER BY updated_at DESC
          LIMIT ?`,
-        sanitizeLimit(limit, 1, MAX_WATCHLIST_SIZE),
+        candidateLimit,
       )
       .toArray() as WatchlistAssetRow[];
+
+    return rows
+      .filter((row) => !this.isLegacySyntheticCryptoMarketWatch(row))
+      .slice(0, sanitizedLimit);
   }
 
   private getWatchlistSymbols(limit = 12): string[] {
@@ -1091,6 +1099,19 @@ export class UserAgentDO extends DurableObject<Bindings> {
       return normalized;
     }
     return null;
+  }
+
+  private resolveWatchTypeFromFavoriteEvent(value: unknown): WatchlistType {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (normalized === 'perp') return 'perps';
+    if (normalized === 'stock' || normalized === 'prediction') return normalized;
+    return 'crypto';
+  }
+
+  private isLegacySyntheticCryptoMarketWatch(row: WatchlistAssetRow): boolean {
+    return row.watch_type === 'crypto'
+      && row.chain === 'watch:crypto'
+      && row.source === 'trade_market_detail';
   }
 
   private normalizeWatchlistChain(value: unknown): string | null {
