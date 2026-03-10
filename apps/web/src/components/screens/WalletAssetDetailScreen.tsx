@@ -261,6 +261,15 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   const normalizedChain = normalizeLower(chain);
   const normalizedContract = contract.trim();
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
+  const ownedWalletAddresses = useMemo(
+    () =>
+      new Set(
+        [auth.wallet?.address, ...(auth.wallet?.chainAccounts?.map((item) => item.address) ?? [])]
+          .map((value) => normalizeLower(value))
+          .filter(Boolean),
+      ),
+    [auth.wallet?.address, auth.wallet?.chainAccounts],
+  );
 
   const { data: appConfig } = useQuery({
     queryKey: ['app-config'],
@@ -302,9 +311,28 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     refetchInterval: 60_000,
   });
   const { data: transferHistory } = useQuery({
-    queryKey: ['transfer-history', 50],
-    queryFn: () => getTransferHistory({ limit: 50 }),
-    enabled: Boolean(walletAddress),
+    queryKey: [
+      'transfer-history',
+      50,
+      selectedHolding?.transferAsset.chain_id ?? null,
+      selectedHolding ? normalizeContractForMatch(selectedHolding.transferAsset.address) : null,
+      selectedHolding?.symbol ?? null,
+    ],
+    queryFn: () =>
+      getTransferHistory({
+        limit: 50,
+        chainId: selectedHolding?.transferAsset.chain_id,
+        tokenAddress:
+          normalizeContractForMatch(selectedHolding?.transferAsset.address) === 'native'
+            ? null
+            : normalizeText(selectedHolding?.transferAsset.address) || undefined,
+        tokenSymbol: selectedHolding?.symbol || undefined,
+        assetType:
+          normalizeContractForMatch(selectedHolding?.transferAsset.address) === 'native'
+            ? 'native'
+            : 'erc20',
+      }),
+    enabled: Boolean(walletAddress && selectedHolding),
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
@@ -364,25 +392,13 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
 
   const historyRows = useMemo(() => {
     const rows = transferHistory?.transfers ?? [];
-    const normalizedWalletAddress = normalizeLower(walletAddress);
-    const normalizedTokenAddress = normalizeLower(selectedHolding?.transferAsset.address);
-    const symbolUpper = displaySymbol.trim().toUpperCase();
 
     return rows
-      .filter((row) => {
-        if (selectedHolding?.transferAsset.chain_id && row.chainId !== selectedHolding.transferAsset.chain_id) {
-          return false;
-        }
-        if (normalizedTokenAddress && normalizeContractForMatch(normalizedTokenAddress) !== 'native') {
-          return normalizeLower(row.tokenAddress) === normalizedTokenAddress;
-        }
-        return (row.tokenSymbol ?? '').trim().toUpperCase() === symbolUpper;
-      })
       .slice(0, 3)
       .map((row) => {
-        const direction = normalizeLower(row.toAddress) === normalizedWalletAddress
+        const direction = ownedWalletAddresses.has(normalizeLower(row.toAddress))
           ? t('wallet.assetDetailEventReceive')
-          : normalizeLower(row.fromAddress) === normalizedWalletAddress
+          : ownedWalletAddresses.has(normalizeLower(row.fromAddress))
             ? t('wallet.assetDetailEventTransfer')
             : t('wallet.assetDetailEventTrade');
         const estimatedUsd = currentPrice != null && Number.isFinite(Number(row.amountInput))
@@ -395,7 +411,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
           usdLabel: estimatedUsd != null ? formatUsdAdaptive(estimatedUsd, i18n.language) : '--',
         };
       });
-  }, [currentPrice, displaySymbol, i18n.language, selectedHolding?.transferAsset.address, selectedHolding?.transferAsset.chain_id, t, transferHistory?.transfers, walletAddress]);
+  }, [currentPrice, displaySymbol, i18n.language, ownedWalletAddresses, t, transferHistory?.transfers]);
 
   function openTokenDetail(): void {
     const nextChain = normalizeText(selectedHolding?.transferAsset.chain ?? normalizedChain);

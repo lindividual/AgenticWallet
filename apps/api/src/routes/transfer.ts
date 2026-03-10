@@ -12,6 +12,13 @@ import {
   sendPreparedTransfer,
   waitForTransferReceipt,
 } from '../services/transfer';
+import {
+  fetchExternalTransferHistory,
+  mergeTransferHistory,
+  type TransferHistoryFilters,
+  type TransferHistoryRecord,
+} from '../services/transferHistory';
+import { getWallet } from '../services/wallet';
 import type { AppEnv, TransferQuoteRequest, TransferSubmitRequest, TransferStatus } from '../types';
 
 const VALID_TRANSFER_STATUS = new Set<TransferStatus>(['created', 'submitted', 'confirmed', 'failed']);
@@ -22,9 +29,41 @@ function normalizeTransferStatus(raw: string | undefined): TransferStatus | unde
   return VALID_TRANSFER_STATUS.has(value) ? value : undefined;
 }
 
-function toApiTransfer(row: AgentTransfer) {
+function normalizeHistoryLimit(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 20;
+  return Math.min(Math.max(Math.trunc(parsed), 1), 100);
+}
+
+function normalizeChainId(raw: string | undefined): number | undefined {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.trunc(parsed);
+}
+
+function normalizeTokenAddress(raw: string | undefined): string | null | undefined {
+  if (raw == null) return undefined;
+  const value = raw.trim().toLowerCase();
+  if (!value) return undefined;
+  if (value === 'native' || value === '0x0000000000000000000000000000000000000000') return null;
+  return /^0x[a-f0-9]{40}$/.test(value) ? value : undefined;
+}
+
+function normalizeTokenSymbol(raw: string | undefined): string | undefined {
+  const value = raw?.trim().toUpperCase();
+  return value || undefined;
+}
+
+function normalizeAssetType(raw: string | undefined): TransferHistoryFilters['assetType'] | undefined {
+  const value = raw?.trim().toLowerCase();
+  if (value === 'native' || value === 'erc20') return value;
+  return undefined;
+}
+
+function toApiTransfer(row: AgentTransfer): TransferHistoryRecord {
   return {
     id: row.id,
+    source: 'app',
     chainId: row.chain_id,
     fromAddress: row.from_address,
     toAddress: row.to_address,
@@ -304,17 +343,36 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/transfer/history', async (c) => {
     const userId = c.get('userId');
-    const limitRaw = Number(c.req.query('limit'));
     const status = normalizeTransferStatus(c.req.query('status'));
-    const limit = Number.isFinite(limitRaw) ? limitRaw : 20;
+    const filters: TransferHistoryFilters = {
+      limit: normalizeHistoryLimit(c.req.query('limit')),
+      status,
+      chainId: normalizeChainId(c.req.query('chainId')),
+      tokenAddress: normalizeTokenAddress(c.req.query('tokenAddress')),
+      tokenSymbol: normalizeTokenSymbol(c.req.query('tokenSymbol')),
+      assetType: normalizeAssetType(c.req.query('assetType')),
+    };
+    const localLimit = filters.chainId || filters.tokenAddress !== undefined || filters.tokenSymbol || filters.assetType
+      ? 100
+      : filters.limit;
 
-    const rows = await listUserTransfers(c.env, userId, {
-      limit,
+    const localRows = await listUserTransfers(c.env, userId, {
+      limit: localLimit,
       status,
     });
+    const wallet = await getWallet(c.env.DB, userId);
+    const externalRows = status && status !== 'confirmed'
+      ? []
+      : await fetchExternalTransferHistory(c.env, wallet, filters);
+    const rows = mergeTransferHistory(
+      localRows.map((row) => toApiTransfer(row)),
+      externalRows,
+      wallet,
+      filters,
+    );
 
     return c.json({
-      transfers: rows.map((row) => toApiTransfer(row)),
+      transfers: rows,
     });
   });
 

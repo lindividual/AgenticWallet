@@ -225,6 +225,7 @@ export type TransferQuoteResponse = {
 
 export type TransferRecord = {
   id: string;
+  source: 'app' | 'sim';
   chainId: number;
   fromAddress: string;
   toAddress: string;
@@ -654,10 +655,20 @@ export async function submitPredictionBet(request: PredictionBetRequest): Promis
 export async function getTransferHistory(params?: {
   limit?: number;
   status?: TransferRecord['status'];
+  chainId?: number;
+  tokenAddress?: string | null;
+  tokenSymbol?: string;
+  assetType?: 'native' | 'erc20';
 }): Promise<{ transfers: TransferRecord[] }> {
   const query = new URLSearchParams();
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.status) query.set('status', params.status);
+  if (params?.chainId) query.set('chainId', String(params.chainId));
+  if (params?.tokenAddress !== undefined) {
+    query.set('tokenAddress', params.tokenAddress ?? 'native');
+  }
+  if (params?.tokenSymbol) query.set('tokenSymbol', params.tokenSymbol);
+  if (params?.assetType) query.set('assetType', params.assetType);
   const suffix = query.toString();
   return getJson<{ transfers: TransferRecord[] }>(`/v1/transfer/history${suffix ? `?${suffix}` : ''}`, true);
 }
