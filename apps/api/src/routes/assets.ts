@@ -13,6 +13,7 @@ import {
 } from '../services/assetData';
 import { fetchBitgetTokenDetail, fetchBitgetTokenKline } from '../services/bitgetWallet';
 import { isKlineStale, shouldPreferFallbackCandles } from '../services/klineFreshness';
+import { fetchSolanaTokenDetails } from '../services/solana';
 import { fetchTradeMarketDetail, fetchTradeMarketKline } from '../services/tradeBrowse';
 import type { AppEnv } from '../types';
 
@@ -177,7 +178,9 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
         } else {
           const spotLookup = toSpotLookupFromInstrument(instrument);
           if (spotLookup) {
-            const detail = await fetchBitgetTokenDetail(c.env, spotLookup.chain, spotLookup.contract);
+            const detail = spotLookup.chain === 'sol'
+              ? (await fetchSolanaTokenDetails(c.env, [spotLookup.contract || 'native'])).get(spotLookup.contract || 'native') ?? null
+              : await fetchBitgetTokenDetail(c.env, spotLookup.chain, spotLookup.contract);
             providerDetail = detail ? augmentTokenDetailAliases(detail) : null;
           }
         }

@@ -8,7 +8,7 @@ type AgentEventIngestResult = {
   sequence: number;
 };
 
-type AgentJobType = 'daily_digest' | 'recommendation_refresh' | 'topic_generation';
+type AgentJobType = 'daily_digest' | 'recommendation_refresh';
 
 export type AgentRecommendation = {
   id: string;

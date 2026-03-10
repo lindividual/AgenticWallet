@@ -143,6 +143,16 @@ function toTokenDetailLike(raw: unknown): TokenDetailLike | null {
   };
 }
 
+function isUnknownLabel(value: string | null | undefined): boolean {
+  const normalized = (value ?? '').trim().toLowerCase();
+  return normalized === '' || normalized === 'unknown' || normalized === 'unknown token';
+}
+
+function hasMeaningfulTokenIdentity(detail: TokenDetailLike | null | undefined): boolean {
+  if (!detail) return false;
+  return !isUnknownLabel(detail.name) || !isUnknownLabel(detail.symbol);
+}
+
 export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
@@ -264,11 +274,13 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   );
   const currentWatchKey = toWatchlistKey(normalizedChain, normalizedContract);
   const isInWatchlist = watchlistKeySet.has(currentWatchKey);
+  const preferredProviderDetail = hasMeaningfulTokenIdentity(providerDetail) ? providerDetail : null;
+  const preferredDetail = hasMeaningfulTokenIdentity(detail) ? detail : detail ?? null;
 
   const rawPriceChangePct =
-    providerDetail?.priceChange24h
-    ?? providerDetail?.change24h
-    ?? detail?.priceChange24h
+    preferredProviderDetail?.priceChange24h
+    ?? preferredProviderDetail?.change24h
+    ?? preferredDetail?.priceChange24h
     ?? routePreview?.price_change_percentage_24h;
   const shouldUseKlineChangeFallback = !Number.isFinite(Number(rawPriceChangePct));
 
@@ -282,13 +294,13 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
   useEffect(() => {
     ingestAgentEvent('asset_viewed', {
-      asset: (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+      asset: (preferredProviderDetail?.symbol ?? preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
       itemId: activeInstrumentId ?? undefined,
       chain: normalizedChain,
       contract: normalizedContract,
       source: 'trade_detail',
     }).catch(() => undefined);
-  }, [activeInstrumentId, detail?.symbol, normalizedChain, normalizedContract, providerDetail?.symbol, routePreview?.symbol]);
+  }, [activeInstrumentId, normalizedChain, normalizedContract, preferredDetail?.symbol, preferredProviderDetail?.symbol, routePreview?.symbol]);
 
   const chartCandles = useMemo<CandlePoint[]>(
     () => normalizeCandlesForLiveline(klineData),
@@ -303,9 +315,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const latestChartValue =
     chartLine.length > 0
       ? chartLine[chartLine.length - 1].value
-      : providerDetail?.currentPriceUsd
-        ?? providerDetail?.currentPrice
-        ?? detail?.currentPriceUsd
+      : preferredProviderDetail?.currentPriceUsd
+        ?? preferredProviderDetail?.currentPrice
+        ?? preferredDetail?.currentPriceUsd
         ?? routePreview?.current_price
         ?? 0;
 
@@ -314,16 +326,20 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     () => computeAdaptiveChartWindowSeconds(chartCandles, candleWidth, 60),
     [candleWidth, chartCandles],
   );
-  const displayContract = (providerDetail?.contract ?? detail?.contract ?? normalizedContract).trim();
-  const displayChain = (providerDetail?.chain ?? detail?.chain ?? normalizedChain).trim().toUpperCase();
-  const displayName = providerDetail?.name ?? detail?.name ?? routePreview?.name ?? displayContract;
-  const displaySymbol = (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol ?? '').trim();
-  const displayImage = providerDetail?.image ?? detail?.image ?? routePreview?.image ?? null;
-  const tradeMarketChain = (providerDetail?.chain ?? detail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
-  const tradeContract = (providerDetail?.contract ?? detail?.contract ?? normalizedContract).trim();
+  const displayContract = (preferredProviderDetail?.contract ?? preferredDetail?.contract ?? normalizedContract).trim();
+  const displayChain = (preferredProviderDetail?.chain ?? preferredDetail?.chain ?? normalizedChain).trim().toUpperCase();
+  const displayName = preferredProviderDetail?.name ?? preferredDetail?.name ?? routePreview?.name ?? displayContract;
+  const displaySymbol = (preferredProviderDetail?.symbol ?? preferredDetail?.symbol ?? routePreview?.symbol ?? '').trim();
+  const displayImage = preferredProviderDetail?.image ?? preferredDetail?.image ?? routePreview?.image ?? null;
+  const tradeMarketChain = (preferredProviderDetail?.chain ?? preferredDetail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
+  const tradeContract = (preferredProviderDetail?.contract ?? preferredDetail?.contract ?? normalizedContract).trim();
   const tradeChainId = getChainIdByMarketChain(tradeMarketChain);
   const tradeTokenConfig = tradeChainId ? getTradeTokenConfig(tradeChainId) : null;
-  const canTradeToken = Boolean(tradeChainId && tradeTokenConfig && /^0x[a-fA-F0-9]{40}$/.test(tradeContract));
+  const canTradeToken = Boolean(
+    tradeChainId
+      && tradeTokenConfig
+      && (tradeMarketChain === 'sol' ? tradeContract && tradeContract !== 'native' : /^0x[a-fA-F0-9]{40}$/.test(tradeContract)),
+  );
 
   const fallbackPriceChangePct = useMemo(
     () => compute24hChangePctFromHourlyCandles(fallbackChangeKlineData),
@@ -384,7 +400,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
           change24h: priceChangePct ?? null,
         });
         ingestAgentEvent('asset_favorited', {
-          asset: (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+          asset: (preferredProviderDetail?.symbol ?? preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
           itemId: activeInstrumentId ?? undefined,
           chain: normalizedChain,
           contract: normalizedContract,
@@ -508,12 +524,14 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
                   ? Number.isFinite(Number(routePreview?.current_price))
                     ? formatUsdAdaptive(Number(routePreview?.current_price), i18n.language)
                     : t('trade.priceUnavailable')
-                  : Number.isFinite(Number(providerDetail?.currentPriceUsd))
-                    ? formatUsdAdaptive(Number(providerDetail?.currentPriceUsd), i18n.language)
-                    : Number.isFinite(Number(providerDetail?.currentPrice))
-                      ? formatUsdAdaptive(Number(providerDetail?.currentPrice), i18n.language)
-                      : detail?.currentPriceUsd != null && Number.isFinite(detail.currentPriceUsd)
-                        ? formatUsdAdaptive(detail.currentPriceUsd, i18n.language)
+                  : Number.isFinite(Number(preferredProviderDetail?.currentPriceUsd))
+                    ? formatUsdAdaptive(Number(preferredProviderDetail?.currentPriceUsd), i18n.language)
+                    : Number.isFinite(Number(preferredProviderDetail?.currentPrice))
+                      ? formatUsdAdaptive(Number(preferredProviderDetail?.currentPrice), i18n.language)
+                      : preferredDetail?.currentPriceUsd != null && Number.isFinite(preferredDetail.currentPriceUsd)
+                        ? formatUsdAdaptive(preferredDetail.currentPriceUsd, i18n.language)
+                        : Number.isFinite(Number(routePreview?.current_price))
+                          ? formatUsdAdaptive(Number(routePreview?.current_price), i18n.language)
                         : t('trade.priceUnavailable')}
               </p>
               <p className={`m-0 mt-1 flex items-center gap-1 text-base font-medium ${priceChangeTone}`}>
@@ -663,19 +681,19 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.holders')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(providerDetail?.holders ?? detail?.holders, i18n.language)}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompact(preferredProviderDetail?.holders ?? preferredDetail?.holders, i18n.language)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.liquidity')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(providerDetail?.liquidityUsd ?? detail?.liquidityUsd, i18n.language)}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompact(preferredProviderDetail?.liquidityUsd ?? preferredDetail?.liquidityUsd, i18n.language)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.top10HolderPercent')}</p>
-              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(providerDetail?.top10HolderPercent ?? detail?.top10HolderPercent)}</p>
+              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(preferredProviderDetail?.top10HolderPercent ?? preferredDetail?.top10HolderPercent)}</p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.lockLpPercent')}</p>
-              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(providerDetail?.lockLpPercent ?? detail?.lockLpPercent)}</p>
+              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(preferredProviderDetail?.lockLpPercent ?? preferredDetail?.lockLpPercent)}</p>
             </div>
           </div>
         )}

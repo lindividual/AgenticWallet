@@ -117,7 +117,8 @@ function normalizeMarketType(raw: unknown): MarketType | null {
 }
 
 function buildSpotInstrumentId(chain: string, contractKey: string): string {
-  return `ins:spot:${normalizeMarketChain(chain)}:${toContractKey(contractKey)}`;
+  const normalizedChain = normalizeMarketChain(chain);
+  return `ins:spot:${normalizedChain}:${toContractKey(contractKey, normalizedChain)}`;
 }
 
 function buildPerpInstrumentId(venue: string, symbol: string): string {
@@ -156,7 +157,7 @@ function toResolveBatchCacheKey(input: ResolveAssetInput): string {
   const chain = normalizeText(input.chain);
   if (chain) {
     const normalizedChain = normalizeMarketChain(chain);
-    const contractKey = toContractKey(input.contract ?? NATIVE_CONTRACT_KEY);
+    const contractKey = toContractKey(input.contract ?? NATIVE_CONTRACT_KEY, normalizedChain);
     const marketType = normalizeMarketType(input.marketType) ?? 'spot';
     const assetClass = normalizeAssetClass(input.assetClassHint ?? 'crypto');
     const symbol = normalizeText(input.symbol)?.toUpperCase() ?? '';
@@ -337,7 +338,7 @@ async function upsertInstrument(
       normalizeLower(input.venue),
       normalizeText(input.symbol)?.toUpperCase() ?? null,
       normalizeLower(input.chain),
-      normalizeLower(input.contractKey),
+      input.contractKey == null ? null : toContractKey(input.contractKey, input.chain),
       normalizeText(input.source) ?? 'resolver',
       normalizeText(input.sourceItemId),
       metadataJson,
@@ -387,7 +388,7 @@ async function resolveSpotIdentity(
   },
 ): Promise<ResolvedAsset> {
   const chain = normalizeMarketChain(input.chain);
-  const contractKey = toContractKey(input.contract);
+  const contractKey = toContractKey(input.contract, chain);
   const instrumentId = buildSpotInstrumentId(chain, contractKey);
 
   let preferredAssetId: string | null = null;
@@ -834,7 +835,7 @@ export function toSpotLookupFromInstrument(
   instrument: InstrumentRecord,
 ): { chain: string; contract: string } | null {
   const chain = normalizeLower(instrument.chain);
-  const contractKey = normalizeLower(instrument.contract_key);
+  const contractKey = instrument.contract_key == null ? null : toContractKey(instrument.contract_key, chain);
   if (!chain || !contractKey) return null;
   return {
     chain,

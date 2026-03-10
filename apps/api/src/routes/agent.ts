@@ -15,7 +15,7 @@ import {
   syncUserAgentPreferredLocale,
   syncUserAgentRequestLocale,
 } from '../services/agent';
-import { getLlmStatus } from '../services/llm';
+import { generateWithLlm, getLlmDebugStatus, getLlmErrorInfo, getLlmStatus } from '../services/llm';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { generateTopicSpecialBatch } from '../services/topicSpecials';
 import type { AppEnv } from '../types';
@@ -257,6 +257,78 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     return c.json(getLlmStatus(c.env));
   });
 
+  app.post('/v1/admin/llm/ping', async (c) => {
+    const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
+    if (!hasTopicSpecialAdminAccess(c)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+
+    const llm = await getLlmDebugStatus(c.env);
+    if (!llm.enabled) {
+      return c.json({ ok: false, llm, error: { message: 'llm_api_key_not_configured' } }, 503);
+    }
+
+    try {
+      const result = await generateWithLlm(c.env, {
+        messages: [
+          {
+            role: 'system',
+            content: 'Reply with exactly "ok".',
+          },
+          {
+            role: 'user',
+            content: 'ok',
+          },
+        ],
+        temperature: 0,
+        maxTokens: 8,
+        retryAttempts: 1,
+      });
+      return c.json({
+        ok: true,
+        llm,
+        result: {
+          provider: result.provider,
+          model: result.model,
+          text: result.text,
+          keyFingerprint: result.keyFingerprint ?? llm.keyFingerprint,
+          requestId: result.requestId ?? null,
+          cfRay: result.cfRay ?? null,
+          server: result.server ?? null,
+          openaiProject: result.openaiProject ?? null,
+          openaiOrganization: result.openaiOrganization ?? null,
+          rateLimitLimitRequests: result.rateLimitLimitRequests ?? null,
+          rateLimitLimitTokens: result.rateLimitLimitTokens ?? null,
+          rateLimitRemainingRequests: result.rateLimitRemainingRequests ?? null,
+          rateLimitRemainingTokens: result.rateLimitRemainingTokens ?? null,
+          rateLimitResetRequests: result.rateLimitResetRequests ?? null,
+          rateLimitResetTokens: result.rateLimitResetTokens ?? null,
+        },
+      });
+    } catch (error) {
+      const llmError = getLlmErrorInfo(error);
+      const status = llmError.status && llmError.status >= 400 && llmError.status < 600 ? llmError.status : 502;
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          llm,
+          error: {
+            ...llmError,
+            keyFingerprint: llmError.keyFingerprint ?? llm.keyFingerprint,
+          },
+        }),
+        {
+          status,
+          headers: {
+            'content-type': 'application/json',
+            'access-control-allow-origin': '*',
+          },
+        },
+      );
+    }
+  });
+
   app.post('/v1/agent/jobs/daily-digest/run', async (c) => {
     const userId = c.get('userId');
     await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
@@ -287,26 +359,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
       runAt: new Date().toISOString(),
       jobKey: `manual_recommendation_refresh:${today}`,
       payload: { trigger: 'manual' },
-    });
-    await runUserAgentJobsNow(c.env, userId);
-    return c.json(result);
-  });
-
-  app.post('/v1/agent/jobs/topic/run', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    const body = await c.req.json<{ topic?: string }>().catch(
-      () =>
-        ({
-          topic: undefined,
-        }) satisfies { topic?: string },
-    );
-    const normalizedTopic = typeof body.topic === 'string' ? body.topic.trim() : '';
-    const result = await enqueueUserAgentJob(c.env, userId, {
-      jobType: 'topic_generation',
-      runAt: new Date().toISOString(),
-      jobKey: `manual_topic_generation:${new Date().toISOString().slice(0, 16)}:${normalizedTopic || 'default'}`,
-      payload: normalizedTopic ? { topic: normalizedTopic } : { trigger: 'manual' },
     });
     await runUserAgentJobsNow(c.env, userId);
     return c.json(result);

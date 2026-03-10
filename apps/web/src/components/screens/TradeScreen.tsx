@@ -17,6 +17,7 @@ import { SettingsDropdown } from '../SettingsDropdown';
 import { TokenSearchModal } from '../TokenSearchModal';
 import { type TradeMarketDetailType } from '../../utils/tradeMarketDetail';
 import { buildChainAssetId } from '../../utils/assetIdentity';
+import { normalizeContractForChain, normalizeMarketChain } from '../../utils/chainIdentity';
 
 type TradeScreenProps = {
   onOpenToken: (token: TopMarketAsset, shelfId: string) => void;
@@ -54,11 +55,14 @@ function getLabelInitial(symbol: string, name: string): string {
 }
 
 function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; contract: string } | null {
-  const chain = item.chain?.trim().toLowerCase() ?? '';
-  const contract = item.contract?.trim().toLowerCase() ?? '';
-  if (chain) {
-    if (!contract || contract === 'native') {
+  const chain = normalizeMarketChain(item.chain);
+  const contract = normalizeContractForChain(chain, item.contract);
+  if (chain && chain !== 'unknown') {
+    if (contract === 'native') {
       return { chain, contract: '' };
+    }
+    if (chain === 'sol') {
+      return { chain, contract };
     }
     if (/^0x[a-f0-9]{40}$/.test(contract)) {
       return { chain, contract };
@@ -71,6 +75,7 @@ function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; con
   const name = item.name.trim().toLowerCase();
   if (symbol === 'ETH' || id.includes('ethereum') || name === 'ethereum') return { chain: 'eth', contract: '' };
   if (symbol === 'BNB' || id.includes('binancecoin') || name === 'bnb') return { chain: 'bnb', contract: '' };
+  if (symbol === 'SOL' || id.includes('solana') || name === 'solana') return { chain: 'sol', contract: '' };
   return null;
 }
 

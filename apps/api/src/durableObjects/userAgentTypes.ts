@@ -1,4 +1,4 @@
-export type JobType = 'daily_digest' | 'recommendation_refresh' | 'topic_generation';
+export type JobType = 'daily_digest' | 'recommendation_refresh';
 
 export type EventRow = {
   id: string;

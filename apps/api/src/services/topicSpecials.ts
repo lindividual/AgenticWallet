@@ -10,6 +10,7 @@ const TARGET_TOPIC_COUNT = 4;
 const MAX_TOPIC_COUNT = 5;
 const SOURCE_REFERENCE_LIMIT = 18;
 const SUMMARY_MAX_LENGTH = 180;
+const TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS = 5;
 
 const TOPIC_NEWS_KEYWORDS = [
   'bitcoin',
@@ -37,51 +38,20 @@ const TOPIC_TWITTER_KEYWORDS = [
   'stablecoin',
 ];
 
-type TopicBucket = {
-  title: string;
-  baseSummary: string;
-  keywords: string[];
-  relatedAssets: string[];
-};
-
-const FALLBACK_TOPIC_BUCKETS: TopicBucket[] = [
-  {
-    title: 'Fed rates, liquidity, and crypto beta',
-    baseSummary: 'Track how policy signals and liquidity changes shape crypto risk appetite.',
-    keywords: ['fed', 'fomc', 'rates', 'inflation', 'treasury', 'yield', 'dollar'],
-    relatedAssets: ['BTC', 'ETH', 'SOL'],
-  },
-  {
-    title: 'ETF and institutional flow: TradFi to crypto bridge',
-    baseSummary: 'Watch whether institutional flows and ETF narratives rotate into major tokens.',
-    keywords: ['etf', 'institutional', 'blackrock', 'flows', 'fund', 'spot'],
-    relatedAssets: ['BTC', 'ETH', 'ARB'],
-  },
-  {
-    title: 'Stablecoin liquidity and on-chain risk sentiment',
-    baseSummary: 'Use stablecoin flow and market breadth to evaluate risk-on or risk-off transitions.',
-    keywords: ['stablecoin', 'usdt', 'usdc', 'liquidity', 'depeg', 'on-chain'],
-    relatedAssets: ['USDT', 'USDC', 'ETH'],
-  },
-  {
-    title: 'Tech equities correlation with crypto momentum',
-    baseSummary: 'Assess whether Nasdaq-led risk appetite confirms or diverges from crypto momentum.',
-    keywords: ['nasdaq', 'stocks', 'equity', 'tech', 'risk-on', 'risk-off'],
-    relatedAssets: ['BTC', 'ETH', 'SOL'],
-  },
-  {
-    title: 'Defensive positioning: volatility, macro shocks, and hedges',
-    baseSummary: 'Prepare scenarios for volatility spikes when macro headlines pressure risky assets.',
-    keywords: ['volatility', 'vix', 'recession', 'tariff', 'geopolitical', 'selloff'],
-    relatedAssets: ['BTC', 'ETH', 'USDC'],
-  },
-];
-
 type TopicDraft = {
   topic: string;
   summary: string;
   relatedAssets: string[];
   sourceRefs: string[];
+};
+
+type PromptDebugStats = {
+  systemChars: number;
+  userChars: number;
+  totalChars: number;
+  systemEstimatedTokens: number;
+  userEstimatedTokens: number;
+  totalEstimatedTokens: number;
 };
 
 type TopicSpecialArticleRow = {
@@ -152,43 +122,8 @@ export async function generateTopicSpecialBatch(
 
   const sourceRefs = buildSourceReferences(newsItems, twitterItems, rssHeadlines);
   const defaultAssets = buildDefaultAssetPool(marketAssets, newsItems);
-
-  let drafts: TopicDraft[] = [];
   const llmStatus = getLlmStatus(env);
-  if (llmStatus.enabled) {
-    try {
-      const llmResult = await generateWithLlm(env, {
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'You are a market strategist writing topic plans for a fintech wallet app.',
-              'Generate 3 to 5 investable topics that connect traditional finance and crypto markets.',
-              'Topics must be grounded in provided news and Twitter signals.',
-              'Output strict JSON array only.',
-            ].join(' '),
-          },
-          {
-            role: 'user',
-            content: buildTopicDraftPrompt(sourceRefs, defaultAssets),
-          },
-        ],
-        temperature: 0.35,
-        maxTokens: 1600,
-      });
-      drafts = parseTopicDrafts(llmResult.text, defaultAssets, sourceRefs);
-    } catch (error) {
-      const llmError = getLlmErrorInfo(error);
-      console.error('topic_special_draft_llm_failed', {
-        ...llmError,
-        llm: llmStatus,
-      });
-    }
-  }
-
-  if (drafts.length < MIN_TOPIC_COUNT) {
-    drafts = buildFallbackTopicDrafts(sourceRefs, marketAssets, defaultAssets);
-  }
+  const drafts = await buildTopicDrafts(env, llmStatus, sourceRefs, defaultAssets);
 
   const existingSlugs = new Set(existingRows.map((row) => row.topic_slug));
   const candidateDrafts = drafts
@@ -227,24 +162,37 @@ export async function generateTopicSpecialBatch(
     const r2Key = buildTopicR2Key(slotKey, topicSlug, articleId);
     const normalizedAssets = normalizeAssetSymbols(draft.relatedAssets, defaultAssets);
     const normalizedRefs = normalizeSourceRefs(draft.sourceRefs.length > 0 ? draft.sourceRefs : sourceRefs);
-    const markdown = await buildTopicArticleMarkdown(env, {
-      slotKey,
-      topic: draft.topic,
-      summary: draft.summary,
-      relatedAssets: normalizedAssets,
-      sourceRefs: normalizedRefs,
-    });
-
-    await env.AGENT_ARTICLES.put(r2Key, markdown, {
-      httpMetadata: {
-        contentType: 'text/markdown; charset=utf-8',
-      },
-      customMetadata: {
-        articleId,
+    const markdown = await buildTopicArticleMarkdown(
+      env,
+      llmStatus,
+      {
         slotKey,
-        topic: draft.topic.slice(0, 120),
+        topic: draft.topic,
+        summary: draft.summary,
+        relatedAssets: normalizedAssets,
+        sourceRefs: normalizedRefs,
       },
-    });
+    );
+    try {
+      await env.AGENT_ARTICLES.put(r2Key, markdown, {
+        httpMetadata: {
+          contentType: 'text/markdown; charset=utf-8',
+        },
+        customMetadata: {
+          articleId,
+          slotKey,
+          topic: draft.topic.slice(0, 120),
+        },
+      });
+    } catch (error) {
+      console.error('topic_special_r2_put_failed', {
+        slotKey,
+        topicSlug,
+        r2Key,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error(`topic_special_r2_put_failed:${topicSlug}`);
+    }
 
     try {
       await env.DB.prepare(
@@ -277,10 +225,11 @@ export async function generateTopicSpecialBatch(
       generated += 1;
       existingSlugs.add(topicSlug);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('topic_special_insert_failed', {
         slotKey,
         topicSlug,
-        message: error instanceof Error ? error.message : String(error),
+        message,
       });
       try {
         await env.AGENT_ARTICLES.delete(r2Key);
@@ -291,6 +240,7 @@ export async function generateTopicSpecialBatch(
           message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
         });
       }
+      throw new Error(`topic_special_index_failed:${topicSlug}:${message}`);
     }
   }
 
@@ -374,6 +324,74 @@ function buildTopicDraftPrompt(sourceRefs: string[], defaultAssets: string[]): s
   ].join('\n');
 }
 
+async function buildTopicDrafts(
+  env: Bindings,
+  llmStatus: ReturnType<typeof getLlmStatus>,
+  sourceRefs: string[],
+  defaultAssets: string[],
+): Promise<TopicDraft[]> {
+  if (!llmStatus.enabled) {
+    throw new Error('topic_special_llm_not_configured');
+  }
+
+  try {
+    const systemPrompt = [
+      'You are a market strategist writing topic plans for a fintech wallet app.',
+      'Generate 3 to 5 investable topics that connect traditional finance and crypto markets.',
+      'Topics must be grounded in provided news and Twitter signals.',
+      'Output strict JSON array only.',
+    ].join(' ');
+    const userPrompt = buildTopicDraftPrompt(sourceRefs, defaultAssets);
+    const promptStats = buildPromptDebugStats(systemPrompt, userPrompt);
+    console.log('topic_special_draft_llm_request', {
+      ...promptStats,
+      sourceRefCount: sourceRefs.length,
+      defaultAssetCount: defaultAssets.length,
+      model: llmStatus.model,
+      baseUrl: llmStatus.baseUrl,
+      retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
+    });
+    const llmResult = await generateWithLlm(env, {
+      messages: [
+        {
+          role: 'system',
+          content: systemPrompt,
+        },
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+      ],
+      temperature: 0.35,
+      maxTokens: 1600,
+      retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
+    });
+    console.log('topic_special_draft_llm_succeeded', {
+      requestId: llmResult.requestId ?? null,
+      cfRay: llmResult.cfRay ?? null,
+      openaiProject: llmResult.openaiProject ?? null,
+      openaiOrganization: llmResult.openaiOrganization ?? null,
+      keyFingerprint: llmResult.keyFingerprint ?? null,
+      responseChars: llmResult.text.length,
+      responseEstimatedTokens: estimateTokenCount(llmResult.text),
+    });
+    const drafts = parseTopicDrafts(llmResult.text, defaultAssets, sourceRefs);
+    if (drafts.length < MIN_TOPIC_COUNT) {
+      throw new Error(`topic_special_draft_insufficient_results:${drafts.length}`);
+    }
+    return drafts;
+  } catch (error) {
+    const llmError = getLlmErrorInfo(error);
+    console.error('topic_special_draft_llm_failed', {
+      ...llmError,
+      llm: llmStatus,
+    });
+    throw error instanceof Error
+      ? error
+      : new Error(`topic_special_draft_generation_failed:${String(error)}`);
+  }
+}
+
 function parseTopicDrafts(text: string, defaultAssets: string[], fallbackRefs: string[]): TopicDraft[] {
   const jsonArray = extractJsonArray(text);
   if (!jsonArray) return [];
@@ -420,64 +438,6 @@ function parseTopicDrafts(text: string, defaultAssets: string[], fallbackRefs: s
 
   return drafts;
 }
-
-function buildFallbackTopicDrafts(
-  sourceRefs: string[],
-  marketAssets: MarketTopAsset[],
-  defaultAssets: string[],
-): TopicDraft[] {
-  const sourceCorpus = sourceRefs.join('\n').toLowerCase();
-  const marketSymbols = marketAssets
-    .map((asset) => normalizeAssetSymbol(asset.symbol))
-    .filter((value): value is string => Boolean(value));
-
-  const ranked = FALLBACK_TOPIC_BUCKETS
-    .map((bucket, index) => {
-      const score = bucket.keywords.reduce((acc, keyword) => {
-        return sourceCorpus.includes(keyword.toLowerCase()) ? acc + 1 : acc;
-      }, 0);
-      return { bucket, score, index };
-    })
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return a.index - b.index;
-    });
-
-  const output: TopicDraft[] = [];
-  for (const item of ranked.slice(0, MAX_TOPIC_COUNT)) {
-    const keywordSources = sourceRefs
-      .filter((line) => item.bucket.keywords.some((keyword) => line.toLowerCase().includes(keyword.toLowerCase())))
-      .slice(0, 3);
-    const refs = normalizeSourceRefs(keywordSources.length > 0 ? keywordSources : sourceRefs);
-    const relatedAssets = normalizeAssetSymbols(
-      [...item.bucket.relatedAssets, ...marketSymbols.slice(0, 3)],
-      defaultAssets,
-    );
-    const anchor = refs[0] ?? 'recent macro and crypto updates';
-    output.push({
-      topic: item.bucket.title,
-      summary: truncateSummary(`${item.bucket.baseSummary} Trigger: ${anchor}`),
-      relatedAssets,
-      sourceRefs: refs,
-    });
-  }
-
-  if (output.length < MIN_TOPIC_COUNT) {
-    const emergency = defaultAssets.length > 0 ? defaultAssets : ['BTC', 'ETH', 'USDC'];
-    while (output.length < MIN_TOPIC_COUNT) {
-      const suffix = output.length + 1;
-      output.push({
-        topic: `Macro and crypto watchlist ${suffix}`,
-        summary: truncateSummary('Monitor cross-market liquidity, risk appetite, and sector rotation signals.'),
-        relatedAssets: emergency.slice(0, 3),
-        sourceRefs: normalizeSourceRefs(sourceRefs),
-      });
-    }
-  }
-
-  return output.slice(0, MAX_TOPIC_COUNT);
-}
-
 type TopicArticleInput = {
   slotKey: string;
   topic: string;
@@ -486,35 +446,64 @@ type TopicArticleInput = {
   sourceRefs: string[];
 };
 
-async function buildTopicArticleMarkdown(env: Bindings, input: TopicArticleInput): Promise<string> {
-  const fallback = buildFallbackTopicArticleMarkdown(input);
-  const llmStatus = getLlmStatus(env);
+async function buildTopicArticleMarkdown(
+  env: Bindings,
+  llmStatus: ReturnType<typeof getLlmStatus>,
+  input: TopicArticleInput,
+): Promise<string> {
   if (!llmStatus.enabled) {
-    return fallback;
+    throw new Error('topic_special_llm_not_configured');
   }
 
   try {
+    const systemPrompt = [
+      'You are a cross-market analyst writing actionable topic briefs for wallet users.',
+      'Every article must connect traditional finance and crypto market transmission.',
+      'Output markdown only.',
+      'Include a final "## Related Assets" section with bullet symbols.',
+    ].join(' ');
+    const userPrompt = buildTopicArticlePrompt(input);
+    const promptStats = buildPromptDebugStats(systemPrompt, userPrompt);
+    console.log('topic_special_article_llm_request', {
+      ...promptStats,
+      slotKey: input.slotKey,
+      topic: input.topic,
+      sourceRefCount: input.sourceRefs.length,
+      relatedAssetCount: input.relatedAssets.length,
+      model: llmStatus.model,
+      baseUrl: llmStatus.baseUrl,
+      retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
+    });
     const llmResult = await generateWithLlm(env, {
       messages: [
         {
           role: 'system',
-          content: [
-            'You are a cross-market analyst writing actionable topic briefs for wallet users.',
-            'Every article must connect traditional finance and crypto market transmission.',
-            'Output markdown only.',
-            'Include a final "## Related Assets" section with bullet symbols.',
-          ].join(' '),
+          content: systemPrompt,
         },
         {
           role: 'user',
-          content: buildTopicArticlePrompt(input),
+          content: userPrompt,
         },
       ],
       temperature: 0.45,
       maxTokens: 2000,
+      retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
+    });
+    console.log('topic_special_article_llm_succeeded', {
+      slotKey: input.slotKey,
+      topic: input.topic,
+      requestId: llmResult.requestId ?? null,
+      cfRay: llmResult.cfRay ?? null,
+      openaiProject: llmResult.openaiProject ?? null,
+      openaiOrganization: llmResult.openaiOrganization ?? null,
+      keyFingerprint: llmResult.keyFingerprint ?? null,
+      responseChars: llmResult.text.length,
+      responseEstimatedTokens: estimateTokenCount(llmResult.text),
     });
     const text = llmResult.text.trim();
-    if (!text) return fallback;
+    if (!text) {
+      throw new Error('topic_special_article_empty_response');
+    }
     return ensureRelatedAssetsSection(text, input.relatedAssets);
   } catch (error) {
     const llmError = getLlmErrorInfo(error);
@@ -524,7 +513,9 @@ async function buildTopicArticleMarkdown(env: Bindings, input: TopicArticleInput
       slotKey: input.slotKey,
       topic: input.topic,
     });
-    return fallback;
+    throw error instanceof Error
+      ? error
+      : new Error(`topic_special_article_generation_failed:${String(error)}`);
   }
 }
 
@@ -558,39 +549,23 @@ function buildTopicArticlePrompt(input: TopicArticleInput): string {
   ].join('\n');
 }
 
-function buildFallbackTopicArticleMarkdown(input: TopicArticleInput): string {
-  const sourceBlock = input.sourceRefs.length > 0
-    ? input.sourceRefs.slice(0, 6).map((line) => `- ${line}`).join('\n')
-    : '- External source density is low. Keep focus on macro and liquidity updates.';
-  const assetBlock = input.relatedAssets.length > 0
-    ? input.relatedAssets.map((asset) => `- ${asset}`).join('\n')
-    : '- BTC\n- ETH\n- USDC';
+function buildPromptDebugStats(systemPrompt: string, userPrompt: string): PromptDebugStats {
+  const systemChars = systemPrompt.length;
+  const userChars = userPrompt.length;
+  return {
+    systemChars,
+    userChars,
+    totalChars: systemChars + userChars,
+    systemEstimatedTokens: estimateTokenCount(systemPrompt),
+    userEstimatedTokens: estimateTokenCount(userPrompt),
+    totalEstimatedTokens: estimateTokenCount(`${systemPrompt}\n${userPrompt}`),
+  };
+}
 
-  return [
-    `# ${input.topic}`,
-    '',
-    `> ${input.summary}`,
-    '',
-    '## Why this matters now',
-    sourceBlock,
-    '',
-    '## TradFi x Crypto transmission',
-    '- Follow policy-rate expectations, treasury yields, and equity risk sentiment as upstream signals.',
-    '- Validate whether crypto breadth and stablecoin liquidity confirm the same risk direction.',
-    '',
-    '## Scenario watch',
-    '- Bull case: easing macro pressure plus improving market breadth.',
-    '- Base case: mixed macro data and selective sector rotation.',
-    '- Bear case: tighter liquidity and synchronized risk-off repricing.',
-    '',
-    '## Action checklist',
-    '- Define position size and invalidation conditions before adding exposure.',
-    '- Review liquidity, slippage, and chain-specific execution risk.',
-    '- Re-check thesis when macro signals diverge from crypto internals.',
-    '',
-    '## Related Assets',
-    assetBlock,
-  ].join('\n');
+function estimateTokenCount(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) return 0;
+  return Math.ceil(normalized.length / 4);
 }
 
 function ensureRelatedAssetsSection(markdown: string, relatedAssets: string[]): string {

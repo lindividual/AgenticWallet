@@ -112,7 +112,7 @@
 
 ### 2.8 调度与任务模型
 1. 每 DO 仅一个 alarm，采用 `jobs` 最小堆/最早时间队列模式。
-2. 定时任务类型：`daily_digest`, `topic_generation`, `recommendation_refresh`, `cleanup`。
+2. 定时任务类型：`daily_digest`, `recommendation_refresh`, `cleanup`。
 3. 失败重试：指数退避，超过阈值写 dead-letter 标记。
 
 ### 2.9 一致性与可靠性

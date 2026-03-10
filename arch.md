@@ -54,7 +54,7 @@ flowchart TB
 
 ### 3.3 UserAgentDO（每用户独立）
 - 用户私有状态：事件、会话、推荐、文章索引、任务队列。
-- 任务执行器：`daily_digest / recommendation_refresh / topic_generation / cleanup`。
+- 任务执行器：`daily_digest / recommendation_refresh / cleanup`。
 - 幂等控制：事件 `dedupe_key`、任务 `job_key` 去重。
 - 读取体验：`getTodayDaily` 触发“缺失即补跑”。
 
@@ -160,4 +160,3 @@ flowchart TB
 2. v1.1：引入共享 `news_index/token_catalog` + Cron 预处理。
 3. v1.2：加入实时通道（WS/SSE）与对话上下文策略。
 4. v1.3：完善密钥轮换、风控规则、灰度与 AB 能力。
-

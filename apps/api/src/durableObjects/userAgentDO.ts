@@ -3,7 +3,6 @@ import type { AgentEventRecord } from '../agent/events';
 import {
   buildMissingArticleMarkdownFallback,
   generateDailyDigestContent,
-  generateTopicArticleContent,
   getArticleMarkdownContent,
   refreshRecommendationsContent,
 } from './userAgentContentService';
@@ -1539,9 +1538,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
       case 'recommendation_refresh':
         await this.refreshRecommendations(payload);
         return;
-      case 'topic_generation':
-        await this.generateTopicArticle(payload);
-        return;
       default:
         throw new Error(`unsupported_job_type_${jobType}`);
     }
@@ -1560,17 +1556,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
   private async refreshRecommendations(_payload: Record<string, unknown>): Promise<void> {
     await refreshRecommendationsContent(_payload, {
-      env: this.env,
-      sql: this.ctx.storage.sql,
-      getOwnerUserId: () => this.getOwnerUserId(),
-      getPreferredLocale: () => this.getEffectiveLocale(),
-      getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
-      getWatchlistAssets: (limit = 20) => this.getWatchlistAssets(limit),
-    });
-  }
-
-  private async generateTopicArticle(payload: Record<string, unknown>): Promise<void> {
-    await generateTopicArticleContent(payload, {
       env: this.env,
       sql: this.ctx.storage.sql,
       getOwnerUserId: () => this.getOwnerUserId(),

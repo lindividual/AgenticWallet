@@ -990,12 +990,10 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     if (!chain) {
       return c.json({ error: 'invalid_chain' }, 400);
     }
-    if (chain === 'sol') {
-      return c.json({ candles: [] });
-    }
 
     try {
       const resolveBinanceFallbackCandles = async (): Promise<null | Awaited<ReturnType<typeof fetchBinanceSpotKlines>>> => {
+        if (chain === 'sol') return null;
         let symbol: string | null = null;
         try {
           const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
