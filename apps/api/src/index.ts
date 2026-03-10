@@ -29,7 +29,14 @@ export default {
   async scheduled(event: ScheduledEvent, env: AppEnv['Bindings'], _ctx: ExecutionContext): Promise<void> {
     const cron = event.cron ?? '';
     if (matchesCron(cron, '5 */12 * * *')) {
-      await generateTopicSpecialBatch(env);
+      try {
+        await generateTopicSpecialBatch(env);
+      } catch (error) {
+        console.error('topic_special_scheduled_failed', {
+          cron,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
   },

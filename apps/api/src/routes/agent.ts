@@ -376,17 +376,37 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
           force: undefined,
         }) satisfies { force?: boolean },
     );
-    const result = await generateTopicSpecialBatch(c.env, {
-      force: body.force === true,
-    });
-    return c.json({
-      ok: true,
-      jobId: `topic_special:${result.slotKey}`,
-      deduped: result.skipped,
-      slotKey: result.slotKey,
-      generated: result.generated,
-      totalInSlot: result.totalInSlot,
-    });
+    try {
+      const result = await generateTopicSpecialBatch(c.env, {
+        force: body.force === true,
+      });
+      return c.json({
+        ok: true,
+        jobId: `topic_special:${result.slotKey}`,
+        deduped: result.skipped,
+        slotKey: result.slotKey,
+        generated: result.generated,
+        totalInSlot: result.totalInSlot,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const details = getLlmErrorInfo(error);
+      console.error('topic_special_admin_run_failed', {
+        userId,
+        force: body.force === true,
+        message,
+        details,
+      });
+      return c.json(
+        {
+          ok: false,
+          error: 'topic_special_run_failed',
+          message,
+          details,
+        },
+        502,
+      );
+    }
   });
 
 }

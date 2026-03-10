@@ -747,7 +747,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
             <div className="absolute right-0 top-full z-30 mt-2 w-48 rounded-2xl border border-base-300 bg-base-100 p-2 shadow-lg">
               <button
                 type="button"
-                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-base-content hover:bg-base-200/70"
+                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-base-content hover:bg-base-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 onClick={openSecuritySection}
               >
                 <span>{t('wallet.assetDetailMenuSecurity')}</span>
@@ -755,18 +755,18 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
               {detailContract ? (
                 <button
                   type="button"
-                  className="flex w-full flex-col items-start rounded-xl px-3 py-2 text-left hover:bg-base-200/70"
+                  className="flex w-full flex-col items-start rounded-xl px-3 py-2 text-left hover:bg-base-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   onClick={() => {
                     void copyContractAddress();
                   }}
                 >
                   <span className="text-sm text-base-content">{t('wallet.assetDetailMenuContract')}</span>
-                  <span className="mt-1 text-xs text-base-content/60">{truncateMiddle(detailContract, 8, 6)}</span>
+                  <span className="mt-1 text-sm text-base-content/60">{truncateMiddle(detailContract, 8, 6)}</span>
                 </button>
               ) : null}
               <button
                 type="button"
-                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-error hover:bg-error/10"
+                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-error hover:bg-error/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/30"
                 onClick={handleDeleteToken}
               >
                 <span>{t('wallet.assetDetailMenuDelete')}</span>
@@ -777,8 +777,8 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
       </header>
 
       <section className="flex flex-col gap-2">
-        <p className="m-0 text-5xl font-bold leading-none tracking-tight">{amountText}</p>
-        <p className="m-0 text-[1.75rem] leading-tight text-base-content/60">
+        <p className="m-0 text-4xl font-bold leading-none tracking-tight">{amountText}</p>
+        <p className="m-0 text-2xl leading-tight text-base-content/60">
           {selectedHolding ? formatUsdAdaptive(valueUsd, i18n.language) : '--'}
         </p>
         <p className={`m-0 flex items-center gap-1 text-base font-medium ${priceChangeClassName}`}>
@@ -883,7 +883,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
           <div className="mt-3 grid grid-cols-2 gap-2">
             {securityMetrics.map((metric) => (
               <div key={metric.label} className="rounded-lg bg-base-100/60 px-3 py-2">
-                <p className="m-0 text-xs text-base-content/50">{metric.label}</p>
+                <p className="m-0 text-sm text-base-content/50">{metric.label}</p>
                 <p className={`m-0 mt-1 text-sm font-semibold ${metric.valueClassName ?? 'text-base-content'}`}>
                   {metric.value}
                 </p>
@@ -900,7 +900,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
 
       <button
         type="button"
-        className="fixed bottom-0 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 border-t border-base-300 bg-base-100 px-5 py-3 text-left"
+        className="fixed bottom-0 left-1/2 z-30 w-full max-w-105 -translate-x-1/2 border-t border-base-300 bg-base-100 px-5 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         onClick={openTokenDetail}
       >
         <div className="flex items-center justify-between gap-4">
