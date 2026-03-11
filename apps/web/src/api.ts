@@ -573,9 +573,23 @@ export type AgentArticle = {
   status: string;
 };
 
+export type AgentArticleRelatedAsset = {
+  symbol: string;
+  market_type: 'spot' | 'perp' | 'prediction' | null;
+  market_item_id: string | null;
+  asset_id: string | null;
+  instrument_id: string | null;
+  chain: string | null;
+  contract: string | null;
+  name: string;
+  image: string | null;
+  price_change_percentage_24h: number | null;
+};
+
 export type AgentArticleDetailResponse = {
   article: AgentArticle;
   markdown: string;
+  relatedAssets: AgentArticleRelatedAsset[];
 };
 
 export type AgentTodayDailyResponse = {
@@ -942,14 +956,21 @@ export async function removeMarketWatchlistAsset(input: {
 
 export type MarketSearchResult = {
   id: string;
+  marketType: 'spot' | 'stock' | 'perp' | 'prediction';
   symbol: string;
   name: string;
   image: string | null;
   currentPrice: number | null;
   change24h: number | null;
   volume24h: number | null;
+  probability: number | null;
   source: string;
   externalUrl: string | null;
+  itemId: string | null;
+  chain: string | null;
+  contract: string | null;
+  asset_id?: string;
+  instrument_id?: string;
 };
 
 export async function searchMarketTokens(q: string, limit = 20): Promise<MarketSearchResult[]> {

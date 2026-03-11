@@ -1,4 +1,5 @@
 import type { AgentEventRecord } from '../agent/events';
+import type { ArticleRelatedAssetRef } from './articleRelatedAssets';
 import type { Bindings } from '../types';
 
 type AgentEventIngestResult = {
@@ -48,6 +49,7 @@ type AgentArticlesResponse = {
 type AgentArticleDetailResponse = {
   article: AgentArticle;
   markdown: string;
+  relatedAssets: ArticleRelatedAssetRef[];
 };
 
 type AgentTodayDailyResponse = {

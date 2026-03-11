@@ -38,6 +38,7 @@ import type {
   WatchlistAssetRow,
 } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
+import type { ArticleRelatedAssetRef } from '../services/articleRelatedAssets';
 import { ensureTopicSpecialSchema } from '../services/topicSpecials';
 
 const OWNER_KEY = 'owner_user_id';
@@ -133,7 +134,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   async getArticleDetailRpc(
     userId: string,
     articleId: string,
-  ): Promise<{ article: ArticleRow; markdown: string } | null> {
+  ): Promise<{ article: ArticleRow; markdown: string; relatedAssets: ArticleRelatedAssetRef[] } | null> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
     await this.ensureTodayDailyReady();
@@ -1180,19 +1181,50 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return null;
   }
 
-  private parseRelatedAssets(raw: string): string[] {
+  private parseRelatedAssetRefs(raw: string): ArticleRelatedAssetRef[] {
     const parsed = safeJsonParse<unknown[]>(raw) ?? [];
     if (!Array.isArray(parsed)) return [];
-    const deduped: string[] = [];
+    const refs: ArticleRelatedAssetRef[] = [];
     const seen = new Set<string>();
     for (const item of parsed) {
-      const symbol = this.normalizeAssetSymbol(item);
-      if (!symbol || seen.has(symbol)) continue;
-      seen.add(symbol);
-      deduped.push(symbol);
-      if (deduped.length >= 8) break;
+      const ref = this.normalizeRelatedAssetRef(item);
+      if (!ref || seen.has(ref.symbol)) continue;
+      seen.add(ref.symbol);
+      refs.push(ref);
+      if (refs.length >= 8) break;
     }
-    return deduped;
+    return refs;
+  }
+
+  private parseRelatedAssets(raw: string): string[] {
+    return this.parseRelatedAssetRefs(raw).map((item) => item.symbol);
+  }
+
+  private normalizeRelatedAssetRef(input: unknown): ArticleRelatedAssetRef | null {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const row = input as Record<string, unknown>;
+    const symbol = this.normalizeAssetSymbol(row.symbol);
+    if (!symbol) return null;
+    const chain = typeof row.chain === 'string' ? row.chain.trim().toLowerCase() || null : null;
+    const contract = typeof row.contract === 'string'
+      ? (chain === 'sol' ? row.contract.trim() : row.contract.trim().toLowerCase()) || null
+      : null;
+    const priceChange = Number(row.price_change_percentage_24h);
+    return {
+      symbol,
+      market_type:
+        row.market_type === 'spot' || row.market_type === 'perp' || row.market_type === 'prediction'
+          ? row.market_type
+          : null,
+      market_item_id: typeof row.market_item_id === 'string' ? row.market_item_id.trim() || null : null,
+      asset_id: typeof row.asset_id === 'string' ? row.asset_id.trim() || null : null,
+      instrument_id: typeof row.instrument_id === 'string' ? row.instrument_id.trim() || null : null,
+      chain,
+      contract,
+      name: typeof row.name === 'string' ? row.name.trim() || null : null,
+      image: typeof row.image === 'string' ? row.image.trim() || null : null,
+      price_change_percentage_24h: Number.isFinite(priceChange) ? priceChange : null,
+    };
   }
 
   private toTopicArticleRow(row: TopicSpecialArticleIndexRow, relatedAssets: string[]): ArticleRow {
@@ -1209,7 +1241,11 @@ export class UserAgentDO extends DurableObject<Bindings> {
     };
   }
 
-  private async getArticleDetail(articleId: string): Promise<{ article: ArticleRow; markdown: string } | null> {
+  private async getArticleDetail(articleId: string): Promise<{
+    article: ArticleRow;
+    markdown: string;
+    relatedAssets: ArticleRelatedAssetRef[];
+  } | null> {
     const article = this.ctx.storage.sql
       .exec(
         `SELECT
@@ -1238,6 +1274,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
             return {
               article: regenerated.article,
               markdown: regeneratedMarkdown,
+              relatedAssets: [],
             };
           }
           return {
@@ -1248,6 +1285,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
               articleType: regenerated.article.article_type,
               createdAt: regenerated.article.created_at,
             }),
+            relatedAssets: [],
           };
         }
       }
@@ -1259,6 +1297,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
           articleType: article.article_type,
           createdAt: article.created_at,
         }),
+        relatedAssets: [],
       };
     }
 
@@ -1290,8 +1329,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
     }
     if (!topicRow) return null;
 
-    const relatedAssets = this.parseRelatedAssets(topicRow.related_assets_json);
-    const topicArticle = this.toTopicArticleRow(topicRow, relatedAssets);
+    const relatedAssetRefs = this.parseRelatedAssetRefs(topicRow.related_assets_json);
+    const topicArticle = this.toTopicArticleRow(topicRow, relatedAssetRefs.map((item) => item.symbol));
     const object = await this.env.AGENT_ARTICLES.get(topicRow.r2_key);
     const markdown = object ? await object.text() : '';
     return {
@@ -1302,6 +1341,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
         articleType: topicArticle.article_type,
         createdAt: topicArticle.created_at,
       }),
+      relatedAssets: relatedAssetRefs,
     };
   }
 
@@ -1691,6 +1731,15 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .map((a) => a.symbol)
       .filter(Boolean)
       .join(', ');
+    const tokenContextLines = page === 'token'
+      ? [
+          pageContext.tokenName ? `Token name: ${pageContext.tokenName}.` : '',
+          pageContext.contract ? `Token contract: ${pageContext.contract}.` : '',
+          pageContext.currentPriceUsd ? `Current price: $${pageContext.currentPriceUsd}.` : '',
+          pageContext.priceChange24h ? `24h price change: ${pageContext.priceChange24h}%.` : '',
+          pageContext.inWatchlist === 'true' ? 'The token is already in the user watchlist.' : '',
+        ].filter(Boolean)
+      : [];
 
     const locale = this.getEffectiveLocale();
     const langHint = locale?.startsWith('zh')
@@ -1702,12 +1751,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return [
       'You are a helpful AI assistant for umi wallet, a crypto wallet and trading app.',
       `The user is currently on ${pageDesc}.`,
+      ...tokenContextLines,
       watchlistSummary ? `Their watchlist includes: ${watchlistSummary}.` : '',
       eventSummary ? `Recent activity: ${eventSummary}.` : '',
       'Guidelines:',
       '- Be concise and direct (2-3 sentences max per response).',
       '- Offer actionable suggestions related to the current page.',
       '- If asked about specific assets, provide general guidance (not financial advice).',
+      '- If the user gives a short affirmative reply after you offered help on the token page, treat it as a request to analyze the current token immediately.',
       `- ${langHint}`,
     ]
       .filter(Boolean)

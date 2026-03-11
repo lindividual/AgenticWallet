@@ -53,6 +53,7 @@ export type BinanceStockItem = {
   marketCap: number | null;
   highPrice24h: number | null;
   lowPrice24h: number | null;
+  stockState: boolean;
 };
 
 export type BinanceKlineCandle = {
@@ -131,6 +132,7 @@ function mapAlphaTokenToStockItem(token: BinanceAlphaToken): BinanceStockItem {
     marketCap: toFiniteNumber(token.marketCap),
     highPrice24h: toFiniteNumber(token.priceHigh24h),
     lowPrice24h: toFiniteNumber(token.priceLow24h),
+    stockState: token.stockState === true,
   };
 }
 
@@ -319,12 +321,13 @@ export async function searchBinanceSpotTokens(
     .filter((t) => {
       const sym = t.symbol.toLowerCase();
       const name = t.name.toLowerCase();
-      return sym.includes(normalizedQuery) || name.includes(normalizedQuery);
+      const ticker = t.rwaInfo?.metaInfo?.ticker?.toLowerCase() ?? '';
+      return sym.includes(normalizedQuery) || name.includes(normalizedQuery) || ticker.includes(normalizedQuery);
     })
     .sort((a, b) => (toFiniteNumber(b.volume24h) ?? 0) - (toFiniteNumber(a.volume24h) ?? 0))
     .slice(0, limit)
     .map((t) => {
       const item = mapAlphaTokenToStockItem(t);
-      return { ...item, id: `binance-alpha:${t.alphaId}` };
+      return t.stockState ? item : { ...item, id: `binance-alpha:${t.alphaId}` };
     });
 }

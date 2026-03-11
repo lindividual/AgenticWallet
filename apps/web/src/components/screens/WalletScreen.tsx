@@ -810,11 +810,11 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
         )}
       </section>
 
-      <section className="grid grid-cols-3 gap-3 mt-6">
+      <section className="mt-6 grid grid-cols-3 gap-3">
         <button
           ref={topUpButtonRef}
           type="button"
-          className="btn btn-outline text-base font-semibold"
+          className="btn btn-outline h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
           onClick={openTopUpModal}
         >
           {t('wallet.topUp')}
@@ -822,14 +822,14 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
         <button
           ref={transferButtonRef}
           type="button"
-          className="btn btn-outline text-base font-semibold"
+          className="btn btn-outline h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
           onClick={openTransferModal}
         >
           {t('wallet.transfer')}
         </button>
         <button
           type="button"
-          className="btn btn-primary text-base font-semibold"
+          className="btn btn-primary h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
           onClick={() => openTradeModal('buy')}
         >
           {t('wallet.trade')}

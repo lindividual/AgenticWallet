@@ -160,6 +160,20 @@ export function App() {
     setIsMarketExiting(false);
   }, [routeMarket?.itemId, routeMarket?.marketType]);
 
+  const pathname = location.pathname;
+  const activeTab: AppTab = pathname.startsWith('/trade') ? 'trade' : pathname.startsWith('/wallet') ? 'wallet' : 'home';
+  const agentPageContext: PageContext = activeArticleId
+    ? { page: 'article', articleId: activeArticleId }
+    : isTokenRoute && activeTokenRoute
+      ? { page: 'token', tokenChain: activeTokenRoute.chain, tokenContract: activeTokenRoute.contract }
+      : isMarketRoute && activeMarketRoute
+        ? { page: 'market', marketType: activeMarketRoute.marketType, marketItemId: activeMarketRoute.itemId }
+        : isWalletAssetRoute
+          ? { page: 'wallet' }
+          : { page: activeTab };
+  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
+  const intervention = useAgentIntervention(agentPageContext, i18n.resolvedLanguage ?? i18n.language ?? null);
+
   if (!auth) {
     return (
       <AuthScreen
@@ -173,8 +187,6 @@ export function App() {
   }
 
   const authenticatedState = auth;
-  const pathname = location.pathname;
-  const activeTab: AppTab = pathname.startsWith('/trade') ? 'trade' : pathname.startsWith('/wallet') ? 'wallet' : 'home';
 
   function handleOpenArticle(articleId: string) {
     if (isArticleRoute && routeArticleId === articleId) return;
@@ -349,18 +361,6 @@ export function App() {
     return <WalletScreen auth={authenticatedState} onLogout={handleLogout} onOpenAssetDetail={handleOpenWalletAsset} />;
   }
 
-  const agentPageContext: PageContext = activeArticleId
-    ? { page: 'article', articleId: activeArticleId }
-    : isTokenRoute && activeTokenRoute
-      ? { page: 'token', tokenChain: activeTokenRoute.chain, tokenContract: activeTokenRoute.contract }
-      : isMarketRoute && activeMarketRoute
-        ? { page: 'market', marketType: activeMarketRoute.marketType, marketItemId: activeMarketRoute.itemId }
-        : isWalletAssetRoute
-          ? { page: 'wallet' }
-        : { page: activeTab };
-  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
-  const intervention = useAgentIntervention(agentPageContext, i18n.resolvedLanguage ?? i18n.language ?? null);
-
   function handleAgentOpen() {
     intervention.handleEntryOpen();
     setAgentOpenRequestKey((value) => value + 1);
@@ -374,7 +374,12 @@ export function App() {
       >
         {activeArticleId ? (
           <div className={isArticleExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
-            <ArticleReaderScreen articleId={activeArticleId} onBack={handleCloseArticle} onOpenToken={handleOpenTokenByRoute} />
+            <ArticleReaderScreen
+              articleId={activeArticleId}
+              onBack={handleCloseArticle}
+              onOpenToken={handleOpenTokenByRoute}
+              onOpenMarketDetail={handleOpenMarketDetail}
+            />
           </div>
         ) : isTokenRoute && activeTokenRoute ? (
           <div className={isTokenExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>

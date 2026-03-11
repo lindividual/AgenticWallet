@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
+import { AgentationDevtools } from './components/AgentationDevtools';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { router } from './router';
@@ -15,7 +16,10 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <ToastProvider>
-          <RouterProvider router={router} />
+          <>
+            <RouterProvider router={router} />
+            <AgentationDevtools />
+          </>
         </ToastProvider>
       </ThemeProvider>
     </QueryClientProvider>

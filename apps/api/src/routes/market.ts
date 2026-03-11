@@ -17,14 +17,18 @@ import {
 } from '../services/marketTopAssets';
 import { normalizeMarketChain, toContractKey } from '../services/assetIdentity';
 import {
+  buildSearchTerms,
   fetchTradeBrowse,
   type TradeBrowseMarketItem,
   type TradeBrowsePredictionItem,
   fetchTradeMarketDetail,
   fetchTradeMarketKline,
   normalizeTradeMarketDetailType,
+  scoreSearchMatch,
+  searchPerpMarkets,
+  searchPredictionMarkets,
 } from '../services/tradeBrowse';
-import { fetchBinanceSpotKlines, searchBinanceTokens } from '../services/binance';
+import { fetchBinanceSpotKlines, searchBinanceSpotTokens } from '../services/binance';
 import { fetchSolanaTokenDetails } from '../services/solana';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 import {
@@ -37,6 +41,27 @@ import { isKlineStale, shouldPreferFallbackCandles } from '../services/klineFres
 
 const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 
+type SearchMarketType = 'spot' | 'stock' | 'perp' | 'prediction';
+
+type MarketSearchResultItem = {
+  id: string;
+  marketType: SearchMarketType;
+  symbol: string;
+  name: string;
+  image: string | null;
+  currentPrice: number | null;
+  change24h: number | null;
+  volume24h: number | null;
+  probability: number | null;
+  source: string;
+  externalUrl: string | null;
+  itemId: string | null;
+  chain: string | null;
+  contract: string | null;
+  asset_id?: string;
+  instrument_id?: string;
+};
+
 function normalizeText(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
@@ -48,6 +73,112 @@ function normalizeContractAddress(raw: unknown): string | null {
   if (!value) return null;
   if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
   return value;
+}
+
+function buildMarketSearchResolveRequest(item: MarketSearchResultItem): IdentityResolveRequest | null {
+  if (item.marketType === 'spot') {
+    const chain = normalizeText(item.chain);
+    const contract = normalizeText(item.contract);
+    if (!chain || contract == null) return null;
+    return {
+      key: `search:spot:${normalizeMarketChain(chain)}:${toContractKey(contract)}`,
+      input: {
+        chain,
+        contract,
+        marketType: 'spot',
+        symbol: item.symbol,
+        nameHint: item.name,
+      },
+    };
+  }
+
+  if (item.marketType === 'stock') {
+    const itemId = normalizeText(item.itemId);
+    if (!itemId) return null;
+    return {
+      key: `search:stock:${itemId.toLowerCase()}`,
+      input: {
+        itemId,
+        marketType: 'spot',
+        assetClassHint: 'equity_exposure',
+        symbol: item.symbol,
+        nameHint: item.name,
+      },
+    };
+  }
+
+  if (item.marketType === 'perp') {
+    const itemId = normalizeText(item.itemId);
+    if (!itemId) return null;
+    return {
+      key: `search:perp:${itemId.toLowerCase()}`,
+      input: {
+        itemId,
+        marketType: 'perp',
+        symbol: item.symbol,
+        venue: item.source,
+        nameHint: item.name,
+      },
+    };
+  }
+
+  const itemId = normalizeText(item.itemId);
+  if (!itemId) return null;
+  return {
+    key: `search:prediction:${itemId.toLowerCase()}`,
+    input: {
+      itemId,
+      marketType: 'prediction',
+      venue: item.source,
+      marketId: itemId.replace(/^polymarket:/i, ''),
+      outcomeId: 'default',
+      nameHint: item.name,
+    },
+  };
+}
+
+async function buildMarketSearchIdentityMap(
+  env: AppEnv['Bindings'],
+  items: MarketSearchResultItem[],
+): Promise<Map<string, ResolvedAsset>> {
+  if (!items.length) return new Map<string, ResolvedAsset>();
+  const requests: IdentityResolveRequest[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const request = buildMarketSearchResolveRequest(item);
+    if (!request || seen.has(request.key)) continue;
+    seen.add(request.key);
+    requests.push(request);
+  }
+  if (!requests.length) return new Map<string, ResolvedAsset>();
+
+  const results = await resolveAssetIdentityBatch(
+    env,
+    requests.map((request) => request.input),
+  );
+  const identityMap = new Map<string, ResolvedAsset>();
+  for (let index = 0; index < requests.length; index += 1) {
+    const request = requests[index];
+    const result = results[index];
+    if (!request || !result || !result.ok) continue;
+    identityMap.set(request.key, result.result);
+  }
+  return identityMap;
+}
+
+function applyMarketSearchIdentity(
+  item: MarketSearchResultItem,
+  identityMap: Map<string, ResolvedAsset>,
+): MarketSearchResultItem {
+  const request = buildMarketSearchResolveRequest(item);
+  if (!request) return item;
+  const resolved = identityMap.get(request.key);
+  if (!resolved) return item;
+  return {
+    ...item,
+    asset_id: resolved.asset_id,
+    instrument_id: resolved.instrument_id,
+  };
 }
 
 function normalizeContractQuery(chain: string, raw: unknown): string {
@@ -1061,42 +1192,158 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     }
 
     try {
-      const items = await searchBinanceTokens(q, limit);
-      const stockIconLookup = await loadTokenIconLookup(c.env, {
-        source: 'auto',
-        name: 'marketCap',
-        limit: 200,
-        categories: TOKENIZED_STOCK_ICON_CATEGORIES,
-      });
+      const candidateLimit = Math.min(Math.max(limit * 4, 24), 80);
+      const searchTerms = buildSearchTerms(q);
 
-      const results = items.map((item) => ({
-        ...(function resolveIcon() {
+      const [spotResult, perpResult, predictionResult, stockIconLookupResult] = await Promise.allSettled([
+        searchBinanceSpotTokens(q, candidateLimit),
+        searchPerpMarkets(c.env, q, { limit: candidateLimit }),
+        searchPredictionMarkets(q, { limit: candidateLimit }),
+        loadTokenIconLookup(c.env, {
+          source: 'auto',
+          name: 'marketCap',
+          limit: 200,
+          categories: TOKENIZED_STOCK_ICON_CATEGORIES,
+        }),
+      ]);
+
+      const stockIconLookup = stockIconLookupResult.status === 'fulfilled' ? stockIconLookupResult.value : null;
+      const candidates: Array<{
+        item: MarketSearchResultItem;
+        score: number;
+      }> = [];
+
+      if (spotResult.status === 'fulfilled') {
+        for (const item of spotResult.value) {
+          const symbol = item.stockState ? item.stockTicker : item.symbol;
+          const score = scoreSearchMatch(`${item.stockTicker} ${item.symbol} ${item.name}`, searchTerms);
+          if (score <= 0) continue;
           const contract = normalizeContractAddress(item.contract);
-          const image = resolveTokenIconFromLookup(
-            stockIconLookup,
-            {
-              symbol: item.stockTicker,
+          const resolvedImage = item.stockState && stockIconLookup
+            ? resolveTokenIconFromLookup(
+              stockIconLookup,
+              {
+                symbol: item.stockTicker,
+                name: item.name,
+                chain: normalizeMarketChain(item.chain),
+                contract,
+              },
+            ) ?? item.image
+            : item.image;
+          candidates.push({
+            score,
+            item: {
+              id: item.id,
+              marketType: item.stockState ? 'stock' : 'spot',
+              symbol,
               name: item.name,
-              chain: normalizeMarketChain(item.chain),
-              contract,
+              image: resolvedImage,
+              currentPrice: item.currentPrice,
+              change24h: item.change24h,
+              volume24h: item.volume24h,
+              probability: null,
+              source: 'binance',
+              externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
+              itemId: item.stockState ? item.id : null,
+              chain: item.stockState ? null : normalizeMarketChain(item.chain),
+              contract: item.stockState ? null : item.contract,
             },
-          ) ?? item.image;
-          return { image };
-        })(),
-        id: item.id,
-        symbol: item.stockTicker,
-        name: item.name,
-        currentPrice: item.currentPrice,
-        change24h: item.change24h,
-        volume24h: item.volume24h,
-        source: 'binance',
-        externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
-      }));
+          });
+        }
+      }
+
+      if (perpResult.status === 'fulfilled') {
+        for (const item of perpResult.value) {
+          const score = scoreSearchMatch(`${item.symbol} ${item.name}`, searchTerms);
+          if (score <= 0) continue;
+          candidates.push({
+            score,
+            item: {
+              id: item.id,
+              marketType: 'perp',
+              symbol: item.symbol,
+              name: item.name,
+              image: item.image,
+              currentPrice: item.currentPrice,
+              change24h: item.change24h,
+              volume24h: item.volume24h,
+              probability: null,
+              source: item.source,
+              externalUrl: item.externalUrl,
+              itemId: item.instrument_id?.trim() || item.id,
+              chain: null,
+              contract: null,
+              asset_id: item.asset_id,
+              instrument_id: item.instrument_id,
+            },
+          });
+        }
+      }
+
+      if (predictionResult.status === 'fulfilled') {
+        for (const item of predictionResult.value) {
+          const score = scoreSearchMatch(
+            `${item.title} ${item.options.map((option) => option.label).join(' ')}`,
+            searchTerms,
+          );
+          if (score <= 0) continue;
+          candidates.push({
+            score,
+            item: {
+              id: item.id,
+              marketType: 'prediction',
+              symbol: item.title,
+              name: item.title,
+              image: item.image,
+              currentPrice: null,
+              change24h: null,
+              volume24h: item.volume24h,
+              probability: item.probability,
+              source: item.source,
+              externalUrl: item.url,
+              itemId: item.instrument_id?.trim() || item.id,
+              chain: null,
+              contract: null,
+              asset_id: item.asset_id,
+              instrument_id: item.instrument_id,
+            },
+          });
+        }
+      }
+
+      if (!candidates.length) {
+        if (spotResult.status === 'rejected' && perpResult.status === 'rejected' && predictionResult.status === 'rejected') {
+          throw new Error('market_search_sources_unavailable');
+        }
+        return c.json({ results: [] });
+      }
+
+      const identityMap = await buildMarketSearchIdentityMap(
+        c.env,
+        candidates.map((entry) => entry.item),
+      );
+
+      const results = candidates
+        .map((entry) => ({
+          ...entry,
+          item: applyMarketSearchIdentity(entry.item, identityMap),
+        }))
+        .sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return Number(b.item.volume24h ?? 0) - Number(a.item.volume24h ?? 0);
+        })
+        .slice(0, limit)
+        .map((entry) => ({
+          ...entry.item,
+          itemId: entry.item.marketType === 'spot'
+            ? null
+            : entry.item.instrument_id?.trim() || entry.item.itemId,
+        }));
       return c.json({ results });
     } catch (error) {
       return c.json(
         {
-          error: 'binance_search_failed',
+          error: 'market_search_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
         },
         502,

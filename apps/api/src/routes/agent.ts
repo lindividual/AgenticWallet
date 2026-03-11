@@ -15,6 +15,7 @@ import {
   syncUserAgentPreferredLocale,
   syncUserAgentRequestLocale,
 } from '../services/agent';
+import { hydrateArticleRelatedAssets } from '../services/articleRelatedAssets';
 import { generateWithLlm, getLlmDebugStatus, getLlmErrorInfo, getLlmStatus } from '../services/llm';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { enqueueTopicSpecialGeneration } from '../services/topicSpecialCoordinator';
@@ -199,11 +200,13 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     if (!detail) {
       return c.json({ error: 'article_not_found' }, 404);
     }
+    const relatedAssets = await hydrateArticleRelatedAssets(c.env, detail.relatedAssets ?? []);
     return c.json({
       article: {
         ...toApiArticle(detail.article),
       },
       markdown: detail.markdown,
+      relatedAssets,
     });
   });
 

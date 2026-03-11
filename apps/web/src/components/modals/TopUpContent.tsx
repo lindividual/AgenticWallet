@@ -1,5 +1,5 @@
 import type { MouseEvent } from 'react';
-import { ArrowDownToLine, ArrowUpDown, CreditCard, X } from 'lucide-react';
+import { ArrowDownToLine, CreditCard, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 type TopUpContentProps = {
@@ -29,7 +29,7 @@ export function TopUpContent({ active, onOpenReceive, onOpenTrade, onClose }: To
         <div className="mt-16 flex flex-col gap-10">
           <button
             type="button"
-            className="btn btn-ghost h-12 justify-start gap-6 px-0 text-left text-2xl font-semibold"
+            className="btn btn-ghost h-12 justify-start gap-6 border-transparent px-0 text-left text-2xl font-semibold shadow-none hover:border-transparent hover:bg-transparent hover:shadow-none focus:border-transparent focus:bg-transparent active:border-transparent active:bg-transparent"
             onClick={handleButtonClick(onOpenReceive)}
             disabled={!active}
           >
@@ -38,21 +38,12 @@ export function TopUpContent({ active, onOpenReceive, onOpenTrade, onClose }: To
           </button>
           <button
             type="button"
-            className="btn btn-ghost h-12 justify-start gap-6 px-0 text-left text-2xl font-semibold"
+            className="btn btn-ghost h-12 justify-start gap-6 border-transparent px-0 text-left text-2xl font-semibold shadow-none hover:border-transparent hover:bg-transparent hover:shadow-none focus:border-transparent focus:bg-transparent active:border-transparent active:bg-transparent"
             onClick={handleButtonClick(() => onOpenTrade('buy'))}
             disabled={!active}
           >
             <CreditCard size={30} aria-hidden />
             <span>{t('wallet.buyCrypto')}</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost h-12 justify-start gap-6 px-0 text-left text-2xl font-semibold"
-            onClick={handleButtonClick(() => onOpenTrade('stableSwap'))}
-            disabled={!active}
-          >
-            <ArrowUpDown size={30} aria-hidden />
-            <span>{t('wallet.exchangeStables')}</span>
           </button>
         </div>
       </div>
@@ -60,7 +51,7 @@ export function TopUpContent({ active, onOpenReceive, onOpenTrade, onClose }: To
       <div className="mt-auto flex items-center justify-center pt-6">
         <button
           type="button"
-          className="btn btn-ghost h-12 w-12 p-0"
+          className="btn btn-ghost h-12 w-12 p-0 transition-none"
           aria-label={t('common.close')}
           onClick={handleButtonClick(onClose)}
         >

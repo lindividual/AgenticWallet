@@ -1,8 +1,15 @@
 import { fetchNewsHeadlines } from '../durableObjects/userAgentRss';
 import { generateWithLlm, getLlmErrorInfo, getLlmStatus } from './llm';
+import type { ArticleRelatedAssetRef } from './articleRelatedAssets';
+import { resolveAssetIdentityBatch } from './assetData';
 import type { MarketTopAsset } from './bitgetWallet';
 import { fetchTopMarketAssets } from './marketTopAssets';
 import { fetchOpenNewsCryptoNews, fetchOpenTwitterCryptoTweets, type NewsItem, type TweetItem } from './openNews';
+import {
+  fetchTradeBrowse,
+  type TradeBrowseMarketItem,
+  type TradeBrowsePredictionItem,
+} from './tradeBrowse';
 import type { Bindings } from '../types';
 
 const TOPIC_SPECIAL_SLOT_HOURS = 4;
@@ -13,6 +20,33 @@ const SUMMARY_MAX_LENGTH = 180;
 const TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS = 3;
 const TOPIC_SPECIAL_ARTICLE_MAX_TOKENS = 1400;
 const TOPIC_SPECIAL_INTER_ARTICLE_DELAY_MS = 750;
+const TOPIC_SPECIAL_MAX_SPOT_REFS = 4;
+const TOPIC_SPECIAL_MAX_PERP_REFS = 2;
+const TOPIC_SPECIAL_MAX_PREDICTION_REFS = 2;
+const TOPIC_PREDICTION_STOPWORDS = new Set([
+  'about',
+  'after',
+  'before',
+  'between',
+  'could',
+  'crypto',
+  'from',
+  'have',
+  'into',
+  'market',
+  'markets',
+  'price',
+  'rates',
+  'than',
+  'that',
+  'their',
+  'there',
+  'these',
+  'this',
+  'topic',
+  'update',
+  'with',
+]);
 
 const TOPIC_NEWS_KEYWORDS = [
   'bitcoin',
@@ -78,6 +112,16 @@ export type TopicSpecialGenerationResult = {
 
 let topicSpecialSchemaReady = false;
 
+function choosePreferredMarketAsset(candidate: MarketTopAsset, current: MarketTopAsset): boolean {
+  const candidateRank = Number(candidate.market_cap_rank ?? Number.MAX_SAFE_INTEGER);
+  const currentRank = Number(current.market_cap_rank ?? Number.MAX_SAFE_INTEGER);
+  if (candidateRank !== currentRank) return candidateRank < currentRank;
+  const candidateHasImage = Boolean(candidate.image?.trim());
+  const currentHasImage = Boolean(current.image?.trim());
+  if (candidateHasImage !== currentHasImage) return candidateHasImage;
+  return false;
+}
+
 export async function generateTopicSpecialBatch(
   env: Bindings,
   options?: { force?: boolean; slotKey?: string },
@@ -108,7 +152,7 @@ export async function generateTopicSpecialBatch(
     };
   }
 
-  const [newsItems, twitterItems, rssHeadlines, marketAssets] = await Promise.all([
+  const [newsItems, twitterItems, rssHeadlines, marketAssets, tradeBrowse] = await Promise.all([
     fetchOpenNewsCryptoNews(env, {
       keywords: TOPIC_NEWS_KEYWORDS,
       limit: 14,
@@ -123,6 +167,14 @@ export async function generateTopicSpecialBatch(
       source: 'auto',
       limit: 20,
     }).catch(() => [] as MarketTopAsset[]),
+    fetchTradeBrowse(env).catch(() => ({
+      generatedAt: new Date().toISOString(),
+      topMovers: [] as TradeBrowseMarketItem[],
+      trendings: [] as TradeBrowseMarketItem[],
+      stocks: [] as TradeBrowseMarketItem[],
+      perps: [] as TradeBrowseMarketItem[],
+      predictions: [] as TradeBrowsePredictionItem[],
+    })),
   ]);
 
   const sourceRefs = buildSourceReferences(newsItems, twitterItems, rssHeadlines);
@@ -182,6 +234,14 @@ export async function generateTopicSpecialBatch(
     const generatedAt = new Date().toISOString();
     const r2Key = buildTopicR2Key(slotKey, topicSlug, articleId);
     const normalizedAssets = normalizeAssetSymbols(draft.relatedAssets, defaultAssets);
+    const relatedAssetRefs = await buildTopicRelatedAssetRefs(env, {
+      topic: draft.topic,
+      summary: draft.summary,
+      symbols: normalizedAssets,
+      marketAssets,
+      perps: tradeBrowse.perps,
+      predictions: tradeBrowse.predictions,
+    });
     const normalizedRefs = normalizeSourceRefs(draft.sourceRefs.length > 0 ? draft.sourceRefs : sourceRefs);
     const markdown = await buildTopicArticleMarkdown(
       env,
@@ -229,7 +289,7 @@ export async function generateTopicSpecialBatch(
           draft.topic,
           truncateSummary(draft.summary),
           r2Key,
-          JSON.stringify(normalizedAssets),
+          JSON.stringify(relatedAssetRefs),
           JSON.stringify(normalizedRefs),
           generatedAt,
           'ready',
@@ -785,6 +845,252 @@ function buildDefaultAssetPool(marketAssets: MarketTopAsset[], newsItems: NewsIt
   const deduped = dedupeStrings(output).filter((item) => normalizeAssetSymbol(item) != null);
   if (deduped.length >= 3) return deduped;
   return dedupeStrings([...deduped, 'BTC', 'ETH', 'SOL', 'USDC', 'USDT']);
+}
+
+type TopicRelatedRefCandidate = {
+  key: string;
+  ref: ArticleRelatedAssetRef;
+  resolveInput?:
+    | {
+        chain?: string;
+        contract?: string;
+        itemId?: string;
+        marketType?: string;
+        symbol?: string;
+        venue?: string;
+        nameHint?: string;
+      }
+    | null;
+};
+
+function normalizePredictionSearchText(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizePredictionText(raw: string): string[] {
+  return normalizePredictionSearchText(raw)
+    .split(' ')
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 4 && !TOPIC_PREDICTION_STOPWORDS.has(item));
+}
+
+function normalizePerpBaseSymbol(raw: string): string | null {
+  const upper = raw.trim().toUpperCase().replace(/[_\s]+/g, '');
+  if (!upper) return null;
+  const stripped = upper.replace(/-PERP$/i, '').replace(/PERP$/i, '');
+  const slashIndex = stripped.indexOf('/');
+  const withoutSlash = slashIndex > 0 ? stripped.slice(0, slashIndex) : stripped;
+  const dashIndex = withoutSlash.indexOf('-');
+  const withoutDash = dashIndex > 0 ? withoutSlash.slice(0, dashIndex) : withoutSlash;
+  for (const suffix of ['USDT', 'USDC', 'USD', 'FDUSD', 'BUSD']) {
+    if (withoutDash.endsWith(suffix) && withoutDash.length > suffix.length) {
+      return withoutDash.slice(0, -suffix.length) || null;
+    }
+  }
+  return withoutDash || null;
+}
+
+function choosePredictionPrimarySymbol(
+  prediction: TradeBrowsePredictionItem,
+  symbols: string[],
+  assetNamesBySymbol: Map<string, string>,
+): string {
+  const haystack = ` ${normalizePredictionSearchText(prediction.title)} `;
+  for (const symbol of symbols) {
+    const name = assetNamesBySymbol.get(symbol);
+    if (name && haystack.includes(` ${normalizePredictionSearchText(name)} `)) {
+      return symbol;
+    }
+    if (haystack.includes(` ${symbol.toLowerCase()} `)) {
+      return symbol;
+    }
+  }
+  return symbols[0] ?? 'EVENT';
+}
+
+function scorePredictionCandidate(
+  prediction: TradeBrowsePredictionItem,
+  topic: string,
+  summary: string,
+  symbols: string[],
+  assetNamesBySymbol: Map<string, string>,
+): number {
+  const haystack = ` ${normalizePredictionSearchText(`${prediction.title} ${prediction.options.map((item) => item.label).join(' ')}`)} `;
+  let score = 0;
+
+  for (const symbol of symbols) {
+    if (haystack.includes(` ${symbol.toLowerCase()} `)) {
+      score += 8;
+    }
+    const name = assetNamesBySymbol.get(symbol);
+    if (name) {
+      const normalizedName = normalizePredictionSearchText(name);
+      if (normalizedName && haystack.includes(` ${normalizedName} `)) {
+        score += 10;
+      }
+    }
+  }
+
+  const topicTokens = new Set([
+    ...tokenizePredictionText(topic),
+    ...tokenizePredictionText(summary),
+  ]);
+  for (const token of topicTokens) {
+    if (haystack.includes(` ${token} `)) score += 2;
+  }
+
+  score += Math.min(6, Math.log10(Math.max(1, Number(prediction.volume24h ?? 0) + 1)));
+  return score;
+}
+
+async function buildTopicRelatedAssetRefs(
+  env: Bindings,
+  input: {
+    topic: string;
+    summary: string;
+    symbols: string[];
+    marketAssets: MarketTopAsset[];
+    perps: TradeBrowseMarketItem[];
+    predictions: TradeBrowsePredictionItem[];
+  },
+): Promise<ArticleRelatedAssetRef[]> {
+  const assetBySymbol = new Map<string, MarketTopAsset>();
+  for (const asset of input.marketAssets) {
+    const symbol = normalizeAssetSymbol(asset.symbol);
+    if (!symbol) continue;
+    const current = assetBySymbol.get(symbol);
+    if (!current || choosePreferredMarketAsset(asset, current)) {
+      assetBySymbol.set(symbol, asset);
+    }
+  }
+
+  const assetNamesBySymbol = new Map<string, string>();
+  for (const [symbol, asset] of assetBySymbol) {
+    if (asset.name?.trim()) assetNamesBySymbol.set(symbol, asset.name.trim());
+  }
+
+  const candidates: TopicRelatedRefCandidate[] = [];
+  for (const symbol of input.symbols.slice(0, TOPIC_SPECIAL_MAX_SPOT_REFS)) {
+    const matched = assetBySymbol.get(symbol) ?? null;
+    candidates.push({
+      key: `spot:${symbol}`,
+      ref: {
+        symbol,
+        market_type: 'spot',
+        market_item_id: null,
+        asset_id: matched?.asset_id ?? null,
+        instrument_id: matched?.instrument_id ?? null,
+        chain: matched?.chain ?? null,
+        contract: matched?.contract || null,
+        name: matched?.name ?? null,
+        image: matched?.image ?? null,
+        price_change_percentage_24h: matched?.price_change_percentage_24h ?? null,
+      },
+      resolveInput: matched
+        ? {
+            chain: matched.chain,
+            contract: matched.contract,
+            marketType: 'spot',
+            symbol: matched.symbol,
+            nameHint: matched.name,
+          }
+        : null,
+    });
+  }
+
+  const perpByBaseSymbol = new Map<string, TradeBrowseMarketItem[]>();
+  for (const perp of input.perps) {
+    const baseSymbol = normalizePerpBaseSymbol(perp.symbol);
+    if (!baseSymbol) continue;
+    const list = perpByBaseSymbol.get(baseSymbol);
+    if (list) {
+      list.push(perp);
+    } else {
+      perpByBaseSymbol.set(baseSymbol, [perp]);
+    }
+  }
+  let perpCount = 0;
+  for (const symbol of input.symbols) {
+    if (perpCount >= TOPIC_SPECIAL_MAX_PERP_REFS) break;
+    const matchedPerp = (perpByBaseSymbol.get(symbol) ?? [])
+      .slice()
+      .sort((a, b) => Number(b.volume24h ?? 0) - Number(a.volume24h ?? 0))[0];
+    if (!matchedPerp) continue;
+    candidates.push({
+      key: `perp:${matchedPerp.id}`,
+      ref: {
+        symbol,
+        market_type: 'perp',
+        market_item_id: matchedPerp.id,
+        name: matchedPerp.name,
+        image: matchedPerp.image,
+        price_change_percentage_24h: matchedPerp.change24h,
+      },
+      resolveInput: {
+        itemId: matchedPerp.id,
+        marketType: 'perp',
+        symbol: matchedPerp.symbol,
+        venue: matchedPerp.source,
+        nameHint: matchedPerp.name,
+      },
+    });
+    perpCount += 1;
+  }
+
+  const scoredPredictions = input.predictions
+    .map((prediction) => ({
+      prediction,
+      score: scorePredictionCandidate(
+        prediction,
+        input.topic,
+        input.summary,
+        input.symbols,
+        assetNamesBySymbol,
+      ),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  for (const item of scoredPredictions.slice(0, TOPIC_SPECIAL_MAX_PREDICTION_REFS)) {
+    const primarySymbol = choosePredictionPrimarySymbol(item.prediction, input.symbols, assetNamesBySymbol);
+    candidates.push({
+      key: `prediction:${item.prediction.id}`,
+      ref: {
+        symbol: primarySymbol,
+        market_type: 'prediction',
+        market_item_id: item.prediction.id,
+        name: item.prediction.title,
+        image: item.prediction.image,
+        price_change_percentage_24h: null,
+      },
+      resolveInput: {
+        itemId: item.prediction.id,
+        marketType: 'prediction',
+        venue: item.prediction.source,
+        nameHint: item.prediction.title,
+      },
+    });
+  }
+
+  const dedupedCandidates = [...new Map(candidates.map((item) => [item.key, item])).values()].slice(0, 8);
+  const resolveInputs = dedupedCandidates
+    .map((item) => item.resolveInput)
+    .filter((value): value is NonNullable<TopicRelatedRefCandidate['resolveInput']> => Boolean(value));
+  const results = await resolveAssetIdentityBatch(env, resolveInputs);
+  let resolvedIndex = 0;
+
+  return dedupedCandidates.map((candidate) => {
+    const resolved = candidate.resolveInput ? results[resolvedIndex++] ?? null : null;
+    return {
+      ...candidate.ref,
+      asset_id: resolved && resolved.ok ? resolved.result.asset_id : candidate.ref.asset_id ?? null,
+      instrument_id: resolved && resolved.ok ? resolved.result.instrument_id : candidate.ref.instrument_id ?? null,
+    };
+  });
 }
 
 function normalizeAssetSymbols(assets: string[] | null | undefined, fallbackAssets: string[]): string[] {

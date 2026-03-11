@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Bot, ChevronDown, Send } from 'lucide-react';
-import { agentChat, type AgentChatMessage } from '../api';
+import { agentChat, getCoinDetail, getMarketWatchlist, type AgentChatMessage, type TopMarketAsset } from '../api';
 import type { AgentNudge, PageContext } from '../agent/types';
+import { normalizeContractForChain } from '../utils/chainIdentity';
 
 type AgentAssistantProps = {
   entryNudge?: AgentNudge | null;
@@ -26,8 +28,60 @@ function generateSessionId(): string {
   return `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function formatTokenContextNumber(value: number | null | undefined, digits = 4): string | null {
+  if (!Number.isFinite(Number(value))) return null;
+  return Number(value).toFixed(digits);
+}
+
+function normalizeIntentText(value: string): string {
+  return value.trim().toLowerCase().replace(/[.!?。！？]/g, '');
+}
+
+function isShortAffirmation(value: string): boolean {
+  const normalized = normalizeIntentText(value);
+  return new Set([
+    'y',
+    'yes',
+    'yeah',
+    'yep',
+    'sure',
+    'ok',
+    'okay',
+    'sure thing',
+    'yes please',
+    'go ahead',
+    'do it',
+    'please do',
+    '好',
+    '好的',
+    '可以',
+    '行',
+    '嗯',
+    '是的',
+    '好啊',
+    '没问题',
+    '可以的',
+    'تمام',
+    'نعم',
+    'أكيد',
+    'حسنًا',
+  ]).has(normalized);
+}
+
+function buildTokenAnalysisPrompt(locale: string | null): string {
+  const normalized = (locale ?? '').trim().toLowerCase();
+  if (normalized.startsWith('zh')) {
+    return '请基于当前页面里的这只代币，直接给我一个简短分析，包含走势观察、主要风险，以及我下一步最值得做的动作。';
+  }
+  if (normalized.startsWith('ar')) {
+    return 'حلل هذا الرمز مباشرةً بالاعتماد على معلومات الصفحة الحالية، مع ملاحظة الاتجاه والمخاطر الرئيسية وما هي الخطوة التالية الأنسب.';
+  }
+  return 'Please analyze this token directly using the current page context, including trend, main risks, and the most useful next step.';
+}
+
 export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRequestKey = 0 }: AgentAssistantProps) {
   const { i18n, t } = useTranslation();
+  const queryClient = useQueryClient();
   const [phase, setPhase] = useState<'closed' | 'panel' | 'chat'>('closed');
   const [activeNudge, setActiveNudge] = useState<AgentNudge | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -39,6 +93,29 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   const inputRef = useRef<HTMLInputElement>(null);
 
   const currentPageKey = pageContext.page;
+  const normalizedTokenChain = (pageContext.tokenChain ?? '').trim().toLowerCase();
+  const normalizedTokenContract = normalizedTokenChain
+    ? normalizeContractForChain(normalizedTokenChain, pageContext.tokenContract ?? '')
+    : '';
+  const routePreview = queryClient.getQueryData<TopMarketAsset>([
+    'trade-token-route-preview',
+    normalizedTokenChain,
+    normalizedTokenContract,
+  ]) ?? null;
+
+  const { data: tokenDetail } = useQuery({
+    queryKey: ['agent-token-context-detail', normalizedTokenChain, normalizedTokenContract],
+    queryFn: () => getCoinDetail(normalizedTokenChain, normalizedTokenContract),
+    enabled: currentPageKey === 'token' && Boolean(normalizedTokenChain && normalizedTokenContract),
+    staleTime: 20_000,
+  });
+
+  const { data: watchlistData } = useQuery({
+    queryKey: ['agent-token-context-watchlist'],
+    queryFn: () => getMarketWatchlist({ limit: 200 }),
+    enabled: currentPageKey === 'token' && Boolean(normalizedTokenChain && normalizedTokenContract),
+    staleTime: 15_000,
+  });
 
   const panelSupportText = useCallback(
     (nudge: AgentNudge): string => {
@@ -99,14 +176,48 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
 
   const buildPageContextPayload = useCallback((): Record<string, string> => {
     const pageCtx: Record<string, string> = {};
-    if (pageContext.tokenSymbol) pageCtx.symbol = pageContext.tokenSymbol;
+    const tokenSymbol = pageContext.tokenSymbol ?? tokenDetail?.symbol ?? routePreview?.symbol ?? '';
+    const tokenName = tokenDetail?.name ?? routePreview?.name ?? '';
+    const tokenPriceUsd = tokenDetail?.currentPriceUsd ?? routePreview?.current_price ?? null;
+    const tokenPriceChange24h = tokenDetail?.priceChange24h ?? routePreview?.price_change_percentage_24h ?? null;
+    const isInWatchlist =
+      currentPageKey === 'token'
+      && Boolean(
+        normalizedTokenChain
+        && normalizedTokenContract
+        && (watchlistData?.assets ?? []).some((asset) => (
+          asset.watch_type === 'crypto'
+          && asset.chain.trim().toLowerCase() === normalizedTokenChain
+          && normalizeContractForChain(asset.chain, asset.contract) === normalizedTokenContract
+        )),
+      );
+
+    if (tokenSymbol) pageCtx.symbol = tokenSymbol;
     if (pageContext.tokenChain) pageCtx.chain = pageContext.tokenChain;
     if (pageContext.tokenContract) pageCtx.contract = pageContext.tokenContract;
+    if (tokenName) pageCtx.tokenName = tokenName;
+    if (tokenPriceUsd != null) pageCtx.currentPriceUsd = formatTokenContextNumber(tokenPriceUsd, 6) ?? '';
+    if (tokenPriceChange24h != null) pageCtx.priceChange24h = formatTokenContextNumber(tokenPriceChange24h, 2) ?? '';
+    if (isInWatchlist) pageCtx.inWatchlist = 'true';
     if (pageContext.articleId) pageCtx.articleId = pageContext.articleId;
     if (pageContext.marketType) pageCtx.marketType = pageContext.marketType;
     if (pageContext.marketItemId) pageCtx.marketItemId = pageContext.marketItemId;
     return pageCtx;
-  }, [pageContext]);
+  }, [
+    currentPageKey,
+    normalizedTokenChain,
+    normalizedTokenContract,
+    pageContext,
+    routePreview?.current_price,
+    routePreview?.name,
+    routePreview?.price_change_percentage_24h,
+    routePreview?.symbol,
+    tokenDetail?.currentPriceUsd,
+    tokenDetail?.name,
+    tokenDetail?.priceChange24h,
+    tokenDetail?.symbol,
+    watchlistData?.assets,
+  ]);
 
   const requestReply = useCallback(
     async (apiMessages: AgentChatMessage[]) => {
@@ -203,7 +314,18 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
       role: 'user',
       content: text,
     };
-    const updatedMessages = [...messages, userMsg];
+    const shouldExpandTokenAnalysis =
+      currentPageKey === 'token'
+      && messages.length === 1
+      && messages[0]?.role === 'assistant'
+      && isShortAffirmation(text);
+    const normalizedUserMsg = shouldExpandTokenAnalysis
+      ? {
+          ...userMsg,
+          content: buildTokenAnalysisPrompt(i18n.resolvedLanguage ?? i18n.language ?? null),
+        }
+      : userMsg;
+    const updatedMessages = [...messages, normalizedUserMsg];
     setMessages(updatedMessages);
     setInput('');
     setLoading(true);

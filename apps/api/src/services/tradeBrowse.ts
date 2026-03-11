@@ -82,6 +82,7 @@ const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
 const POLYMARKET_EVENTS_BASE_URL = 'https://gamma-api.polymarket.com/events';
 const POLYMARKET_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
+const POLYMARKET_PUBLIC_SEARCH_URL = 'https://gamma-api.polymarket.com/public-search';
 const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 const STABLECOIN_SYMBOLS = new Set([
   'USDT',
@@ -130,6 +131,10 @@ const PERP_SYMBOL_ALIASES: Record<string, string[]> = {
 
 let tradeBrowseCache: { expiresAt: number; value: TradeBrowseResponse } | null = null;
 let tradeBrowseInFlight: Promise<TradeBrowseResponse> | null = null;
+let perpSearchCache: { expiresAt: number; value: TradeBrowseMarketItem[] } | null = null;
+let perpSearchInFlight: Promise<TradeBrowseMarketItem[]> | null = null;
+let predictionSearchCache: { expiresAt: number; value: TradeBrowsePredictionItem[] } | null = null;
+let predictionSearchInFlight: Promise<TradeBrowsePredictionItem[]> | null = null;
 
 const HYPERLIQUID_INTERVAL_BY_KLINE_PERIOD: Record<string, string> = {
   '15m': '15m',
@@ -494,6 +499,29 @@ async function fetchPerps(env: Bindings): Promise<TradeBrowseMarketItem[]> {
     .sort((a, b) => (b.volume24h ?? Number.NEGATIVE_INFINITY) - (a.volume24h ?? Number.NEGATIVE_INFINITY));
 }
 
+async function getCachedPerps(env: Bindings): Promise<TradeBrowseMarketItem[]> {
+  const now = Date.now();
+  if (perpSearchCache && perpSearchCache.expiresAt > now) {
+    return perpSearchCache.value;
+  }
+  if (perpSearchInFlight) {
+    return perpSearchInFlight;
+  }
+  const task = fetchPerps(env)
+    .then((value) => {
+      perpSearchCache = {
+        expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+        value,
+      };
+      return value;
+    })
+    .finally(() => {
+      perpSearchInFlight = null;
+    });
+  perpSearchInFlight = task;
+  return task;
+}
+
 function parsePredictionItemFromRow(row: Record<string, unknown>): TradeBrowsePredictionItem | null {
   const rawId = normalizeText(row.id) ?? normalizeText(row.slug) ?? normalizeText(row.conditionId);
   const title = normalizeText(row.question) ?? normalizeText(row.title);
@@ -705,6 +733,54 @@ function buildPolymarketMarketsUrl(limit: number): string {
   return `${POLYMARKET_MARKETS_BASE_URL}?${query.toString()}`;
 }
 
+function buildPolymarketPublicSearchUrl(queryText: string, limitPerType: number): string {
+  const query = new URLSearchParams({
+    q: queryText.trim(),
+    limit_per_type: String(Math.max(1, Math.min(limitPerType, 100))),
+    search_tags: 'false',
+    search_profiles: 'false',
+    optimized: 'true',
+  });
+  return `${POLYMARKET_PUBLIC_SEARCH_URL}?${query.toString()}`;
+}
+
+function buildPredictionFallbackFromEvent(
+  eventRow: Record<string, unknown>,
+): TradeBrowsePredictionItem | null {
+  const title = normalizeText(eventRow.title);
+  const eventId = normalizeText(eventRow.id);
+  const image = normalizeText(eventRow.icon) ?? normalizeText(eventRow.image);
+  const directUrl = normalizeText(eventRow.url);
+  const slug = normalizeText(eventRow.slug);
+  const markets = Array.isArray(eventRow.markets)
+    ? eventRow.markets.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => entry != null)
+    : [];
+  const activeMarkets = markets.filter((entry) => marketLikelyTradable(entry));
+  const primaryMarket = activeMarkets[0] ?? markets[0] ?? null;
+  if (!primaryMarket) return null;
+
+  const primaryParsed = parsePredictionItemFromRow({
+    ...primaryMarket,
+    image,
+    icon: image,
+    title: title ?? primaryMarket.title,
+    slug: slug ?? primaryMarket.slug,
+    events: eventId ? [{ id: eventId }] : [],
+  });
+  if (!primaryParsed) return null;
+
+  const fallbackItem: TradeBrowsePredictionItem = {
+    ...primaryParsed,
+    title: title ?? primaryParsed.title,
+    image: image ?? primaryParsed.image,
+    url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : primaryParsed.url),
+    eventId: eventId ?? primaryParsed.eventId,
+  };
+
+  const winnerView = buildWinnerPredictionItemFromEvent(eventRow, fallbackItem);
+  return winnerView ?? fallbackItem;
+}
+
 async function fetchPredictions(limit = 10): Promise<TradeBrowsePredictionItem[]> {
   const response = await fetch(buildPolymarketMarketsUrl(Math.max(limit * 2, 40)), {
     method: 'GET',
@@ -732,6 +808,150 @@ async function fetchPredictions(limit = 10): Promise<TradeBrowsePredictionItem[]
   return output
     .sort((a, b) => (b.volume24h ?? Number.NEGATIVE_INFINITY) - (a.volume24h ?? Number.NEGATIVE_INFINITY))
     .slice(0, limit);
+}
+
+async function getCachedPredictions(limit = 250): Promise<TradeBrowsePredictionItem[]> {
+  const now = Date.now();
+  if (predictionSearchCache && predictionSearchCache.expiresAt > now && predictionSearchCache.value.length >= limit) {
+    return predictionSearchCache.value.slice(0, limit);
+  }
+  if (predictionSearchInFlight) {
+    const value = await predictionSearchInFlight;
+    return value.slice(0, limit);
+  }
+  const task = fetchPredictions(Math.max(limit, 80))
+    .then((value) => {
+      predictionSearchCache = {
+        expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+        value,
+      };
+      return value;
+    })
+    .finally(() => {
+      predictionSearchInFlight = null;
+    });
+  predictionSearchInFlight = task;
+  const value = await task;
+  return value.slice(0, limit);
+}
+
+function normalizeSearchText(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function buildSearchTerms(query: string, extraTerms?: string[]): string[] {
+  return [...new Set([query, ...(extraTerms ?? [])]
+    .map((item) => normalizeSearchText(item))
+    .flatMap((item) => item.split(' '))
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2))];
+}
+
+export function scoreSearchMatch(text: string, terms: string[]): number {
+  const haystack = ` ${normalizeSearchText(text)} `;
+  let score = 0;
+  for (const term of terms) {
+    if (!term) continue;
+    if (haystack.includes(` ${term} `)) {
+      score += 8;
+      continue;
+    }
+    if (haystack.includes(` ${term}`)) {
+      score += 5;
+      continue;
+    }
+    if (haystack.includes(term)) {
+      score += 2;
+    }
+  }
+  return score;
+}
+
+export async function searchPerpMarkets(
+  env: Bindings,
+  query: string,
+  options?: {
+    limit?: number;
+    extraTerms?: string[];
+  },
+): Promise<TradeBrowseMarketItem[]> {
+  const terms = buildSearchTerms(query, options?.extraTerms);
+  if (!terms.length) return [];
+  const perps = await getCachedPerps(env);
+  return perps
+    .map((item) => ({
+      item,
+      score: scoreSearchMatch(`${item.symbol} ${item.name}`, terms),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return Number(b.item.volume24h ?? 0) - Number(a.item.volume24h ?? 0);
+    })
+    .slice(0, options?.limit ?? 20)
+    .map((entry) => entry.item);
+}
+
+export async function searchPredictionMarkets(
+  query: string,
+  options?: {
+    limit?: number;
+    extraTerms?: string[];
+  },
+): Promise<TradeBrowsePredictionItem[]> {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) return [];
+
+  const limit = options?.limit ?? 20;
+  const response = await fetch(buildPolymarketPublicSearchUrl(normalizedQuery, Math.max(limit, 10)), {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`polymarket_search_http_${response.status}:${detail.slice(0, 200)}`);
+  }
+
+  const payload = (await response.json()) as unknown;
+  const root = asRecord(payload);
+  const rawEvents = Array.isArray(root?.events)
+    ? root.events.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => entry != null)
+    : [];
+  if (!rawEvents.length) return [];
+
+  const detailLookup = new Map<string, Record<string, unknown>>();
+  const detailTargetIds = rawEvents
+    .map((entry) => normalizeText(entry.id))
+    .filter((entry): entry is string => entry != null)
+    .slice(0, Math.min(limit, 12));
+  if (detailTargetIds.length > 0) {
+    const detailRows = await Promise.all(detailTargetIds.map((eventId) => fetchPolymarketEventById(eventId)));
+    for (let index = 0; index < detailTargetIds.length; index += 1) {
+      const eventId = detailTargetIds[index];
+      const detailRow = detailRows[index];
+      if (eventId && detailRow) {
+        detailLookup.set(eventId, detailRow);
+      }
+    }
+  }
+
+  const output: TradeBrowsePredictionItem[] = [];
+  for (const eventRow of rawEvents) {
+    const eventId = normalizeText(eventRow.id);
+    const enrichedRow = (eventId ? detailLookup.get(eventId) : null) ?? eventRow;
+    const parsed = buildPredictionFallbackFromEvent(enrichedRow);
+    if (!parsed) continue;
+    output.push(parsed);
+    if (output.length >= limit) break;
+  }
+
+  return output;
 }
 
 async function fetchPredictionById(id: string): Promise<TradeBrowsePredictionItem | null> {

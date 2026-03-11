@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { searchMarketTokens, type MarketSearchResult } from '../api';
+import { CachedIconImage } from './CachedIconImage';
 import { formatUsdAdaptive } from '../utils/currency';
 
 type TokenSearchModalProps = {
@@ -22,6 +23,13 @@ function pctClassName(value: number | null | undefined): string {
   if (numberValue > 0) return 'text-success';
   if (numberValue < 0) return 'text-error';
   return 'text-base-content/70';
+}
+
+function getMarketTypeLabel(t: (key: string) => string, marketType: MarketSearchResult['marketType']): string {
+  if (marketType === 'spot') return t('trade.tokens');
+  if (marketType === 'stock') return t('trade.stocks');
+  if (marketType === 'perp') return t('trade.perps');
+  return t('trade.prediction');
 }
 
 export function TokenSearchModal({ visible, onClose, onSelectItem }: TokenSearchModalProps) {
@@ -140,6 +148,11 @@ export function TokenSearchModal({ visible, onClose, onSelectItem }: TokenSearch
             <div className="overflow-hidden rounded-xl bg-base-200/35">
               {results.map((item) => {
                 const changeClass = pctClassName(item.change24h);
+                const fallback = (
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
+                    {item.symbol ? item.symbol[0].toUpperCase() : '?'}
+                  </div>
+                );
                 return (
                   <button
                     key={item.id}
@@ -148,21 +161,43 @@ export function TokenSearchModal({ visible, onClose, onSelectItem }: TokenSearch
                     onClick={() => handleSelect(item)}
                   >
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
-                        {item.symbol ? item.symbol[0].toUpperCase() : '?'}
-                      </div>
+                      {item.image ? (
+                        <CachedIconImage
+                          src={item.image}
+                          alt={item.symbol}
+                          className="h-9 w-9 shrink-0 rounded-full bg-white/10 object-cover"
+                          loading="lazy"
+                          fallback={fallback}
+                        />
+                      ) : fallback}
                       <div className="min-w-0">
-                        <p className="m-0 truncate text-[15px] font-semibold">{item.symbol}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="m-0 truncate text-[15px] font-semibold">{item.symbol}</p>
+                          <span className="rounded-full bg-base-300 px-2 py-0.5 text-[10px] font-medium text-base-content/65">
+                            {getMarketTypeLabel(t, item.marketType)}
+                          </span>
+                        </div>
                         <p className="m-0 mt-0.5 truncate text-xs text-base-content/55">{item.name}</p>
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <p className="m-0 text-sm text-base-content/65">
-                        {item.currentPrice != null ? formatUsdAdaptive(item.currentPrice, i18n.language) : '--'}
-                      </p>
-                      <p className={`m-0 mt-0.5 text-sm font-semibold ${changeClass}`}>
-                        {formatPct(item.change24h)}
-                      </p>
+                      {item.marketType === 'prediction' ? (
+                        <>
+                          <p className="m-0 text-sm text-base-content/65">
+                            {item.probability != null ? `${item.probability.toFixed(1)}%` : '--'}
+                          </p>
+                          <p className="m-0 mt-0.5 text-xs text-base-content/55">{t('trade.probability')}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="m-0 text-sm text-base-content/65">
+                            {item.currentPrice != null ? formatUsdAdaptive(item.currentPrice, i18n.language) : '--'}
+                          </p>
+                          <p className={`m-0 mt-0.5 text-sm font-semibold ${changeClass}`}>
+                            {formatPct(item.change24h)}
+                          </p>
+                        </>
+                      )}
                     </div>
                   </button>
                 );

@@ -178,6 +178,10 @@ function toResolveBatchCacheKey(input: ResolveAssetInput): string {
   return `generic|${marketType}|${venue}|${symbol}|${marketId}|${outcomeId}|${assetClass}`;
 }
 
+function buildInClause(values: readonly string[]): string {
+  return values.map(() => '?').join(', ');
+}
+
 async function ensureAssetSchema(db: D1Database): Promise<void> {
   if (assetSchemaReady) return;
   await db
@@ -749,6 +753,38 @@ export async function getAssetById(db: D1Database, assetId: string): Promise<Ass
   return row ?? null;
 }
 
+export async function listAssetsByIds(db: D1Database, assetIds: string[]): Promise<AssetRecord[]> {
+  const normalizedIds = [...new Set(assetIds.map((item) => normalizeText(item)).filter((value): value is string => Boolean(value)))];
+  if (!normalizedIds.length) return [];
+  await ensureAssetSchema(db);
+  const result = await db
+    .prepare(
+      `SELECT asset_id, asset_class, symbol, name, logo_uri, status, source, created_at, updated_at
+       FROM assets
+       WHERE asset_id IN (${buildInClause(normalizedIds)})`,
+    )
+    .bind(...normalizedIds)
+    .all<AssetRecord>();
+  return result.results ?? [];
+}
+
+export async function listAssetsBySymbols(db: D1Database, symbols: string[]): Promise<AssetRecord[]> {
+  const normalizedSymbols = [
+    ...new Set(symbols.map((item) => normalizeText(item)?.toUpperCase()).filter((value): value is string => Boolean(value))),
+  ];
+  if (!normalizedSymbols.length) return [];
+  await ensureAssetSchema(db);
+  const result = await db
+    .prepare(
+      `SELECT asset_id, asset_class, symbol, name, logo_uri, status, source, created_at, updated_at
+       FROM assets
+       WHERE symbol IN (${buildInClause(normalizedSymbols)})`,
+    )
+    .bind(...normalizedSymbols)
+    .all<AssetRecord>();
+  return result.results ?? [];
+}
+
 export async function listInstrumentsByAssetId(db: D1Database, assetId: string): Promise<InstrumentRecord[]> {
   await ensureAssetSchema(db);
   const result = await db
@@ -760,6 +796,23 @@ export async function listInstrumentsByAssetId(db: D1Database, assetId: string):
        ORDER BY updated_at DESC`,
     )
     .bind(assetId)
+    .all<InstrumentRecord>();
+  return result.results ?? [];
+}
+
+export async function listInstrumentsByAssetIds(db: D1Database, assetIds: string[]): Promise<InstrumentRecord[]> {
+  const normalizedIds = [...new Set(assetIds.map((item) => normalizeText(item)).filter((value): value is string => Boolean(value)))];
+  if (!normalizedIds.length) return [];
+  await ensureAssetSchema(db);
+  const result = await db
+    .prepare(
+      `SELECT instrument_id, asset_id, market_type, venue, symbol, chain, contract_key, source, source_item_id,
+              metadata_json, status, created_at, updated_at
+       FROM instruments
+       WHERE asset_id IN (${buildInClause(normalizedIds)})
+       ORDER BY updated_at DESC`,
+    )
+    .bind(...normalizedIds)
     .all<InstrumentRecord>();
   return result.results ?? [];
 }

@@ -62,6 +62,10 @@ export function AgentEntryButton({
         onClick={onOpen}
         aria-label={title}
         data-mood={mood}
+        style={{
+          backdropFilter: 'blur(8px) saturate(195%)',
+          WebkitBackdropFilter: 'blur(8px) saturate(195%)',
+        }}
       >
         <span className="liquid-agent-button__halo" aria-hidden="true" />
         <Bot size={24} strokeWidth={2.05} />

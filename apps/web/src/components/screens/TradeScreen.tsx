@@ -271,7 +271,36 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
   }
 
   function handleSearchSelect(item: MarketSearchResult): void {
-    onOpenMarketDetail('stock', item.id);
+    if (item.marketType === 'spot') {
+      const chain = item.chain?.trim();
+      const contract = item.contract?.trim();
+      if (!chain || contract == null) return;
+      onOpenToken(
+        {
+          id: item.id,
+          asset_id: item.asset_id ?? item.id,
+          instrument_id: item.instrument_id,
+          chain_asset_id: buildChainAssetId(chain, contract),
+          chain,
+          contract,
+          symbol: item.symbol,
+          name: item.name,
+          image: item.image,
+          current_price: item.currentPrice,
+          market_cap_rank: null,
+          market_cap: null,
+          price_change_percentage_24h: item.change24h,
+          turnover_24h: item.volume24h,
+          risk_level: null,
+        },
+        'search',
+      );
+      return;
+    }
+
+    const itemId = item.itemId?.trim() || item.instrument_id?.trim() || item.id;
+    if (!itemId) return;
+    onOpenMarketDetail(item.marketType, itemId);
   }
 
   function toDetailItemId(item: { id: string; instrument_id?: string }): string {

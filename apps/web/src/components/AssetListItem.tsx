@@ -5,7 +5,9 @@ type AssetListItemProps = {
   onClick?: () => void;
   leftIcon?: ReactNode;
   leftPrimary?: ReactNode;
+  leftPrimaryClassName?: string;
   leftSecondary?: ReactNode;
+  leftSecondaryClassName?: string;
   rightPrimary?: ReactNode;
   rightSecondary?: ReactNode;
 };
@@ -15,7 +17,9 @@ export function AssetListItem({
   onClick,
   leftIcon,
   leftPrimary,
+  leftPrimaryClassName = '',
   leftSecondary,
+  leftSecondaryClassName = '',
   rightPrimary,
   rightSecondary,
 }: AssetListItemProps) {
@@ -36,12 +40,16 @@ export function AssetListItem({
             {hasLeftText ? (
               <div className="min-w-0">
                 {leftPrimary ? (
-                  <p className="m-0 truncate text-base font-semibold">
+                  <p className={['m-0 truncate text-base font-semibold', leftPrimaryClassName].filter(Boolean).join(' ')}>
                     {leftPrimary}
                   </p>
                 ) : null}
                 {leftSecondary ? (
-                  <p className="m-0 truncate text-sm text-base-content/60">
+                  <p
+                    className={['m-0 truncate text-sm text-base-content/60', leftSecondaryClassName]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
                     {leftSecondary}
                   </p>
                 ) : null}

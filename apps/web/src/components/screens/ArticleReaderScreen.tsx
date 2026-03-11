@@ -4,17 +4,19 @@ import { ArrowLeft, Bookmark, Heart, Pause, Play, Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   getAgentArticleDetail,
-  getTopMarketAssets,
   ingestAgentEvent,
+  type AgentArticleRelatedAsset,
   type TopMarketAsset,
 } from '../../api';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { useToast } from '../../contexts/ToastContext';
+import type { TradeMarketDetailType } from '../../utils/tradeMarketDetail';
 
 type ArticleReaderScreenProps = {
   articleId: string;
   onBack: () => void;
   onOpenToken?: (chain: string, contract: string, tokenPreview?: TopMarketAsset) => void;
+  onOpenMarketDetail?: (marketType: TradeMarketDetailType, itemId: string) => void;
 };
 
 type ArticleEngagement = {
@@ -26,6 +28,8 @@ type RelatedAssetPill = {
   symbol: string;
   name: string;
   priceChangePct: number | null;
+  marketType: 'spot' | 'perp' | 'prediction' | null;
+  marketItemId: string | null;
   chain: string | null;
   contract: string | null;
   clickable: boolean;
@@ -57,6 +61,11 @@ const DEFAULT_TOKEN_ROUTE_BY_SYMBOL: Record<string, { chain: string; contract: s
     chain: 'bnb',
     contract: 'native',
     name: 'BNB',
+  },
+  SOL: {
+    chain: 'sol',
+    contract: 'native',
+    name: 'Solana',
   },
   LEO: {
     chain: 'eth',
@@ -110,61 +119,38 @@ function formatPct(value: number | null | undefined): string {
   return `${sign}${numeric.toFixed(2)}%`;
 }
 
-function normalizeRoutableTokenContract(contract: string): string | null {
-  const normalized = contract.trim().toLowerCase();
-  if (!normalized || normalized === 'native') return 'native';
+function normalizeRoutableTokenContract(chain: string, contract: string): string | null {
+  const trimmed = contract.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.toLowerCase();
+  if (normalized === 'native') return 'native';
+  if (chain === 'sol') return trimmed;
   if (/^0x[a-f0-9]{40}$/.test(normalized)) return normalized;
   return null;
 }
 
-function extractRelatedSymbols(tags: string[] | undefined, markdown: string): string[] {
-  const collected: string[] = [];
-
-  for (const tag of tags ?? []) {
-    if (!tag.startsWith('asset:')) continue;
-    const symbol = normalizeSymbol(tag.slice('asset:'.length));
-    if (symbol) collected.push(symbol);
-  }
-
-  if (collected.length === 0) {
-    const section = markdown.match(/##\s*Related Assets\s*([\s\S]*?)(?:\n##\s+|$)/i);
-    const body = section?.[1] ?? '';
-    const lines = body.split('\n');
-    for (const line of lines) {
-      const bullet = line.match(/^\s*[-*+]\s+([A-Za-z0-9._-]{2,24})/);
-      if (!bullet?.[1]) continue;
-      const symbol = normalizeSymbol(bullet[1]);
-      if (symbol) collected.push(symbol);
-    }
-  }
-
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const symbol of collected) {
-    if (!symbol || seen.has(symbol)) continue;
-    seen.add(symbol);
-    deduped.push(symbol);
-  }
-  return deduped.slice(0, 8);
+function toTokenPreview(asset: AgentArticleRelatedAsset, chain: string, contract: string): TopMarketAsset | null {
+  if (!asset.asset_id) return null;
+  return {
+    id: asset.asset_id,
+    asset_id: asset.asset_id,
+    instrument_id: asset.instrument_id ?? undefined,
+    chain_asset_id: `${chain}:${contract}`,
+    chain,
+    contract,
+    symbol: asset.symbol,
+    name: asset.name,
+    image: asset.image,
+    current_price: null,
+    market_cap_rank: null,
+    market_cap: null,
+    price_change_percentage_24h: asset.price_change_percentage_24h,
+    turnover_24h: null,
+    risk_level: null,
+  };
 }
 
-function hasTokenRoute(asset: TopMarketAsset | null | undefined): boolean {
-  if (!asset) return false;
-  return Boolean(asset.chain?.trim() && normalizeRoutableTokenContract(asset.contract ?? ''));
-}
-
-function shouldPreferAsset(candidate: TopMarketAsset, current: TopMarketAsset): boolean {
-  const candidateHasRoute = hasTokenRoute(candidate);
-  const currentHasRoute = hasTokenRoute(current);
-  if (candidateHasRoute && !currentHasRoute) return true;
-  if (!candidateHasRoute && currentHasRoute) return false;
-  const candidateRank = Number(candidate.market_cap_rank ?? Number.MAX_SAFE_INTEGER);
-  const currentRank = Number(current.market_cap_rank ?? Number.MAX_SAFE_INTEGER);
-  if (candidateRank !== currentRank) return candidateRank < currentRank;
-  return false;
-}
-
-export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleReaderScreenProps) {
+export function ArticleReaderScreen({ articleId, onBack, onOpenToken, onOpenMarketDetail }: ArticleReaderScreenProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess, showInfo } = useToast();
   const [engagementMap, setEngagementMap] = useState<Record<string, ArticleEngagement>>(() => readEngagementMap());
@@ -182,53 +168,15 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
 
   const engagement = engagementMap[articleId] ?? { liked: false, favorited: false };
   const speakText = useMemo(() => (data ? stripMarkdown(data.markdown) : ''), [data]);
-  const relatedSymbols = useMemo(
-    () => (data ? extractRelatedSymbols(data.article.tags, data.markdown) : []),
-    [data],
-  );
-
-  const { data: relatedTopAssets } = useQuery({
-    queryKey: ['top-assets', 'marketCap', 'auto', 120],
-    queryFn: () =>
-      getTopMarketAssets({
-        name: 'marketCap',
-        source: 'auto',
-        limit: 120,
-      }),
-    enabled: relatedSymbols.length > 0,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
 
   const relatedPills = useMemo<RelatedAssetPill[]>(() => {
-    if (!data || relatedSymbols.length === 0) return [];
+    if (!data || data.relatedAssets.length === 0) return [];
 
-    const marketAssets = [...(relatedTopAssets ?? [])];
-
-    const bySymbol = new Map<string, TopMarketAsset | null>();
-    for (const asset of marketAssets) {
+    return data.relatedAssets.map((asset) => {
       const symbol = normalizeSymbol(asset.symbol);
-      if (!symbol) continue;
-      const existing = bySymbol.get(symbol);
-      if (existing === undefined) {
-        bySymbol.set(symbol, asset);
-        continue;
-      }
-      if (!existing) continue;
-      if (existing.asset_id !== asset.asset_id) {
-        bySymbol.set(symbol, null);
-        continue;
-      }
-      if (shouldPreferAsset(asset, existing)) {
-        bySymbol.set(symbol, asset);
-      }
-    }
-
-    return relatedSymbols.map((symbol) => {
-      const matched = bySymbol.get(symbol) ?? undefined;
-      const marketChain = matched?.chain?.trim() ?? '';
-      const marketContract = matched?.contract?.trim() ?? '';
-      const normalizedRouteContract = normalizeRoutableTokenContract(marketContract);
+      const marketChain = asset.chain?.trim().toLowerCase() ?? '';
+      const marketContract = asset.contract?.trim() ?? '';
+      const normalizedRouteContract = normalizeRoutableTokenContract(marketChain, marketContract);
       const routeFromMarket = marketChain && normalizedRouteContract
         ? {
             chain: marketChain,
@@ -239,15 +187,19 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
       const route = routeFromMarket ?? fallbackRoute;
       return {
         symbol,
-        name: matched?.name?.trim() || fallbackRoute?.name || symbol,
-        priceChangePct: matched?.price_change_percentage_24h ?? null,
+        marketType: asset.market_type,
+        marketItemId: asset.market_item_id,
+        name: asset.name?.trim() || fallbackRoute?.name || symbol,
+        priceChangePct: asset.price_change_percentage_24h ?? null,
         chain: route?.chain ?? null,
         contract: route?.contract ?? null,
-        clickable: Boolean(route?.chain && route?.contract && onOpenToken),
-        tokenPreview: routeFromMarket ? matched ?? null : null,
+        clickable: asset.market_type === 'spot'
+          ? Boolean(route?.chain && route?.contract && onOpenToken)
+          : Boolean(asset.market_item_id && asset.market_type && onOpenMarketDetail),
+        tokenPreview: route?.chain && route?.contract ? toTokenPreview(asset, route.chain, route.contract) : null,
       };
     });
-  }, [data, onOpenToken, relatedSymbols, relatedTopAssets]);
+  }, [data, onOpenMarketDetail, onOpenToken]);
 
   const hasRelatedPanel = relatedPills.length > 0;
 
@@ -353,7 +305,19 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken }: ArticleR
   }
 
   function handleOpenRelatedAsset(asset: RelatedAssetPill) {
-    if (!asset.clickable || !asset.chain || !asset.contract || !onOpenToken) return;
+    if (!asset.clickable) return;
+    if (asset.marketType === 'perp' || asset.marketType === 'prediction') {
+      if (!asset.marketItemId || !onOpenMarketDetail) return;
+      ingestAgentEvent('asset_viewed', {
+        asset: asset.symbol,
+        marketType: asset.marketType,
+        itemId: asset.marketItemId,
+        source: 'article_related',
+      }).catch(() => undefined);
+      onOpenMarketDetail(asset.marketType, asset.marketItemId);
+      return;
+    }
+    if (!asset.chain || !asset.contract || !onOpenToken) return;
     ingestAgentEvent('asset_viewed', {
       asset: asset.symbol,
       chain: asset.chain,
