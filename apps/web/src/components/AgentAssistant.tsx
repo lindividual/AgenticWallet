@@ -1,26 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, ChevronDown, Send, X } from 'lucide-react';
-import { agentChat, ingestAgentEvent, type AgentChatMessage } from '../api';
-import { useIdleDetector } from '../hooks/useIdleDetector';
-
-export type PageContext = {
-  page: 'home' | 'trade' | 'wallet' | 'article' | 'token' | 'market';
-  articleId?: string;
-  tokenChain?: string;
-  tokenContract?: string;
-  tokenSymbol?: string;
-  marketType?: string;
-  marketItemId?: string;
-};
+import { Bot, ChevronDown, Send } from 'lucide-react';
+import { agentChat, type AgentChatMessage } from '../api';
+import type { AgentNudge, PageContext } from '../agent/types';
 
 type AgentAssistantProps = {
+  entryNudge?: AgentNudge | null;
+  onClose?: () => void;
   pageContext: PageContext;
+  openRequestKey?: number;
 };
 
 type ChatMessage = AgentChatMessage & { id: string };
 
-const IDLE_TIMEOUT_MS = 5000;
 const HELP_PROMPT_KEYS: Record<string, string> = {
   home: 'agent.helpPromptHome',
   trade: 'agent.helpPromptTrade',
@@ -34,53 +26,52 @@ function generateSessionId(): string {
   return `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function AgentAssistant({ pageContext }: AgentAssistantProps) {
-  const { t } = useTranslation();
-  const [phase, setPhase] = useState<'hidden' | 'bubble' | 'chat'>('hidden');
-  const [dismissedPages, setDismissedPages] = useState<Set<string>>(new Set());
+export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRequestKey = 0 }: AgentAssistantProps) {
+  const { i18n, t } = useTranslation();
+  const [phase, setPhase] = useState<'closed' | 'panel' | 'chat'>('closed');
+  const [activeNudge, setActiveNudge] = useState<AgentNudge | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [sessionId] = useState(generateSessionId);
-  const [bubbleExiting, setBubbleExiting] = useState(false);
+  const handledOpenRequestKeyRef = useRef(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const dwellReportedRef = useRef<string | null>(null);
 
   const currentPageKey = pageContext.page;
-  const isDismissed = dismissedPages.has(currentPageKey);
-  const shouldDetect = phase === 'hidden' && !isDismissed;
-  const isIdle = useIdleDetector(IDLE_TIMEOUT_MS, shouldDetect);
+
+  const panelSupportText = useCallback(
+    (nudge: AgentNudge): string => {
+      const locale = (i18n.resolvedLanguage ?? i18n.language ?? '').trim().toLowerCase();
+      const pack = locale.startsWith('zh') ? 'zh' : locale.startsWith('ar') ? 'ar' : 'en';
+      const text = {
+        zh: {
+          comparison_intent: '我可以从波动、流动性和风险角度，快速对比你刚刚查看的几个标的。',
+          article_deep_read: '我可以先把文章压缩成最值得关注的重点，再告诉你下一步看哪里。',
+          trade_form_struggle: '我可以先帮你检查交易参数、滑点和潜在错误，再决定是否继续。',
+        },
+        en: {
+          comparison_intent: 'I can compare the assets you just viewed across volatility, liquidity, and risk.',
+          article_deep_read: 'I can condense the article into the most actionable takeaways before you continue.',
+          trade_form_struggle: 'I can review the trade inputs, slippage, and possible mistakes before you continue.',
+        },
+        ar: {
+          comparison_intent: 'يمكنني مقارنة الأصول التي شاهدتها للتو من ناحية التقلب والسيولة والمخاطر.',
+          article_deep_read: 'يمكنني تلخيص المقال إلى أهم النقاط العملية قبل أن تواصل القراءة.',
+          trade_form_struggle: 'يمكنني مراجعة مدخلات الصفقة والانزلاق السعري والأخطاء المحتملة قبل أن تتابع.',
+        },
+      } as const;
+      return text[pack][nudge.type];
+    },
+    [i18n.language, i18n.resolvedLanguage],
+  );
 
   useEffect(() => {
-    if (isIdle && phase === 'hidden' && !isDismissed) {
-      setPhase('bubble');
-
-      if (dwellReportedRef.current !== currentPageKey) {
-        dwellReportedRef.current = currentPageKey;
-        const payload: Record<string, unknown> = { page: currentPageKey };
-        if (pageContext.tokenSymbol) payload.symbol = pageContext.tokenSymbol;
-        if (pageContext.tokenChain) payload.chain = pageContext.tokenChain;
-        if (pageContext.tokenContract) payload.contract = pageContext.tokenContract;
-        if (pageContext.articleId) payload.articleId = pageContext.articleId;
-        if (pageContext.marketType) payload.marketType = pageContext.marketType;
-        if (pageContext.marketItemId) payload.marketItemId = pageContext.marketItemId;
-        ingestAgentEvent('page_dwell', payload).catch(() => undefined);
-      }
-    }
-  }, [isIdle, phase, isDismissed, currentPageKey, pageContext]);
-
-  useEffect(() => {
-    if (phase === 'bubble' || phase === 'hidden') {
-      setMessages([]);
-      setInput('');
-      setLoading(false);
-    }
-  }, [currentPageKey, phase]);
-
-  useEffect(() => {
-    setPhase('hidden');
-    setBubbleExiting(false);
+    setPhase('closed');
+    setActiveNudge(null);
+    setMessages([]);
+    setInput('');
+    setLoading(false);
   }, [currentPageKey]);
 
   useEffect(() => {
@@ -93,18 +84,9 @@ export function AgentAssistant({ pageContext }: AgentAssistantProps) {
     }
   }, [phase]);
 
-  const handleDismiss = useCallback(() => {
-    setBubbleExiting(true);
-    setTimeout(() => {
-      setPhase('hidden');
-      setBubbleExiting(false);
-      setDismissedPages((prev) => new Set(prev).add(currentPageKey));
-    }, 200);
-  }, [currentPageKey]);
-
-  const handleOpenChat = useCallback(() => {
+  const openGenericChat = useCallback(() => {
     setPhase('chat');
-    setBubbleExiting(false);
+    setActiveNudge(null);
     const helpPrompt = t(HELP_PROMPT_KEYS[currentPageKey] ?? HELP_PROMPT_KEYS.home);
     setMessages([
       {
@@ -115,10 +97,102 @@ export function AgentAssistant({ pageContext }: AgentAssistantProps) {
     ]);
   }, [currentPageKey, t]);
 
+  const buildPageContextPayload = useCallback((): Record<string, string> => {
+    const pageCtx: Record<string, string> = {};
+    if (pageContext.tokenSymbol) pageCtx.symbol = pageContext.tokenSymbol;
+    if (pageContext.tokenChain) pageCtx.chain = pageContext.tokenChain;
+    if (pageContext.tokenContract) pageCtx.contract = pageContext.tokenContract;
+    if (pageContext.articleId) pageCtx.articleId = pageContext.articleId;
+    if (pageContext.marketType) pageCtx.marketType = pageContext.marketType;
+    if (pageContext.marketItemId) pageCtx.marketItemId = pageContext.marketItemId;
+    return pageCtx;
+  }, [pageContext]);
+
+  const requestReply = useCallback(
+    async (apiMessages: AgentChatMessage[]) => {
+      const result = await agentChat({
+        sessionId,
+        page: currentPageKey,
+        pageContext: buildPageContextPayload(),
+        messages: apiMessages,
+      });
+      return result.reply;
+    },
+    [buildPageContextPayload, currentPageKey, sessionId],
+  );
+
+  const openTaskChat = useCallback(
+    async (prompt: string, intro: string) => {
+      if (loading) return;
+
+      setPhase('chat');
+      const seededMessages: ChatMessage[] = [
+        {
+          id: `intro_${Date.now()}`,
+          role: 'assistant',
+          content: intro,
+        },
+        {
+          id: `user_${Date.now() + 1}`,
+          role: 'user',
+          content: prompt,
+        },
+      ];
+      setMessages(seededMessages);
+      setInput('');
+      setLoading(true);
+
+      try {
+        const reply = await requestReply(
+          seededMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        );
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `assistant_${Date.now()}`,
+            role: 'assistant',
+            content: reply,
+          },
+        ]);
+      } catch {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `error_${Date.now()}`,
+            role: 'assistant',
+            content: t('agent.chatError'),
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loading, requestReply, t],
+  );
+
+  useEffect(() => {
+    if (openRequestKey <= handledOpenRequestKeyRef.current) return;
+    handledOpenRequestKeyRef.current = openRequestKey;
+    setMessages([]);
+    setInput('');
+    setLoading(false);
+    if (entryNudge) {
+      setActiveNudge(entryNudge);
+      setPhase('panel');
+      return;
+    }
+    openGenericChat();
+  }, [entryNudge, openGenericChat, openRequestKey]);
+
   const handleCloseChat = useCallback(() => {
-    setPhase('hidden');
-    setDismissedPages((prev) => new Set(prev).add(currentPageKey));
-  }, [currentPageKey]);
+    setPhase('closed');
+    setActiveNudge(null);
+    setInput('');
+    onClose?.();
+  }, [onClose]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -139,24 +213,14 @@ export function AgentAssistant({ pageContext }: AgentAssistantProps) {
         role: m.role,
         content: m.content,
       }));
-      const pageCtx: Record<string, string> = {};
-      if (pageContext.tokenSymbol) pageCtx.symbol = pageContext.tokenSymbol;
-      if (pageContext.tokenChain) pageCtx.chain = pageContext.tokenChain;
-      if (pageContext.marketType) pageCtx.marketType = pageContext.marketType;
-
-      const result = await agentChat({
-        sessionId,
-        page: currentPageKey,
-        pageContext: pageCtx,
-        messages: apiMessages,
-      });
+      const reply = await requestReply(apiMessages);
 
       setMessages((prev) => [
         ...prev,
         {
           id: `assistant_${Date.now()}`,
           role: 'assistant',
-          content: result.reply,
+          content: reply,
         },
       ]);
     } catch {
@@ -171,7 +235,7 @@ export function AgentAssistant({ pageContext }: AgentAssistantProps) {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, sessionId, currentPageKey, pageContext, t]);
+  }, [input, loading, messages, requestReply, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -183,39 +247,51 @@ export function AgentAssistant({ pageContext }: AgentAssistantProps) {
     [handleSend],
   );
 
-  if (phase === 'hidden') return null;
+  if (phase === 'closed') return null;
 
-  const helpPromptKey = HELP_PROMPT_KEYS[currentPageKey] ?? HELP_PROMPT_KEYS.home;
-  const helpPrompt = t(helpPromptKey);
-
-  if (phase === 'bubble') {
+  if (phase === 'panel' && activeNudge) {
     return (
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40">
-        <div
-          className={`pointer-events-auto mx-auto w-full max-w-105 px-4 ${bubbleExiting ? 'agent-bubble-exit' : 'agent-bubble-enter'}`}
-          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 6rem)' }}
-        >
-          <div className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-lg">
-            <div className="mb-3 flex items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary">
-                <Bot size={18} className="text-primary-content" />
+      <div className="fixed inset-0 z-50 flex flex-col agent-chat-enter">
+        <div className="flex-1 bg-black/20" onClick={handleCloseChat} />
+        <div className="mx-auto flex w-full max-w-105 flex-col bg-base-100 shadow-2xl" style={{ maxHeight: '70vh' }}>
+          <div className="flex items-center justify-between border-b border-base-300 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
+                <Bot size={14} className="text-primary-content" />
               </div>
-              <p className="pt-1 text-sm leading-relaxed text-base-content">
-                {helpPrompt}
-              </p>
+              <span className="text-sm font-semibold">{t('agent.chatTitle')}</span>
             </div>
-            <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm btn-circle h-8 w-8 min-h-0 rounded-full"
+              onClick={handleCloseChat}
+              aria-label={t('agent.chatClose')}
+            >
+              <ChevronDown size={18} />
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-4 px-4 py-4">
+            <div className="rounded-3xl border border-base-300 bg-base-200/70 p-4">
+              <p className="m-0 text-lg font-semibold">{activeNudge.title}</p>
+              <p className="m-0 mt-2 text-sm leading-relaxed text-base-content/75">{activeNudge.message}</p>
+            </div>
+            <div className="rounded-2xl border border-base-300 bg-base-100 p-4">
+              <p className="m-0 text-sm font-medium text-base-content/70">{t('agent.chatTitle')}</p>
+              <p className="m-0 mt-2 text-sm leading-relaxed text-base-content/80">{panelSupportText(activeNudge)}</p>
+            </div>
+            <div className="flex gap-2">
               <button
                 type="button"
-                className="btn btn-ghost btn-sm h-8 min-h-0 rounded-lg text-xs"
-                onClick={handleDismiss}
+                className="btn btn-primary flex-1"
+                onClick={() => void openTaskChat(activeNudge.presetPrompt, activeNudge.message)}
               >
-                {t('agent.dismiss')}
+                {activeNudge.actionLabel}
               </button>
               <button
                 type="button"
-                className="btn btn-primary btn-sm h-8 min-h-0 rounded-lg text-xs"
-                onClick={handleOpenChat}
+                className="btn btn-outline flex-1"
+                onClick={openGenericChat}
               >
                 {t('agent.chatAction')}
               </button>

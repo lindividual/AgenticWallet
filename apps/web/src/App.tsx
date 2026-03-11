@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCanGoBack, useLocation, useMatch, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { AgentAssistant, type PageContext } from './components/AgentAssistant';
+import { AgentAssistant } from './components/AgentAssistant';
+import type { PageContext } from './agent/types';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
@@ -13,6 +14,7 @@ import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletAssetDetailScreen } from './components/screens/WalletAssetDetailScreen';
 import { WalletScreen } from './components/screens/WalletScreen';
 import { setAgentPreferredLocale, type TopMarketAsset } from './api';
+import { useAgentIntervention } from './hooks/useAgentIntervention';
 import { useWalletApp } from './hooks/useWalletApp';
 import { decodeTokenContractParam, encodeTokenContractParam } from './utils/tokenRoute';
 import {
@@ -78,6 +80,7 @@ export function App() {
       : null,
   );
   const [isMarketExiting, setIsMarketExiting] = useState(false);
+  const [agentOpenRequestKey, setAgentOpenRequestKey] = useState(0);
   const marketExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     auth,
@@ -355,13 +358,19 @@ export function App() {
         : isWalletAssetRoute
           ? { page: 'wallet' }
         : { page: activeTab };
-  const showBottomTabBar = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
+  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
+  const intervention = useAgentIntervention(agentPageContext, i18n.resolvedLanguage ?? i18n.language ?? null);
+
+  function handleAgentOpen() {
+    intervention.handleEntryOpen();
+    setAgentOpenRequestKey((value) => value + 1);
+  }
 
   return (
     <>
       <div
         className="min-h-screen overflow-x-hidden"
-        style={showBottomTabBar ? { paddingBottom: 'env(safe-area-inset-bottom, 0px)' } : undefined}
+        style={showBottomTabs ? { paddingBottom: 'env(safe-area-inset-bottom, 0px)' } : undefined}
       >
         {activeArticleId ? (
           <div className={isArticleExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
@@ -396,10 +405,22 @@ export function App() {
           renderBaseScreen()
         )}
       </div>
-      {showBottomTabBar && (
-        <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />
-      )}
-      <AgentAssistant pageContext={agentPageContext} />
+      <BottomTabBar
+        activeTab={activeTab}
+        agentBubbleMessage={intervention.bubbleMessage}
+        agentEntryState={intervention.entryState}
+        agentMood={intervention.mood}
+        onAgentBubbleDismiss={intervention.dismissActiveNudge}
+        onTabChange={handleTabChange}
+        onAgentOpen={handleAgentOpen}
+        showTabs={showBottomTabs}
+      />
+      <AgentAssistant
+        entryNudge={intervention.activeNudge}
+        onClose={intervention.handleAssistantClosed}
+        pageContext={agentPageContext}
+        openRequestKey={agentOpenRequestKey}
+      />
     </>
   );
 }

@@ -358,7 +358,9 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
   const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
   const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isTokenDetailLoading);
+  const hasWatchlistAssets = (watchlistData?.assets?.length ?? 0) > 0;
   const shouldShowWatchlistSkeleton = watchlistItems.length === 0 && isWatchlistLoading;
+  const shouldRenderWatchlistSection = isWatchlistLoading || hasWatchlistAssets;
   const dailyArticleToOpen = daily ?? lastReadyDaily;
 
   const dailySummary = daily
@@ -456,96 +458,98 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         )}
       </section>
 
-      <section className="bg-base-100 mt-2">
-        <h2 className="m-0 text-lg font-bold">{t('home.watchlistTitle')}</h2>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {(['crypto', 'perps', 'stock', 'prediction'] as WatchlistCategory[]).map((category) => (
-            <button
-              key={category}
-              type="button"
-              className={`btn btn-xs border-0 px-3 ${watchlistCategory === category ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setWatchlistCategory(category)}
-            >
-              {t(`home.watchlistCategory.${category}`)}
-            </button>
-          ))}
-        </div>
-        <div className="mt-3 flex flex-col gap-1">
-          {shouldShowWatchlistSkeleton && (
-            <>
-              {Array.from({ length: 3 }).map((_, index) => (
-                <SkeletonAssetListItem key={`home-watch-skeleton-${index}`} className="bg-base-100 py-3" />
-              ))}
-            </>
-          )}
-          {!shouldShowWatchlistSkeleton && watchlistItems.length === 0 && (
-            <p className="m-0 text-base text-base-content/70">{t('home.watchlistEmpty')}</p>
-          )}
-          {watchlistItems.map((asset) => {
-            const content = (
-              <AssetListItem
-                className="bg-base-100 py-3"
-                leftIcon={
-                  asset.displayImage ? (
-                    <CachedIconImage
-                      src={asset.displayImage}
-                      alt={asset.displaySymbol}
-                      className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                      loading="lazy"
-                      fallback={(
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                          {getRecommendationInitial(asset.symbol || asset.name)}
-                        </div>
+      {shouldRenderWatchlistSection && (
+        <section className="bg-base-100 mt-2">
+          <h2 className="m-0 text-lg font-bold">{t('home.watchlistTitle')}</h2>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(['crypto', 'perps', 'stock', 'prediction'] as WatchlistCategory[]).map((category) => (
+              <button
+                key={category}
+                type="button"
+                className={`btn btn-xs border-0 px-3 ${watchlistCategory === category ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setWatchlistCategory(category)}
+              >
+                {t(`home.watchlistCategory.${category}`)}
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-col gap-1">
+            {shouldShowWatchlistSkeleton && (
+              <>
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <SkeletonAssetListItem key={`home-watch-skeleton-${index}`} className="bg-base-100 py-3" />
+                ))}
+              </>
+            )}
+            {!shouldShowWatchlistSkeleton && watchlistItems.length === 0 && (
+              <p className="m-0 text-base text-base-content/70">{t('home.watchlistEmpty')}</p>
+            )}
+            {watchlistItems.map((asset) => {
+              const content = (
+                <AssetListItem
+                  className="bg-base-100 py-3"
+                  leftIcon={
+                    asset.displayImage ? (
+                      <CachedIconImage
+                        src={asset.displayImage}
+                        alt={asset.displaySymbol}
+                        className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                        loading="lazy"
+                        fallback={(
+                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                            {getRecommendationInitial(asset.symbol || asset.name)}
+                          </div>
+                        )}
+                      />
+                    ) : (
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
+                        {getRecommendationInitial(asset.displaySymbol || asset.displayName)}
+                      </div>
+                    )
+                  }
+                  leftPrimary={asset.displaySymbol}
+                  leftSecondary={asset.displayName}
+                  rightSecondary={formatPct(asset.displayChange24h)}
+                />
+              );
+
+              if (isOpenableCryptoWatch(asset)) {
+                return (
+                  <button
+                    key={asset.id}
+                    type="button"
+                    className="w-full cursor-pointer text-start transition-colors hover:bg-base-200/60"
+                    onClick={() =>
+                      onOpenToken(
+                        asset.tokenPreview?.chain ?? asset.chain,
+                        asset.tokenPreview?.contract ?? asset.contract,
+                        asset.tokenPreview ?? undefined,
                       )}
-                    />
-                  ) : (
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                      {getRecommendationInitial(asset.displaySymbol || asset.displayName)}
-                    </div>
-                  )
-                }
-                leftPrimary={asset.displaySymbol}
-                leftSecondary={asset.displayName}
-                rightSecondary={formatPct(asset.displayChange24h)}
-              />
-            );
+                  >
+                    {content}
+                  </button>
+                );
+              }
 
-            if (isOpenableCryptoWatch(asset)) {
-              return (
-                <button
-                  key={asset.id}
-                  type="button"
-                  className="w-full cursor-pointer text-start transition-colors hover:bg-base-200/60"
-                  onClick={() =>
-                    onOpenToken(
-                      asset.tokenPreview?.chain ?? asset.chain,
-                      asset.tokenPreview?.contract ?? asset.contract,
-                      asset.tokenPreview ?? undefined,
-                    )}
-                >
-                  {content}
-                </button>
-              );
-            }
+              if (asset.external_url) {
+                return (
+                  <a
+                    key={asset.id}
+                    href={asset.external_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-inherit no-underline"
+                  >
+                    {content}
+                  </a>
+                );
+              }
 
-            if (asset.external_url) {
-              return (
-                <a
-                  key={asset.id}
-                  href={asset.external_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-inherit no-underline"
-                >
-                  {content}
-                </a>
-              );
-            }
-
-            return <div key={asset.id}>{content}</div>;
-          })}
-        </div>
-      </section>
+              return <div key={asset.id}>{content}</div>;
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="bg-base-100 mt-2">
         <h2 className="m-0 text-lg font-bold">{t('home.assetRecommendationsTitle')}</h2>
@@ -630,17 +634,15 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
           )}
           {!isTopicLoading && topics.length === 0 && <p className="m-0 text-base text-base-content/70">{t('home.emptyTopics')}</p>}
           {topics.map((topic) => (
-            <article key={topic.id} className="border border-base-300 bg-base-200 p-3">
+            <button
+              key={topic.id}
+              type="button"
+              className="w-full cursor-pointer border border-base-300 bg-base-200 p-3 text-start transition-colors hover:bg-base-300/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              onClick={() => onOpenArticle(topic.id)}
+            >
               <p className="m-0 text-base font-semibold">{topic.title}</p>
               <p className="m-0 mt-1 text-sm text-base-content/70">{topic.summary}</p>
-              <button
-                type="button"
-                className="btn btn-outline btn-sm mt-3 h-8 min-h-0 px-3"
-                onClick={() => onOpenArticle(topic.id)}
-              >
-                {t('home.readArticle')}
-              </button>
-            </article>
+            </button>
           ))}
         </div>
       </section>

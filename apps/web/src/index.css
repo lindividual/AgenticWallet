@@ -11,11 +11,11 @@
 :where(:root), [data-theme="light"] {
   --color-primary: oklch(0% 0 0);
   --color-primary-content: oklch(100% 0 0);
-  --liquid-tab-shell-bg: rgba(252, 253, 255, 0.18);
+  --liquid-tab-shell-bg: rgba(252, 253, 255, 0.15);
   --liquid-tab-shell-border: rgba(255, 255, 255, 0.72);
   --liquid-tab-shell-shadow: 0 8px 22px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(255, 255, 255, 0.24);
   --liquid-tab-shell-highlight: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.26) 45%, rgba(255, 255, 255, 0.05) 100%);
-  --liquid-tab-button-bg: linear-gradient(180deg, rgba(232, 234, 238, 0.88) 0%, rgba(220, 224, 230, 0.68) 100%);
+  --liquid-tab-button-bg: rgba(226, 229, 234, 0.15);
   --liquid-tab-button-border: rgba(255, 255, 255, 0.58);
   --liquid-tab-button-glow: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.22) 55%, rgba(255, 255, 255, 0) 100%);
   --liquid-tab-label-active: rgba(10, 16, 26, 0.96);
@@ -25,11 +25,11 @@
   :root:not([data-theme]) {
     --color-primary: oklch(100% 0 0);
     --color-primary-content: oklch(0% 0 0);
-    --liquid-tab-shell-bg: rgba(23, 27, 36, 0.18);
+    --liquid-tab-shell-bg: rgba(23, 27, 36, 0.15);
     --liquid-tab-shell-border: rgba(255, 255, 255, 0.14);
     --liquid-tab-shell-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
     --liquid-tab-shell-highlight: linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.06) 45%, rgba(255, 255, 255, 0) 100%);
-    --liquid-tab-button-bg: linear-gradient(180deg, rgba(122, 128, 138, 0.4) 0%, rgba(88, 94, 104, 0.3) 100%);
+    --liquid-tab-button-bg: rgba(96, 102, 112, 0.15);
     --liquid-tab-button-border: rgba(255, 255, 255, 0.12);
     --liquid-tab-button-glow: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.05) 55%, rgba(255, 255, 255, 0) 100%);
     --liquid-tab-label-active: rgba(255, 255, 255, 0.96);
@@ -39,11 +39,11 @@
 [data-theme="dark"] {
   --color-primary: oklch(100% 0 0);
   --color-primary-content: oklch(0% 0 0);
-  --liquid-tab-shell-bg: rgba(23, 27, 36, 0.18);
+  --liquid-tab-shell-bg: rgba(23, 27, 36, 0.15);
   --liquid-tab-shell-border: rgba(255, 255, 255, 0.14);
   --liquid-tab-shell-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
   --liquid-tab-shell-highlight: linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.06) 45%, rgba(255, 255, 255, 0) 100%);
-  --liquid-tab-button-bg: linear-gradient(180deg, rgba(122, 128, 138, 0.4) 0%, rgba(88, 94, 104, 0.3) 100%);
+  --liquid-tab-button-bg: rgba(96, 102, 112, 0.15);
   --liquid-tab-button-border: rgba(255, 255, 255, 0.12);
   --liquid-tab-button-glow: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.05) 55%, rgba(255, 255, 255, 0) 100%);
   --liquid-tab-label-active: rgba(255, 255, 255, 0.96);
@@ -146,24 +146,32 @@
   animation: thinking-pulse 1.4s ease-in-out infinite;
 }
 
+.liquid-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.liquid-tab-bar--solo {
+  justify-content: flex-end;
+}
+
 .liquid-tab-shell {
   position: relative;
   overflow: hidden;
   border-radius: 999px;
-  padding: 0.45rem;
-  isolation: isolate;
-  background: transparent;
+  padding: 0.3rem;
+  background: var(--liquid-tab-shell-bg);
   border: 1px solid var(--liquid-tab-shell-border);
   box-shadow: var(--liquid-tab-shell-shadow);
+  flex: 1 1 auto;
 }
 
 .liquid-tab-shell::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--liquid-tab-shell-bg);
-  backdrop-filter: blur(40px) saturate(185%);
-  -webkit-backdrop-filter: blur(40px) saturate(185%);
+  background: rgba(255, 255, 255, 0.02);
   pointer-events: none;
 }
 
@@ -171,16 +179,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--liquid-tab-shell-highlight);
-  pointer-events: none;
-}
-
-.liquid-tab-grid::before {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
   pointer-events: none;
 }
 
@@ -195,7 +194,7 @@
 .liquid-tab-button {
   position: relative;
   display: flex;
-  min-height: 3.9rem;
+  min-height: 3.65rem;
   width: 100%;
   align-items: center;
   justify-content: center;
@@ -216,7 +215,7 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
   opacity: 0;
   transition: opacity 220ms ease;
 }
@@ -240,7 +239,7 @@
 }
 
 .liquid-tab-button--active {
-  transform: translateY(-2px);
+  transform: none;
   border-color: var(--liquid-tab-button-border);
   background: var(--liquid-tab-button-bg);
   color: var(--liquid-tab-label-active);
@@ -248,7 +247,7 @@
 
 .liquid-tab-button--active::before,
 .liquid-tab-button--active::after {
-  opacity: 1;
+  opacity: 0;
 }
 
 .liquid-tab-button__inner {
@@ -257,7 +256,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0;
   line-height: 1;
 }
 
@@ -275,6 +274,181 @@
   letter-spacing: 0.01em;
 }
 
+.liquid-agent-button {
+  position: relative;
+  width: 4.25rem;
+  height: 4.25rem;
+  min-width: 4.25rem;
+  min-height: 4.25rem;
+  flex: 0 0 4.25rem;
+  align-self: center;
+  border-radius: 999px;
+  border: 1px solid var(--liquid-tab-shell-border);
+  background: var(--liquid-tab-shell-bg);
+  color: var(--liquid-tab-label-active);
+  box-shadow: var(--liquid-tab-shell-shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    transform 220ms ease,
+    background-color 220ms ease,
+    border-color 220ms ease,
+    box-shadow 220ms ease;
+  overflow: visible;
+}
+
+.liquid-agent-button__halo {
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 30% 30%, rgba(80, 166, 255, 0.34), rgba(80, 166, 255, 0) 70%);
+  opacity: 0;
+  transition: opacity 220ms ease, transform 220ms ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.liquid-agent-button__badge {
+  position: absolute;
+  top: 0.62rem;
+  right: 0.62rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.88);
+  color: rgb(28, 43, 56);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+  z-index: 1;
+}
+
+.liquid-agent-button:hover {
+  transform: translateY(-1px);
+}
+
+.liquid-agent-button--observing .liquid-agent-button__halo,
+.liquid-agent-button--thinking .liquid-agent-button__halo,
+.liquid-agent-button--nudging .liquid-agent-button__halo,
+.liquid-agent-button--engaged .liquid-agent-button__halo {
+  opacity: 1;
+}
+
+@keyframes agent-entry-breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.48;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.88;
+  }
+}
+
+@keyframes agent-entry-pop {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  30% {
+    transform: translateY(-3px) scale(1.04);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+.liquid-agent-button--observing .liquid-agent-button__halo {
+  animation: agent-entry-breathe 2.8s ease-in-out infinite;
+}
+
+.liquid-agent-button--thinking .liquid-agent-button__halo {
+  animation: agent-entry-breathe 1.7s ease-in-out infinite;
+}
+
+.liquid-agent-button--thinking {
+  transform: translateY(-1px);
+}
+
+.liquid-agent-button--nudging {
+  transform: translateY(-2px);
+  animation: agent-entry-pop 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.liquid-agent-button--engaged {
+  border-color: rgba(80, 166, 255, 0.44);
+  box-shadow: 0 14px 28px rgba(32, 96, 180, 0.18), var(--liquid-tab-shell-shadow);
+}
+
+.liquid-agent-button--cooldown .liquid-agent-button__halo {
+  opacity: 0;
+}
+
+.liquid-agent-button--mood-warning .liquid-agent-button__halo {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 164, 63, 0.4), rgba(255, 164, 63, 0) 70%);
+}
+
+.liquid-agent-button--mood-warning .liquid-agent-button__badge {
+  background: rgba(255, 243, 223, 0.96);
+  color: rgb(145, 73, 0);
+}
+
+.agent-entry-shell {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.agent-entry-shell--solo {
+  margin-left: auto;
+}
+
+.agent-entry-bubble {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.65rem);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: min(18rem, calc(100vw - 2rem));
+}
+
+.agent-entry-bubble-enter {
+  animation: agent-bubble-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.agent-entry-bubble__body {
+  border: 1px solid rgba(220, 226, 233, 0.96);
+  background: rgba(255, 255, 255, 0.95);
+  color: inherit;
+  border-radius: 999px;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+  padding: 0.65rem 0.9rem;
+  text-align: left;
+}
+
+.agent-entry-bubble__text {
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  color: rgba(28, 37, 46, 0.88);
+}
+
+.agent-entry-bubble__dismiss {
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(220, 226, 233, 0.96);
+  background: rgba(255, 255, 255, 0.95);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(53, 63, 74, 0.72);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-page-slide-in,
   .app-page-slide-out,
@@ -287,7 +461,54 @@
   .liquid-tab-button,
   .liquid-tab-button::before,
   .liquid-tab-button::after,
-  .liquid-tab-button__icon {
+  .liquid-tab-button__icon,
+  .liquid-agent-button,
+  .liquid-agent-button__halo {
     transition: none !important;
+  }
+
+  .liquid-agent-button--observing .liquid-agent-button__halo,
+  .liquid-agent-button--thinking .liquid-agent-button__halo,
+  .liquid-agent-button--nudging {
+    animation: none !important;
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :where(:root), [data-theme="light"] {
+    --liquid-tab-shell-bg: rgba(248, 249, 251, 0.88);
+    --liquid-tab-shell-border: rgba(218, 223, 230, 0.9);
+    --liquid-tab-shell-shadow: 0 6px 18px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    --liquid-tab-shell-highlight: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.12) 100%);
+    --liquid-tab-button-bg: rgba(226, 229, 234, 0.84);
+    --liquid-tab-button-border: rgba(214, 219, 226, 0.92);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --liquid-tab-shell-bg: rgba(31, 35, 44, 0.9);
+      --liquid-tab-shell-border: rgba(82, 89, 102, 0.92);
+      --liquid-tab-shell-shadow: 0 8px 20px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      --liquid-tab-shell-highlight: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 100%);
+      --liquid-tab-button-bg: rgba(88, 95, 106, 0.5);
+      --liquid-tab-button-border: rgba(116, 124, 136, 0.56);
+    }
+  }
+
+  [data-theme="dark"] {
+    --liquid-tab-shell-bg: rgba(31, 35, 44, 0.9);
+    --liquid-tab-shell-border: rgba(82, 89, 102, 0.92);
+    --liquid-tab-shell-shadow: 0 8px 20px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --liquid-tab-shell-highlight: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 100%);
+    --liquid-tab-button-bg: rgba(88, 95, 106, 0.5);
+    --liquid-tab-button-border: rgba(116, 124, 136, 0.56);
+  }
+
+  .liquid-tab-shell::before {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .liquid-tab-button::before {
+    background: rgba(255, 255, 255, 0.02);
   }
 }

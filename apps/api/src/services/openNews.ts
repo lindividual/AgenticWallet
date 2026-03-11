@@ -40,6 +40,8 @@ export type NewsItem = {
   summary: string;
   coin: string;
   rating: number | null;
+  publishedAt: string;
+  url: string;
 };
 
 export type TweetItem = {
@@ -48,6 +50,7 @@ export type TweetItem = {
   handle: string;
   likes: number;
   retweets: number;
+  createdAt: string;
 };
 
 export async function fetchOpenNewsCryptoNews(
@@ -103,6 +106,8 @@ export async function fetchOpenNewsCryptoNews(
           summary: (item.summary ?? '').trim(),
           coin: (item.coin ?? '').trim(),
           rating: Number.isFinite(ratingNumber) ? ratingNumber : null,
+          publishedAt: (item.published_at ?? '').trim(),
+          url: (item.url ?? '').trim(),
         };
       });
   } catch {
@@ -151,6 +156,7 @@ export async function fetchOpenTwitterCryptoTweets(
         handle: item.user?.username ?? '',
         likes: Number(item.like_count) || 0,
         retweets: Number(item.retweet_count) || 0,
+        createdAt: (item.created_at ?? '').trim(),
       }));
   } catch {
     return [];

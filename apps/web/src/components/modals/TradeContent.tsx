@@ -9,6 +9,7 @@ import {
   type TradeSubmitResponse,
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
+import { emitAgentInterventionSignal } from '../../utils/agentInterventionBus';
 import type { TradeTokenPreset } from '../../utils/tradeTokens';
 
 export type TradePreset = {
@@ -74,6 +75,7 @@ export function TradeContent({
   const [quote, setQuote] = useState<TradeQuoteResponse | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [editCount, setEditCount] = useState(0);
 
   useEffect(() => {
     if (!active || !preset) return;
@@ -85,7 +87,17 @@ export function TradeContent({
     setQuote(null);
     setQuoting(false);
     setSubmitting(false);
+    setEditCount(0);
   }, [active, preset]);
+
+  useEffect(() => {
+    if (!active || editCount < 4) return;
+    emitAgentInterventionSignal({
+      type: 'trade_form_struggle',
+      reason: 'repeated_edits',
+      entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+    });
+  }, [active, chainId, editCount, preset?.mode]);
 
   const selectedChain = useMemo(
     () => supportedChains.find((item) => item.chainId === chainId) ?? null,
@@ -144,6 +156,11 @@ export function TradeContent({
       setQuote(nextQuote);
     } catch (error) {
       setQuote(null);
+      emitAgentInterventionSignal({
+        type: 'trade_form_struggle',
+        reason: 'quote_failed',
+        entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+      });
       showError(`${t('wallet.tradeFailed')}: ${(error as Error).message}`);
     } finally {
       setQuoting(false);
@@ -176,6 +193,11 @@ export function TradeContent({
       });
 
       if (result.status === 'failed') {
+        emitAgentInterventionSignal({
+          type: 'trade_form_struggle',
+          reason: 'submit_failed',
+          entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+        });
         showError(t('wallet.tradeSubmitFailed'));
         return;
       }
@@ -201,6 +223,11 @@ export function TradeContent({
       showSuccess(t('wallet.tradeSuccess'));
       onClose();
     } catch (error) {
+      emitAgentInterventionSignal({
+        type: 'trade_form_struggle',
+        reason: 'submit_failed',
+        entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+      });
       showError(`${t('wallet.tradeFailed')}: ${(error as Error).message}`);
     } finally {
       setSubmitting(false);
@@ -249,6 +276,7 @@ export function TradeContent({
               onChange={(event) => {
                 setSellAmount(event.target.value);
                 setQuote(null);
+                setEditCount((value) => value + 1);
               }}
               disabled={quoting || submitting}
             />
@@ -266,10 +294,12 @@ export function TradeContent({
                 if (!Number.isFinite(next)) {
                   setSlippageBps(100);
                   setQuote(null);
+                  setEditCount((value) => value + 1);
                   return;
                 }
                 setSlippageBps(Math.max(5, Math.min(3000, Math.floor(next))));
                 setQuote(null);
+                setEditCount((value) => value + 1);
               }}
               disabled={quoting || submitting}
             />
