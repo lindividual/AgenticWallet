@@ -64,6 +64,19 @@ type OpenAiChatResponse = {
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
+const CLOUDFLARE_AI_GATEWAY_HOST = 'gateway.ai.cloudflare.com';
+const CLOUDFLARE_AI_GATEWAY_BASE_URL = `https://${CLOUDFLARE_AI_GATEWAY_HOST}/v1`;
+
+type ResolvedLlmConfig = {
+  enabled: boolean;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string | null;
+  gatewayToken: string | null;
+  usingGateway: boolean;
+  usingGatewayCompat: boolean;
+};
 
 class LlmRequestError extends Error {
   status?: number;
@@ -103,12 +116,12 @@ type LlmDebugFields = {
 };
 
 export async function generateWithLlm(env: Bindings, input: LlmGenerateInput): Promise<LlmGenerateOutput> {
-  const provider = resolveLlmProvider(env);
-  switch (provider) {
+  const config = resolveLlmConfig(env);
+  switch (config.provider) {
     case 'openai':
-      return callOpenAiCompatible(env, input);
+      return callOpenAiCompatible(config, input);
     default:
-      throw new Error(`unsupported_llm_provider_${provider}`);
+      throw new Error(`unsupported_llm_provider_${config.provider}`);
   }
 }
 
@@ -118,14 +131,12 @@ export function getLlmStatus(env: Bindings): {
   model: string;
   baseUrl: string;
 } {
-  const provider = resolveLlmProvider(env);
-  const baseUrl = (env.LLM_BASE_URL ?? DEFAULT_OPENAI_BASE_URL).trim();
-  const model = (env.LLM_MODEL ?? DEFAULT_OPENAI_MODEL).trim();
+  const config = resolveLlmConfig(env);
   return {
-    enabled: Boolean(env.LLM_API_KEY?.trim()),
-    provider,
-    model,
-    baseUrl,
+    enabled: config.enabled,
+    provider: config.provider,
+    model: config.model,
+    baseUrl: config.baseUrl,
   };
 }
 
@@ -136,10 +147,13 @@ export async function getLlmDebugStatus(env: Bindings): Promise<{
   baseUrl: string;
   keyFingerprint: string | null;
 }> {
-  const status = getLlmStatus(env);
+  const config = resolveLlmConfig(env);
   return {
-    ...status,
-    keyFingerprint: await fingerprintApiKey(env.LLM_API_KEY),
+    enabled: config.enabled,
+    provider: config.provider,
+    model: config.model,
+    baseUrl: config.baseUrl,
+    keyFingerprint: await fingerprintApiKey(resolveAuthorizationToken(config) ?? undefined),
   };
 }
 
@@ -177,6 +191,86 @@ export function getLlmErrorInfo(error: unknown): LlmErrorInfo {
 
 function resolveLlmProvider(env: Bindings): string {
   return (env.LLM_PROVIDER ?? 'openai').trim().toLowerCase();
+}
+
+function trimEnvValue(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '');
+}
+
+function isCloudflareAiGatewayUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname === CLOUDFLARE_AI_GATEWAY_HOST;
+  } catch {
+    return false;
+  }
+}
+
+function isCloudflareAiGatewayCompatUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === CLOUDFLARE_AI_GATEWAY_HOST && url.pathname.replace(/\/+$/, '').endsWith('/compat');
+  } catch {
+    return false;
+  }
+}
+
+function buildCloudflareAiGatewayBaseUrl(accountId: string, gatewayId: string, provider: string): string {
+  return `${CLOUDFLARE_AI_GATEWAY_BASE_URL}/${encodeURIComponent(accountId)}/${encodeURIComponent(gatewayId)}/${provider}`;
+}
+
+function resolveLlmConfig(env: Bindings): ResolvedLlmConfig {
+  const provider = resolveLlmProvider(env);
+  const explicitBaseUrl = trimEnvValue(env.LLM_BASE_URL);
+  const gatewayAccountId = trimEnvValue(env.CF_AI_GATEWAY_ACCOUNT_ID);
+  const gatewayId = trimEnvValue(env.CF_AI_GATEWAY_GATEWAY_ID);
+  const gatewayToken = trimEnvValue(env.CF_AI_GATEWAY_TOKEN) ?? trimEnvValue(env.CF_AIG_TOKEN);
+  const apiKey = trimEnvValue(env.LLM_API_KEY);
+  const gatewayBaseUrl =
+    gatewayAccountId && gatewayId ? buildCloudflareAiGatewayBaseUrl(gatewayAccountId, gatewayId, provider) : null;
+  const explicitBaseUrlIsDefaultOpenAi =
+    explicitBaseUrl !== null && normalizeBaseUrl(explicitBaseUrl) === DEFAULT_OPENAI_BASE_URL;
+  const baseUrl = normalizeBaseUrl(
+    gatewayBaseUrl && (explicitBaseUrl === null || explicitBaseUrlIsDefaultOpenAi)
+      ? gatewayBaseUrl
+      : explicitBaseUrl ?? gatewayBaseUrl ?? DEFAULT_OPENAI_BASE_URL,
+  );
+  const model = resolveLlmModel(provider, baseUrl, trimEnvValue(env.LLM_MODEL) ?? DEFAULT_OPENAI_MODEL);
+  const usingGateway = isCloudflareAiGatewayUrl(baseUrl);
+  const usingGatewayCompat = isCloudflareAiGatewayCompatUrl(baseUrl);
+  const authorizationToken = resolveAuthorizationToken({
+    apiKey,
+    gatewayToken,
+    usingGatewayCompat,
+  });
+  return {
+    enabled: Boolean(authorizationToken || usingGateway),
+    provider,
+    baseUrl,
+    model,
+    apiKey,
+    gatewayToken,
+    usingGateway,
+    usingGatewayCompat,
+  };
+}
+
+function resolveLlmModel(provider: string, baseUrl: string, model: string): string {
+  if (!isCloudflareAiGatewayCompatUrl(baseUrl) || model.includes('/')) {
+    return model;
+  }
+  return `${provider}/${model}`;
+}
+
+function resolveAuthorizationToken(config: Pick<ResolvedLlmConfig, 'apiKey' | 'gatewayToken' | 'usingGatewayCompat'>): string | null {
+  if (config.usingGatewayCompat) {
+    return config.gatewayToken ?? config.apiKey;
+  }
+  return config.apiKey;
 }
 
 function isRetryableStatus(status: number): boolean {
@@ -276,30 +370,35 @@ function readRetryAfterMs(headers: Headers): number | undefined {
   return undefined;
 }
 
-async function callOpenAiCompatible(env: Bindings, input: LlmGenerateInput): Promise<LlmGenerateOutput> {
-  const apiKey = env.LLM_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error('llm_api_key_not_configured');
+async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerateInput): Promise<LlmGenerateOutput> {
+  if (!config.enabled) {
+    throw new Error('llm_not_configured');
   }
 
-  const baseUrl = (env.LLM_BASE_URL ?? DEFAULT_OPENAI_BASE_URL).trim();
-  const model = (env.LLM_MODEL ?? DEFAULT_OPENAI_MODEL).trim();
-  const keyFingerprint = await fingerprintApiKey(apiKey);
+  const authorizationToken = resolveAuthorizationToken(config);
+  const keyFingerprint = await fingerprintApiKey(authorizationToken ?? undefined);
   const maxAttempts = Number.isFinite(input.retryAttempts)
     ? Math.min(Math.max(Math.trunc(input.retryAttempts ?? 3), 1), 6)
     : 3;
+  const endpoint = new URL('chat/completions', `${config.baseUrl}/`).toString();
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+  if (authorizationToken) {
+    headers.authorization = `Bearer ${authorizationToken}`;
+  }
+  if (config.usingGateway && !config.usingGatewayCompat && config.gatewayToken) {
+    headers['cf-aig-authorization'] = `Bearer ${config.gatewayToken}`;
+  }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let response: Response;
     try {
-      response = await fetch(`${baseUrl}/chat/completions`, {
+      response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
-          model,
+          model: config.model,
           messages: input.messages,
           temperature: input.temperature ?? 0.3,
           max_tokens: input.maxTokens ?? 1200,
@@ -307,8 +406,8 @@ async function callOpenAiCompatible(env: Bindings, input: LlmGenerateInput): Pro
       });
     } catch (error) {
       const wrapped = new LlmRequestError('llm_network_error');
-      wrapped.baseUrl = baseUrl;
-      wrapped.model = model;
+      wrapped.baseUrl = config.baseUrl;
+      wrapped.model = config.model;
       wrapped.keyFingerprint = keyFingerprint;
       wrapped.causeMessage = error instanceof Error ? error.message : String(error);
       wrapped.attempt = attempt;
@@ -326,8 +425,8 @@ async function callOpenAiCompatible(env: Bindings, input: LlmGenerateInput): Pro
       const retryAfterMs = readRetryAfterMs(response.headers);
       const wrapped = new LlmRequestError(`llm_request_failed_${response.status}`);
       wrapped.status = response.status;
-      wrapped.baseUrl = baseUrl;
-      wrapped.model = model;
+      wrapped.baseUrl = config.baseUrl;
+      wrapped.model = config.model;
       wrapped.keyFingerprint = keyFingerprint;
       wrapped.responseBodySnippet = body.slice(0, 1200);
       wrapped.attempt = attempt;
@@ -350,7 +449,7 @@ async function callOpenAiCompatible(env: Bindings, input: LlmGenerateInput): Pro
 
     return {
       provider: 'openai',
-      model,
+      model: config.model,
       text,
       keyFingerprint,
       ...collectSuccessDebugFields(response),

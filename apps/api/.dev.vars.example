@@ -27,9 +27,17 @@ PREDICTION_SIGNATURE_TYPE=proxy
 
 # Optional LLM integration (Phase 1 content/recommendation generation)
 LLM_PROVIDER=openai
+# Direct OpenAI default; if CF_AI_GATEWAY_ACCOUNT_ID and CF_AI_GATEWAY_GATEWAY_ID are set, the API will route through AI Gateway automatically.
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4.1-mini
 LLM_API_KEY=replace-with-llm-api-key
+# Optional Cloudflare AI Gateway (when set, defaults to https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openai)
+CF_AI_GATEWAY_ACCOUNT_ID=
+CF_AI_GATEWAY_GATEWAY_ID=
+# Optional for authenticated gateways; omit for unauthenticated gateways
+CF_AI_GATEWAY_TOKEN=
+# Alias for compat mode examples where the gateway token is passed as OpenAI apiKey
+CF_AIG_TOKEN=
 
 # Optional Bitget Wallet ToB API override (defaults to built-in public demo key/secret)
 BGW_API_KEY=

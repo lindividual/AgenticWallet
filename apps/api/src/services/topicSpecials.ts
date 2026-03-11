@@ -10,7 +10,9 @@ const TARGET_TOPIC_COUNT = 4;
 const MAX_TOPIC_COUNT = 5;
 const SOURCE_REFERENCE_LIMIT = 18;
 const SUMMARY_MAX_LENGTH = 180;
-const TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS = 5;
+const TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS = 3;
+const TOPIC_SPECIAL_ARTICLE_MAX_TOKENS = 1400;
+const TOPIC_SPECIAL_INTER_ARTICLE_DELAY_MS = 750;
 
 const TOPIC_NEWS_KEYWORDS = [
   'bitcoin',
@@ -152,10 +154,13 @@ export async function generateTopicSpecialBatch(
   const selectedDrafts = candidateDrafts.slice(0, targetNewCount);
 
   let generated = 0;
-  for (const draft of selectedDrafts) {
+  for (const [index, draft] of selectedDrafts.entries()) {
     const topicSlug = slugifyTopic(draft.topic);
     if (!topicSlug) continue;
     if (existingSlugs.has(topicSlug)) continue;
+    if (index > 0 && llmStatus.enabled) {
+      await sleep(TOPIC_SPECIAL_INTER_ARTICLE_DELAY_MS);
+    }
 
     const articleId = crypto.randomUUID();
     const generatedAt = new Date().toISOString();
@@ -173,17 +178,10 @@ export async function generateTopicSpecialBatch(
         sourceRefs: normalizedRefs,
       },
     );
+    let articleStoredInR2 = false;
     try {
-      await env.AGENT_ARTICLES.put(r2Key, markdown, {
-        httpMetadata: {
-          contentType: 'text/markdown; charset=utf-8',
-        },
-        customMetadata: {
-          articleId,
-          slotKey,
-          topic: draft.topic.slice(0, 120),
-        },
-      });
+      await env.AGENT_ARTICLES.put(r2Key, markdown);
+      articleStoredInR2 = true;
     } catch (error) {
       console.error('topic_special_r2_put_failed', {
         slotKey,
@@ -191,7 +189,6 @@ export async function generateTopicSpecialBatch(
         r2Key,
         message: error instanceof Error ? error.message : String(error),
       });
-      throw new Error(`topic_special_r2_put_failed:${topicSlug}`);
     }
 
     try {
@@ -231,14 +228,16 @@ export async function generateTopicSpecialBatch(
         topicSlug,
         message,
       });
-      try {
-        await env.AGENT_ARTICLES.delete(r2Key);
-      } catch (cleanupError) {
-        console.error('topic_special_r2_cleanup_failed', {
-          slotKey,
-          topicSlug,
-          message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-        });
+      if (articleStoredInR2) {
+        try {
+          await env.AGENT_ARTICLES.delete(r2Key);
+        } catch (cleanupError) {
+          console.error('topic_special_r2_cleanup_failed', {
+            slotKey,
+            topicSlug,
+            message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
       }
       throw new Error(`topic_special_index_failed:${topicSlug}:${message}`);
     }
@@ -331,7 +330,11 @@ async function buildTopicDrafts(
   defaultAssets: string[],
 ): Promise<TopicDraft[]> {
   if (!llmStatus.enabled) {
-    throw new Error('topic_special_llm_not_configured');
+    console.warn('topic_special_draft_llm_disabled_using_fallback', {
+      sourceRefCount: sourceRefs.length,
+      defaultAssetCount: defaultAssets.length,
+    });
+    return buildFallbackTopicDrafts(sourceRefs, defaultAssets);
   }
 
   try {
@@ -377,7 +380,11 @@ async function buildTopicDrafts(
     });
     const drafts = parseTopicDrafts(llmResult.text, defaultAssets, sourceRefs);
     if (drafts.length < MIN_TOPIC_COUNT) {
-      throw new Error(`topic_special_draft_insufficient_results:${drafts.length}`);
+      console.warn('topic_special_draft_llm_insufficient_results_using_fallback', {
+        draftCount: drafts.length,
+        sourceRefCount: sourceRefs.length,
+      });
+      return buildFallbackTopicDrafts(sourceRefs, defaultAssets);
     }
     return drafts;
   } catch (error) {
@@ -386,9 +393,7 @@ async function buildTopicDrafts(
       ...llmError,
       llm: llmStatus,
     });
-    throw error instanceof Error
-      ? error
-      : new Error(`topic_special_draft_generation_failed:${String(error)}`);
+    return buildFallbackTopicDrafts(sourceRefs, defaultAssets);
   }
 }
 
@@ -452,7 +457,11 @@ async function buildTopicArticleMarkdown(
   input: TopicArticleInput,
 ): Promise<string> {
   if (!llmStatus.enabled) {
-    throw new Error('topic_special_llm_not_configured');
+    console.warn('topic_special_article_llm_disabled_using_fallback', {
+      slotKey: input.slotKey,
+      topic: input.topic,
+    });
+    return buildFallbackTopicArticleMarkdown(input);
   }
 
   try {
@@ -486,7 +495,7 @@ async function buildTopicArticleMarkdown(
         },
       ],
       temperature: 0.45,
-      maxTokens: 2000,
+      maxTokens: TOPIC_SPECIAL_ARTICLE_MAX_TOKENS,
       retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
     });
     console.log('topic_special_article_llm_succeeded', {
@@ -513,9 +522,7 @@ async function buildTopicArticleMarkdown(
       slotKey: input.slotKey,
       topic: input.topic,
     });
-    throw error instanceof Error
-      ? error
-      : new Error(`topic_special_article_generation_failed:${String(error)}`);
+    return buildFallbackTopicArticleMarkdown(input);
   }
 }
 
@@ -562,6 +569,10 @@ function buildPromptDebugStats(systemPrompt: string, userPrompt: string): Prompt
   };
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function estimateTokenCount(text: string): number {
   const normalized = text.trim();
   if (!normalized) return 0;
@@ -577,6 +588,111 @@ function ensureRelatedAssetsSection(markdown: string, relatedAssets: string[]): 
     ? relatedAssets.map((asset) => `- ${asset}`).join('\n')
     : '- BTC\n- ETH\n- USDC';
   return `${markdown.trimEnd()}\n\n## Related Assets\n${assetLines}\n`;
+}
+
+function buildFallbackTopicDrafts(sourceRefs: string[], defaultAssets: string[]): TopicDraft[] {
+  const fallbackAssets = normalizeAssetSymbols(defaultAssets, ['BTC', 'ETH', 'SOL', 'USDC', 'USDT']);
+  const genericRefs = normalizeSourceRefs(sourceRefs);
+  const themes: Array<{
+    topic: string;
+    summary: string;
+    keywords: string[];
+    assets: string[];
+  }> = [
+    {
+      topic: 'Bitcoin Liquidity and ETF Flow Watch',
+      summary: 'Track whether institutional Bitcoin demand stays firm as macro rate expectations reset across global markets.',
+      keywords: ['bitcoin', 'btc', 'etf'],
+      assets: ['BTC', 'ETH'],
+    },
+    {
+      topic: 'Ethereum Positioning and Yield Rotation',
+      summary: 'Watch whether staking demand and liquidity rotation keep reinforcing Ethereum relative strength across risk assets.',
+      keywords: ['ethereum', 'eth', 'staking', 'yield'],
+      assets: ['ETH', 'SOL'],
+    },
+    {
+      topic: 'Stablecoin Policy and Payment Rails',
+      summary: 'Policy headlines around stablecoins can quickly reprice payment narratives, exchange liquidity, and crypto beta.',
+      keywords: ['stablecoin', 'usdc', 'usdt', 'payment', 'regulation'],
+      assets: ['USDC', 'USDT', 'ETH'],
+    },
+    {
+      topic: 'Macro Risk Appetite and Crypto Beta',
+      summary: 'Rates, equities, and liquidity signals still set the tone for how aggressively traders price crypto upside and downside.',
+      keywords: ['fed', 'rate', 'rates', 'treasury', 'nasdaq', 's&p', 'risk-on', 'risk-off'],
+      assets: ['BTC', 'ETH', 'SOL'],
+    },
+  ];
+
+  const drafts = themes.map((theme) => ({
+    topic: theme.topic,
+    summary: truncateSummary(theme.summary),
+    relatedAssets: normalizeAssetSymbols([...theme.assets, ...fallbackAssets], fallbackAssets),
+    sourceRefs: pickTopicSourceRefs(genericRefs, theme.keywords),
+  }));
+
+  if (drafts.length >= MIN_TOPIC_COUNT) {
+    return drafts.slice(0, MAX_TOPIC_COUNT);
+  }
+
+  return [
+    ...drafts,
+    {
+      topic: 'Cross-Market Liquidity Rotation',
+      summary: 'Monitor whether the next macro headline broadens into crypto leadership or leaves the market stuck in a narrow range.',
+      relatedAssets: fallbackAssets,
+      sourceRefs: genericRefs.slice(0, 3),
+    },
+  ].slice(0, MAX_TOPIC_COUNT);
+}
+
+function pickTopicSourceRefs(sourceRefs: string[], keywords: string[]): string[] {
+  const loweredKeywords = keywords.map((keyword) => keyword.toLowerCase());
+  const matched = sourceRefs.filter((line) => {
+    const lower = line.toLowerCase();
+    return loweredKeywords.some((keyword) => lower.includes(keyword));
+  });
+  if (matched.length > 0) return matched.slice(0, 3);
+  if (sourceRefs.length > 0) return sourceRefs.slice(0, Math.min(3, sourceRefs.length));
+  return ['Macro and crypto signals remain mixed across liquidity, policy, and risk appetite.'];
+}
+
+function buildFallbackTopicArticleMarkdown(input: TopicArticleInput): string {
+  const relatedAssets = normalizeAssetSymbols(input.relatedAssets, ['BTC', 'ETH', 'USDC']);
+  const sourceRefs = normalizeSourceRefs(input.sourceRefs);
+  const sourceLines = sourceRefs.length > 0
+    ? sourceRefs.map((line) => `- ${line}`).join('\n')
+    : '- Macro and crypto signals remain mixed across liquidity, policy, and risk appetite.';
+  const primaryAssets = relatedAssets.slice(0, 2).join(' and ') || 'BTC and ETH';
+  const allAssets = relatedAssets.join(', ') || 'BTC, ETH, USDC';
+
+  return [
+    `# ${input.topic}`,
+    '',
+    '## Why this matters now',
+    `${input.summary} The key question is whether the current headline keeps attracting fresh capital or fades once the next macro catalyst arrives.`,
+    '',
+    '## TradFi x Crypto transmission',
+    `Traditional finance catalysts such as rates, ETF flows, regulation, and equity leadership often feed directly into crypto positioning. In practice, that means moves in ${primaryAssets} can be reinforced by broader liquidity conditions, while stablecoin balances and exchange activity help confirm whether the move has depth.`,
+    '',
+    'Current source signals:',
+    sourceLines,
+    '',
+    '## Scenario watch',
+    `- Bullish: capital rotation broadens from the headline into ${allAssets}, with follow-through across spot activity and market breadth.`,
+    '- Neutral: the narrative stays in the news, but price action remains range-bound and conviction stays selective.',
+    `- Risk: the next macro or policy update reverses sentiment, forcing traders to cut exposure before ${allAssets} can confirm momentum.`,
+    '',
+    '## Action checklist',
+    '- Track the next catalyst tied to the source signals above.',
+    '- Confirm whether flows broaden beyond the first headline asset into related assets.',
+    '- Reassess sizing quickly if price action diverges from the narrative.',
+    '',
+    '## Related Assets',
+    ...relatedAssets.map((asset) => `- ${asset}`),
+    '',
+  ].join('\n');
 }
 
 function buildSourceReferences(newsItems: NewsItem[], twitterItems: TweetItem[], rssHeadlines: string[]): string[] {

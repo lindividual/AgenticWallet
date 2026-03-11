@@ -266,7 +266,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
 
     const llm = await getLlmDebugStatus(c.env);
     if (!llm.enabled) {
-      return c.json({ ok: false, llm, error: { message: 'llm_api_key_not_configured' } }, 503);
+      return c.json({ ok: false, llm, error: { message: 'llm_not_configured' } }, 503);
     }
 
     try {

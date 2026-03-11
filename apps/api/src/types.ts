@@ -21,6 +21,10 @@ export type Bindings = {
   LLM_BASE_URL?: string;
   LLM_API_KEY?: string;
   LLM_MODEL?: string;
+  CF_AI_GATEWAY_ACCOUNT_ID?: string;
+  CF_AI_GATEWAY_GATEWAY_ID?: string;
+  CF_AI_GATEWAY_TOKEN?: string;
+  CF_AIG_TOKEN?: string;
   DAILY_NEWS_FEEDS?: string;
   TOKEN_LIST_URLS?: string;
   TOKEN_LIST_MAX_TOKENS?: string;
