@@ -5,9 +5,9 @@ import { fetchTopMarketAssets } from './marketTopAssets';
 import { fetchOpenNewsCryptoNews, fetchOpenTwitterCryptoTweets, type NewsItem, type TweetItem } from './openNews';
 import type { Bindings } from '../types';
 
-const MIN_TOPIC_COUNT = 3;
-const TARGET_TOPIC_COUNT = 4;
-const MAX_TOPIC_COUNT = 5;
+const TOPIC_SPECIAL_SLOT_HOURS = 4;
+const TOPIC_SPECIAL_DAILY_MAX_COUNT = 10;
+const TOPIC_SPECIAL_MAX_COUNT_PER_SLOT = 5;
 const SOURCE_REFERENCE_LIMIT = 18;
 const SUMMARY_MAX_LENGTH = 180;
 const TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS = 3;
@@ -80,14 +80,17 @@ let topicSpecialSchemaReady = false;
 
 export async function generateTopicSpecialBatch(
   env: Bindings,
-  options?: { force?: boolean },
+  options?: { force?: boolean; slotKey?: string },
 ): Promise<TopicSpecialGenerationResult> {
   await ensureTopicSpecialSchema(env.DB);
-  const slotKey = toHalfDaySlotKey(new Date());
+  const slotKey = options?.slotKey?.trim() || getTopicSpecialSlotKey(new Date());
+  const dateKey = slotKey.slice(0, 10);
   const existingRows = await listTopicRowsInSlot(env.DB, slotKey);
   const existingCount = existingRows.length;
+  const dailyCount = await countTopicsForDate(env.DB, dateKey);
+  const remainingDailyCapacity = Math.max(TOPIC_SPECIAL_DAILY_MAX_COUNT - dailyCount, 0);
 
-  if (existingCount >= MAX_TOPIC_COUNT) {
+  if (existingCount >= TOPIC_SPECIAL_MAX_COUNT_PER_SLOT) {
     return {
       slotKey,
       generated: 0,
@@ -96,7 +99,7 @@ export async function generateTopicSpecialBatch(
     };
   }
 
-  if (!options?.force && existingCount >= MIN_TOPIC_COUNT) {
+  if (remainingDailyCapacity === 0) {
     return {
       slotKey,
       generated: 0,
@@ -133,10 +136,10 @@ export async function generateTopicSpecialBatch(
       const slug = slugifyTopic(draft.topic);
       return Boolean(slug) && !existingSlugs.has(slug);
     })
-    .slice(0, MAX_TOPIC_COUNT);
+    .slice(0, TOPIC_SPECIAL_MAX_COUNT_PER_SLOT);
 
-  const remainingCapacity = Math.max(MAX_TOPIC_COUNT - existingCount, 0);
-  if (remainingCapacity === 0) {
+  const remainingSlotCapacity = Math.max(TOPIC_SPECIAL_MAX_COUNT_PER_SLOT - existingCount, 0);
+  if (remainingSlotCapacity === 0) {
     return {
       slotKey,
       generated: 0,
@@ -145,12 +148,25 @@ export async function generateTopicSpecialBatch(
     };
   }
 
-  const requiredNewCount = Math.max(MIN_TOPIC_COUNT - existingCount, 0);
-  const minWhenForced = options?.force === true ? 1 : 0;
-  const targetNewCount = Math.min(
-    remainingCapacity,
-    Math.max(requiredNewCount, TARGET_TOPIC_COUNT - existingCount, minWhenForced),
+  const remainingSlotsInDay = getRemainingTopicSlotsInDay(slotKey);
+  const desiredTotalInSlot = Math.min(
+    TOPIC_SPECIAL_MAX_COUNT_PER_SLOT,
+    Math.max(1, Math.ceil(remainingDailyCapacity / remainingSlotsInDay)),
   );
+  const desiredNewCount = Math.max(desiredTotalInSlot - existingCount, 0);
+  const targetNewCount = Math.min(
+    remainingDailyCapacity,
+    remainingSlotCapacity,
+    Math.max(desiredNewCount, options?.force === true ? 1 : 0),
+  );
+  if (targetNewCount <= 0) {
+    return {
+      slotKey,
+      generated: 0,
+      skipped: true,
+      totalInSlot: existingCount,
+    };
+  }
   const selectedDrafts = candidateDrafts.slice(0, targetNewCount);
 
   let generated = 0;
@@ -178,17 +194,17 @@ export async function generateTopicSpecialBatch(
         sourceRefs: normalizedRefs,
       },
     );
-    let articleStoredInR2 = false;
     try {
       await env.AGENT_ARTICLES.put(r2Key, markdown);
-      articleStoredInR2 = true;
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('topic_special_r2_put_failed', {
         slotKey,
         topicSlug,
         r2Key,
-        message: error instanceof Error ? error.message : String(error),
+        message,
       });
+      throw new Error(`topic_special_r2_store_failed:${topicSlug}:${message}`);
     }
 
     try {
@@ -228,16 +244,14 @@ export async function generateTopicSpecialBatch(
         topicSlug,
         message,
       });
-      if (articleStoredInR2) {
-        try {
-          await env.AGENT_ARTICLES.delete(r2Key);
-        } catch (cleanupError) {
-          console.error('topic_special_r2_cleanup_failed', {
-            slotKey,
-            topicSlug,
-            message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-          });
-        }
+      try {
+        await env.AGENT_ARTICLES.delete(r2Key);
+      } catch (cleanupError) {
+        console.error('topic_special_r2_cleanup_failed', {
+          slotKey,
+          topicSlug,
+          message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
       }
       throw new Error(`topic_special_index_failed:${topicSlug}:${message}`);
     }
@@ -288,12 +302,32 @@ async function countTopicsInSlot(db: D1Database, slotKey: string): Promise<numbe
   return Number.isFinite(count) ? count : 0;
 }
 
-function toHalfDaySlotKey(date: Date): string {
+async function countTopicsForDate(db: D1Database, dateKey: string): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) as count
+       FROM topic_special_articles
+       WHERE slot_key LIKE ?`,
+    )
+    .bind(`${dateKey}T%`)
+    .first<{ count: number }>();
+  const count = Number(row?.count ?? 0);
+  return Number.isFinite(count) ? count : 0;
+}
+
+export function getTopicSpecialSlotKey(date: Date): string {
   const year = date.getUTCFullYear();
   const month = `${date.getUTCMonth() + 1}`.padStart(2, '0');
   const day = `${date.getUTCDate()}`.padStart(2, '0');
-  const hour = date.getUTCHours() >= 12 ? '12' : '00';
+  const slotHour = Math.floor(date.getUTCHours() / TOPIC_SPECIAL_SLOT_HOURS) * TOPIC_SPECIAL_SLOT_HOURS;
+  const hour = `${slotHour}`.padStart(2, '0');
   return `${year}-${month}-${day}T${hour}`;
+}
+
+function getRemainingTopicSlotsInDay(slotKey: string): number {
+  const hour = Number(slotKey.slice(11, 13));
+  if (!Number.isFinite(hour) || hour < 0 || hour >= 24) return 1;
+  return Math.max(1, Math.floor((24 - hour) / TOPIC_SPECIAL_SLOT_HOURS));
 }
 
 function buildTopicDraftPrompt(sourceRefs: string[], defaultAssets: string[]): string {
@@ -379,7 +413,7 @@ async function buildTopicDrafts(
       responseEstimatedTokens: estimateTokenCount(llmResult.text),
     });
     const drafts = parseTopicDrafts(llmResult.text, defaultAssets, sourceRefs);
-    if (drafts.length < MIN_TOPIC_COUNT) {
+    if (drafts.length < 3) {
       console.warn('topic_special_draft_llm_insufficient_results_using_fallback', {
         draftCount: drafts.length,
         sourceRefCount: sourceRefs.length,
@@ -438,7 +472,7 @@ function parseTopicDrafts(text: string, defaultAssets: string[], fallbackRefs: s
       sourceRefs,
     });
     seenTopics.add(topicSlug);
-    if (drafts.length >= MAX_TOPIC_COUNT) break;
+    if (drafts.length >= TOPIC_SPECIAL_MAX_COUNT_PER_SLOT) break;
   }
 
   return drafts;
@@ -632,8 +666,8 @@ function buildFallbackTopicDrafts(sourceRefs: string[], defaultAssets: string[])
     sourceRefs: pickTopicSourceRefs(genericRefs, theme.keywords),
   }));
 
-  if (drafts.length >= MIN_TOPIC_COUNT) {
-    return drafts.slice(0, MAX_TOPIC_COUNT);
+  if (drafts.length >= 3) {
+    return drafts.slice(0, TOPIC_SPECIAL_MAX_COUNT_PER_SLOT);
   }
 
   return [
@@ -644,7 +678,7 @@ function buildFallbackTopicDrafts(sourceRefs: string[], defaultAssets: string[])
       relatedAssets: fallbackAssets,
       sourceRefs: genericRefs.slice(0, 3),
     },
-  ].slice(0, MAX_TOPIC_COUNT);
+  ].slice(0, TOPIC_SPECIAL_MAX_COUNT_PER_SLOT);
 }
 
 function pickTopicSourceRefs(sourceRefs: string[], keywords: string[]): string[] {

@@ -192,7 +192,8 @@ export function AgentAssistant({ pageContext }: AgentAssistantProps) {
     return (
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40">
         <div
-          className={`pointer-events-auto mx-auto w-full max-w-105 px-4 pb-22 ${bubbleExiting ? 'agent-bubble-exit' : 'agent-bubble-enter'}`}
+          className={`pointer-events-auto mx-auto w-full max-w-105 px-4 ${bubbleExiting ? 'agent-bubble-exit' : 'agent-bubble-enter'}`}
+          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 6rem)' }}
         >
           <div className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-lg">
             <div className="mb-3 flex items-start gap-3">

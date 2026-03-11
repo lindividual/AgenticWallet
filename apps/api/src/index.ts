@@ -2,9 +2,10 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { registerProtectedRoutes } from './routes/protected';
 import { registerPublicRoutes } from './routes/public';
+import { enqueueTopicSpecialGeneration } from './services/topicSpecialCoordinator';
 import type { AppEnv } from './types';
-import { generateTopicSpecialBatch } from './services/topicSpecials';
 export { UserAgentDO } from './durableObjects/userAgentDO';
+export { TopicSpecialDO } from './durableObjects/topicSpecialDO';
 
 const app = new Hono<AppEnv>();
 
@@ -28,9 +29,11 @@ export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: AppEnv['Bindings'], _ctx: ExecutionContext): Promise<void> {
     const cron = event.cron ?? '';
-    if (matchesCron(cron, '5 */12 * * *')) {
+    if (matchesCron(cron, '5 */4 * * *')) {
       try {
-        await generateTopicSpecialBatch(env);
+        await enqueueTopicSpecialGeneration(env, {
+          trigger: 'cron',
+        });
       } catch (error) {
         console.error('topic_special_scheduled_failed', {
           cron,

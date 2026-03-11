@@ -355,10 +355,14 @@ export function App() {
         : isWalletAssetRoute
           ? { page: 'wallet' }
         : { page: activeTab };
+  const showBottomTabBar = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
 
   return (
     <>
-      <div className="min-h-screen overflow-x-hidden">
+      <div
+        className="min-h-screen overflow-x-hidden"
+        style={showBottomTabBar ? { paddingBottom: 'env(safe-area-inset-bottom, 0px)' } : undefined}
+      >
         {activeArticleId ? (
           <div className={isArticleExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
             <ArticleReaderScreen articleId={activeArticleId} onBack={handleCloseArticle} onOpenToken={handleOpenTokenByRoute} />
@@ -392,7 +396,7 @@ export function App() {
           renderBaseScreen()
         )}
       </div>
-      {!activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute && (
+      {showBottomTabBar && (
         <BottomTabBar activeTab={activeTab} onTabChange={handleTabChange} />
       )}
       <AgentAssistant pageContext={agentPageContext} />

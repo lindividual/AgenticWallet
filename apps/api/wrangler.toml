@@ -27,9 +27,17 @@ bucket_name = "agentic-wallet-articles"
 name = "USER_AGENT"
 class_name = "UserAgentDO"
 
+[[durable_objects.bindings]]
+name = "TOPIC_SPECIAL"
+class_name = "TopicSpecialDO"
+
 [[migrations]]
 tag = "user-agent-do-v1"
 new_sqlite_classes = ["UserAgentDO"]
 
+[[migrations]]
+tag = "topic-special-do-v1"
+new_sqlite_classes = ["TopicSpecialDO"]
+
 [triggers]
-crons = ["0 0 * * *", "5 */12 * * *"]
+crons = ["0 0 * * *", "5 */4 * * *"]

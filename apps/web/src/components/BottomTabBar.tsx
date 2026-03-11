@@ -20,31 +20,32 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
 
   return (
     <nav className="pointer-events-none fixed inset-x-0 bottom-0 z-30" aria-label={t('tabs.navigation')}>
-      <div className="pointer-events-auto mx-auto w-full max-w-105 border-t border-base-300 bg-base-100 px-4 py-3">
-        <div className="grid grid-cols-3 gap-2">
-          {TABS.map((tab) => {
-            const Icon = TAB_ICON[tab];
-            const isActive = activeTab === tab;
+      <div
+        className="pointer-events-auto mx-auto w-full max-w-105 px-3"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.8rem)' }}
+      >
+        <div className="liquid-tab-shell">
+          <div className="liquid-tab-grid">
+            {TABS.map((tab) => {
+              const Icon = TAB_ICON[tab];
+              const isActive = activeTab === tab;
 
-            return (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => onTabChange(tab)}
-                className={`btn btn-ghost h-12 min-h-0 border-0 bg-transparent px-1 hover:bg-transparent active:bg-transparent ${
-                  isActive
-                    ? 'text-primary'
-                    : 'text-base-content/60'
-                }`}
-                aria-current={isActive ? 'page' : undefined}
-              >
-                <span className="flex flex-col items-center gap-0.5 leading-none">
-                  <Icon size={22} strokeWidth={2.1} />
-                  <span className="text-[11px] font-medium">{t(`tabs.${tab}`)}</span>
-                </span>
-              </button>
-            );
-          })}
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => onTabChange(tab)}
+                  className={`liquid-tab-button ${isActive ? 'liquid-tab-button--active' : ''}`}
+                  aria-current={isActive ? 'page' : undefined}
+                >
+                  <span className="liquid-tab-button__inner">
+                    <Icon className="liquid-tab-button__icon" size={22} strokeWidth={2.05} />
+                    <span className="liquid-tab-button__label">{t(`tabs.${tab}`)}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </nav>

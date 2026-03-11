@@ -17,7 +17,7 @@ import {
 } from '../services/agent';
 import { generateWithLlm, getLlmDebugStatus, getLlmErrorInfo, getLlmStatus } from '../services/llm';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
-import { generateTopicSpecialBatch } from '../services/topicSpecials';
+import { enqueueTopicSpecialGeneration } from '../services/topicSpecialCoordinator';
 import type { AppEnv } from '../types';
 import { safeJsonParse } from '../utils/json';
 
@@ -377,17 +377,17 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
         }) satisfies { force?: boolean },
     );
     try {
-      const result = await generateTopicSpecialBatch(c.env, {
+      const result = await enqueueTopicSpecialGeneration(c.env, {
         force: body.force === true,
+        trigger: 'admin',
       });
       return c.json({
         ok: true,
-        jobId: `topic_special:${result.slotKey}`,
-        deduped: result.skipped,
+        jobId: result.jobId,
+        deduped: result.deduped,
         slotKey: result.slotKey,
-        generated: result.generated,
-        totalInSlot: result.totalInSlot,
-      });
+        status: result.status,
+      }, 202);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const details = getLlmErrorInfo(error);
