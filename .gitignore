@@ -8,3 +8,4 @@ dist
 !.env.example
 npm-debug.log*
 *.tsbuildinfo
+.dev.vars
