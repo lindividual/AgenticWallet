@@ -34,7 +34,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
     const [mergedHoldings, predictionAccount] = await Promise.all([
       buildMergedPortfolioHoldings(c.env, holdings),
       getPredictionAccountSafe(c.env, userId, {
-        signatureType: 'proxy',
+        signatureType: 'eoa',
       }),
     ]);
     const totalUsd = result.totalUsd;

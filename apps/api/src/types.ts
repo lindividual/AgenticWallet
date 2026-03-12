@@ -18,6 +18,7 @@ export type Bindings = {
   BICONOMY_BUNDLER_URL?: string;
   MEE_ENABLE_SIMULATION?: string;
   MEE_TRANSFER_CALL_GAS_LIMIT?: string;
+  MEE_SPONSORSHIP_ENABLED?: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
   LLM_API_KEY?: string;

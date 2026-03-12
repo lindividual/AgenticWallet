@@ -6,8 +6,8 @@ import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   addMarketWatchlistAsset,
   getAppConfig,
-  getMarketByInstrumentId,
   getMarketCandlesByInstrumentId,
+  getTradeBrowse,
   getCoinDetail,
   getMarketWatchlist,
   resolveAssetIdentity,
@@ -15,11 +15,12 @@ import {
   ingestAgentEvent,
   removeMarketWatchlistAsset,
   type KlinePeriod,
+  type TradeBrowseResponse,
   type TopMarketAsset,
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
 import { formatUsdAdaptive } from '../../utils/currency';
-import { computeAdaptiveChartWindowSeconds, normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
+import { computeAdaptiveChartWindowSeconds, formatChartTimeLabel, normalizeCandlesForLiveline, toOpenAnchoredLivelinePoints } from '../../utils/kline';
 import { cloneTradeToken, getChainIdByMarketChain, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { CachedIconImage } from '../CachedIconImage';
 import { Modal } from '../modals/Modal';
@@ -34,14 +35,28 @@ type TokenDetailScreenProps = {
   onBack: () => void;
 };
 
+type DetailChartRange = '1d' | '1w' | '1m' | 'max';
+
 const KLINE_PERIOD_OPTIONS: Array<{
-  value: KlinePeriod;
+  value: DetailChartRange;
   labelKey: string;
 }> = [
-  { value: '15m', labelKey: 'trade.klinePeriod15m' },
-  { value: '1h', labelKey: 'trade.klinePeriod1h' },
-  { value: '4h', labelKey: 'trade.klinePeriod4h' },
-  { value: '1d', labelKey: 'trade.klinePeriod1d' },
+  { value: '1d', labelKey: 'trade.klineRange1d' },
+  { value: '1w', labelKey: 'trade.klineRange1w' },
+  { value: '1m', labelKey: 'trade.klineRange1m' },
+  { value: 'max', labelKey: 'trade.klineRangeMax' },
+];
+
+const KLINE_RANGE_REQUESTS: Record<DetailChartRange, { period: KlinePeriod; size: number }> = {
+  '1d': { period: '1h', size: 24 },
+  '1w': { period: '4h', size: 42 },
+  '1m': { period: '1d', size: 30 },
+  max: { period: '1w', size: 260 },
+};
+
+const KLINE_RANGE_FALLBACK_CHANGE_OPTIONS: Array<{ period: KlinePeriod; size: number }> = [
+  { period: '1h', size: 48 },
+  { period: '4h', size: 14 },
 ];
 
 const KLINE_CANDLE_WIDTH_SECONDS: Record<KlinePeriod, number> = {
@@ -72,9 +87,26 @@ function formatCompact(value: number | null | undefined, locale: string): string
   }).format(Number(value));
 }
 
+function formatCompactUsd(value: number | null | undefined, locale: string): string {
+  if (!Number.isFinite(Number(value))) return '--';
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 2,
+  }).format(Number(value));
+}
+
 function formatPercentFromRatio(value: number | null | undefined): string {
   if (!Number.isFinite(Number(value))) return '--';
   return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function formatTruncatedContract(value: string | null | undefined): string {
+  const normalized = (value ?? '').trim();
+  if (!normalized) return '--';
+  if (normalized.length <= 10) return normalized;
+  return `${normalized.slice(0, 5)}...${normalized.slice(-5)}`;
 }
 
 function ChangeTriangle({ direction }: { direction: 'up' | 'down' | 'flat' }) {
@@ -159,41 +191,53 @@ function toWatchlistKey(chain: string, contract: string): string {
   return `${chain.trim().toLowerCase()}:${normalizeContractForChain(chain, contract)}`;
 }
 
+function findBrowseFallbackItem(
+  payload: TradeBrowseResponse | undefined,
+  options: {
+    instrumentId: string | null;
+    chain: string;
+    contract: string;
+  },
+) {
+  if (!payload) return null;
+
+  const items = [
+    ...payload.topMovers,
+    ...payload.trendings,
+    ...payload.stocks,
+  ];
+
+  const normalizedInstrumentId = options.instrumentId?.trim() || null;
+  if (normalizedInstrumentId) {
+    const byInstrumentId = items.find((item) => (item.instrument_id?.trim() || null) === normalizedInstrumentId);
+    if (byInstrumentId) return byInstrumentId;
+  }
+
+  const targetKey = toWatchlistKey(options.chain, options.contract);
+  return items.find((item) => {
+    if (!item.chain) return false;
+    return toWatchlistKey(item.chain, item.contract ?? '') === targetKey;
+  }) ?? null;
+}
+
 type TokenDetailLike = {
   chain?: string | null;
   contract?: string | null;
   symbol?: string | null;
   name?: string | null;
   image?: string | null;
+  about?: string | null;
   currentPriceUsd?: number | null;
   priceChange24h?: number | null;
   holders?: number | null;
   liquidityUsd?: number | null;
   top10HolderPercent?: number | null;
   lockLpPercent?: number | null;
+  fdv?: number | null;
+  volume24h?: number | null;
   currentPrice?: number | null;
   change24h?: number | null;
 };
-
-function toTokenDetailLike(raw: unknown): TokenDetailLike | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const row = raw as Record<string, unknown>;
-  return {
-    chain: typeof row.chain === 'string' ? row.chain : null,
-    contract: typeof row.contract === 'string' ? row.contract : null,
-    symbol: typeof row.symbol === 'string' ? row.symbol : null,
-    name: typeof row.name === 'string' ? row.name : null,
-    image: typeof row.image === 'string' ? row.image : null,
-    currentPriceUsd: Number.isFinite(Number(row.currentPriceUsd)) ? Number(row.currentPriceUsd) : null,
-    priceChange24h: Number.isFinite(Number(row.priceChange24h)) ? Number(row.priceChange24h) : null,
-    holders: Number.isFinite(Number(row.holders)) ? Number(row.holders) : null,
-    liquidityUsd: Number.isFinite(Number(row.liquidityUsd)) ? Number(row.liquidityUsd) : null,
-    top10HolderPercent: Number.isFinite(Number(row.top10HolderPercent)) ? Number(row.top10HolderPercent) : null,
-    lockLpPercent: Number.isFinite(Number(row.lockLpPercent)) ? Number(row.lockLpPercent) : null,
-    currentPrice: Number.isFinite(Number(row.currentPrice)) ? Number(row.currentPrice) : null,
-    change24h: Number.isFinite(Number(row.change24h)) ? Number(row.change24h) : null,
-  };
-}
 
 function isUnknownLabel(value: string | null | undefined): boolean {
   const normalized = (value ?? '').trim().toLowerCase();
@@ -210,9 +254,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const { resolvedTheme } = useTheme();
   const { showError, showSuccess } = useToast();
   const queryClient = useQueryClient();
-  const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>('1h');
+  const [chartRange, setChartRange] = useState<DetailChartRange>('1d');
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
-  const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
+  const [pendingChartRange, setPendingChartRange] = useState<DetailChartRange | null>(null);
   const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
@@ -255,6 +299,8 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     || previewInstrumentId
     || null;
 
+  const activeChartRequest = KLINE_RANGE_REQUESTS[chartRange];
+
   const fetchTokenCandles = useCallback(
     async (period: KlinePeriod, size: number) => {
       if (activeInstrumentId) {
@@ -270,25 +316,12 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     [activeInstrumentId, normalizedChain, normalizedContract],
   );
 
-  const { data: instrumentMarket, isLoading: isInstrumentDetailLoading } = useQuery({
-    queryKey: ['trade-token-market-by-instrument', activeInstrumentId],
-    queryFn: () => getMarketByInstrumentId(activeInstrumentId ?? ''),
-    enabled: Boolean(activeInstrumentId),
-    staleTime: 60_000,
-    refetchInterval: 90_000,
-  });
-
-  const providerDetail = useMemo(
-    () => toTokenDetailLike(instrumentMarket?.providerDetail),
-    [instrumentMarket?.providerDetail],
-  );
-
   const { data: detail, isLoading: isLegacyDetailLoading } = useQuery({
     queryKey: ['trade-token-detail-legacy', normalizedChain, normalizedContract],
     queryFn: () => getCoinDetail(normalizedChain, normalizedContract),
     staleTime: 15_000,
     refetchInterval: 20_000,
-    enabled: !activeInstrumentId,
+    enabled: Boolean(normalizedChain),
   });
 
   const {
@@ -297,8 +330,16 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     isError: isKlineError,
     error: klineError,
   } = useQuery({
-    queryKey: ['trade-token-kline', normalizedChain, normalizedContract, activeInstrumentId, klinePeriod],
-    queryFn: () => fetchTokenCandles(klinePeriod, 60),
+    queryKey: [
+      'trade-token-kline',
+      normalizedChain,
+      normalizedContract,
+      activeInstrumentId,
+      chartRange,
+      activeChartRequest.period,
+      activeChartRequest.size,
+    ],
+    queryFn: () => fetchTokenCandles(activeChartRequest.period, activeChartRequest.size),
     staleTime: 20_000,
     refetchInterval: 30_000,
   });
@@ -326,20 +367,64 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   );
   const currentWatchKey = toWatchlistKey(normalizedChain, normalizedContract);
   const isInWatchlist = watchlistKeySet.has(currentWatchKey);
-  const preferredProviderDetail = hasMeaningfulTokenIdentity(providerDetail) ? providerDetail : null;
   const preferredDetail = hasMeaningfulTokenIdentity(detail) ? detail : detail ?? null;
-  const resolvedTokenDetail = preferredProviderDetail ?? preferredDetail;
+  const resolvedTokenDetail: TokenDetailLike | null = {
+    chain: preferredDetail?.chain ?? null,
+    contract: preferredDetail?.contract ?? null,
+    symbol: preferredDetail?.symbol ?? null,
+    name: preferredDetail?.name ?? null,
+    image: preferredDetail?.image ?? null,
+    about: preferredDetail?.about ?? null,
+    currentPriceUsd: preferredDetail?.currentPriceUsd ?? null,
+    priceChange24h: preferredDetail?.priceChange24h ?? null,
+    holders: preferredDetail?.holders ?? null,
+    liquidityUsd: preferredDetail?.liquidityUsd ?? null,
+    top10HolderPercent: preferredDetail?.top10HolderPercent ?? null,
+    lockLpPercent: preferredDetail?.lockLpPercent ?? null,
+    fdv: preferredDetail?.fdv ?? null,
+    volume24h: preferredDetail?.volume24h ?? null,
+  };
 
+  const previewPriceChangePct = routePreview?.price_change_percentage_24h ?? null;
+  const detailPriceChangePct = resolvedTokenDetail?.priceChange24h ?? null;
+  const shouldUseTradeBrowseFallback =
+    !Number.isFinite(Number(previewPriceChangePct))
+    && !Number.isFinite(Number(detailPriceChangePct));
+
+  const { data: tradeBrowseFallback } = useQuery({
+    queryKey: ['trade-browse-price-change-fallback'],
+    queryFn: () => getTradeBrowse(),
+    staleTime: 60_000,
+    refetchInterval: 90_000,
+    enabled: shouldUseTradeBrowseFallback,
+  });
+
+  const tradeBrowseFallbackItem = useMemo(
+    () =>
+      findBrowseFallbackItem(tradeBrowseFallback, {
+        instrumentId: activeInstrumentId,
+        chain: normalizedChain,
+        contract: normalizedContract,
+      }),
+    [activeInstrumentId, normalizedChain, normalizedContract, tradeBrowseFallback],
+  );
+
+  const tradeBrowseFallbackPriceChangePct = tradeBrowseFallbackItem?.change24h ?? null;
   const rawPriceChangePct =
-    preferredProviderDetail?.priceChange24h
-    ?? preferredProviderDetail?.change24h
-    ?? preferredDetail?.priceChange24h
-    ?? routePreview?.price_change_percentage_24h;
+    previewPriceChangePct
+    ?? tradeBrowseFallbackPriceChangePct
+    ?? detailPriceChangePct;
   const shouldUseKlineChangeFallback = !Number.isFinite(Number(rawPriceChangePct));
 
   const { data: fallbackChangeKlineData } = useQuery({
     queryKey: ['trade-token-kline-change-fallback', normalizedChain, normalizedContract, activeInstrumentId],
-    queryFn: () => fetchTokenCandles('1h', 48),
+    queryFn: async () => {
+      for (const option of KLINE_RANGE_FALLBACK_CHANGE_OPTIONS) {
+        const candles = await fetchTokenCandles(option.period, option.size);
+        if (candles.length > 1) return candles;
+      }
+      return [];
+    },
     staleTime: 20_000,
     refetchInterval: 30_000,
     enabled: shouldUseKlineChangeFallback,
@@ -347,34 +432,32 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
   useEffect(() => {
     ingestAgentEvent('asset_viewed', {
-      asset: (preferredProviderDetail?.symbol ?? preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+      asset: (preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
       itemId: activeInstrumentId ?? undefined,
       chain: normalizedChain,
       contract: normalizedContract,
       source: 'trade_detail',
     }).catch(() => undefined);
-  }, [activeInstrumentId, normalizedChain, normalizedContract, preferredDetail?.symbol, preferredProviderDetail?.symbol, routePreview?.symbol]);
+  }, [activeInstrumentId, normalizedChain, normalizedContract, preferredDetail?.symbol, routePreview?.symbol]);
 
   const chartCandles = useMemo<CandlePoint[]>(
     () => normalizeCandlesForLiveline(klineData),
     [klineData],
   );
+  const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[activeChartRequest.period];
 
   const chartLine = useMemo<LivelinePoint[]>(
-    () => toLivelinePoints(chartCandles),
-    [chartCandles],
+    () => toOpenAnchoredLivelinePoints(chartCandles, candleWidth),
+    [candleWidth, chartCandles],
   );
 
   const latestChartValue =
     chartLine.length > 0
       ? chartLine[chartLine.length - 1].value
-      : preferredProviderDetail?.currentPriceUsd
-        ?? preferredProviderDetail?.currentPrice
-        ?? preferredDetail?.currentPriceUsd
+      : resolvedTokenDetail?.currentPriceUsd
         ?? routePreview?.current_price
         ?? 0;
 
-  const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
   const chartWindow = useMemo(
     () => computeAdaptiveChartWindowSeconds(chartCandles, candleWidth, 60),
     [candleWidth, chartCandles],
@@ -384,6 +467,12 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const displayName = resolvedTokenDetail?.name ?? routePreview?.name ?? t('trade.detailTitle');
   const displaySymbol = (resolvedTokenDetail?.symbol ?? routePreview?.symbol ?? '').trim();
   const displayImage = resolvedTokenDetail?.image ?? routePreview?.image ?? null;
+  const displayAbout = (resolvedTokenDetail?.about ?? '').trim();
+  const displayFdv = resolvedTokenDetail?.fdv ?? null;
+  const displayVolume24h = resolvedTokenDetail?.volume24h ?? routePreview?.turnover_24h ?? null;
+  const displayHolders = resolvedTokenDetail?.holders ?? null;
+  const displayLiquidity = resolvedTokenDetail?.liquidityUsd ?? null;
+  const displayTop10HolderPercent = resolvedTokenDetail?.top10HolderPercent ?? null;
   const tradeMarketChain = (resolvedTokenDetail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
   const tradeContract = (resolvedTokenDetail?.contract ?? normalizedContract).trim();
   const tradeChainId = getChainIdByMarketChain(tradeMarketChain);
@@ -407,26 +496,38 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       : numericPriceChangePct > 0
         ? 'text-success'
         : 'text-error';
-  const isPriceLoading = isLegacyDetailLoading || isInstrumentDetailLoading;
+  const isPriceLoading = isLegacyDetailLoading;
   const isChartLoading = isKlineLoading && chartCandles.length === 0;
-  const shouldShowHeaderSkeleton = (isLegacyDetailLoading || isInstrumentDetailLoading) && !resolvedTokenDetail && !routePreview;
+  const shouldShowHeaderSkeleton =
+    isLegacyDetailLoading
+    && !resolvedTokenDetail?.name
+    && !routePreview;
   const chartColor = useMemo(
     () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
     [resolvedTheme],
   );
 
-  async function switchKlinePeriod(nextPeriod: KlinePeriod): Promise<void> {
-    if (nextPeriod === klinePeriod || pendingKlinePeriod) return;
-    setPendingKlinePeriod(nextPeriod);
+  async function switchChartRange(nextRange: DetailChartRange): Promise<void> {
+    if (nextRange === chartRange || pendingChartRange) return;
+    setPendingChartRange(nextRange);
+    const nextRequest = KLINE_RANGE_REQUESTS[nextRange];
     try {
       await queryClient.fetchQuery({
-        queryKey: ['trade-token-kline', normalizedChain, normalizedContract, activeInstrumentId, nextPeriod],
-        queryFn: () => fetchTokenCandles(nextPeriod, 60),
+        queryKey: [
+          'trade-token-kline',
+          normalizedChain,
+          normalizedContract,
+          activeInstrumentId,
+          nextRange,
+          nextRequest.period,
+          nextRequest.size,
+        ],
+        queryFn: () => fetchTokenCandles(nextRequest.period, nextRequest.size),
         staleTime: 20_000,
       });
-      setKlinePeriod(nextPeriod);
+      setChartRange(nextRange);
     } finally {
-      setPendingKlinePeriod(null);
+      setPendingChartRange(null);
     }
   }
 
@@ -446,14 +547,14 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
           itemId: `${normalizedChain}:${normalizedContract}`,
           chain: normalizedChain,
           contract: normalizedContract,
-          symbol: (providerDetail?.symbol ?? detail?.symbol ?? routePreview?.symbol ?? '').trim() || undefined,
-          name: (providerDetail?.name ?? detail?.name ?? routePreview?.name ?? '').trim() || undefined,
+          symbol: (detail?.symbol ?? routePreview?.symbol ?? '').trim() || undefined,
+          name: (detail?.name ?? routePreview?.name ?? '').trim() || undefined,
           image: displayImage,
           source: 'token_detail',
           change24h: priceChangePct ?? null,
         });
         ingestAgentEvent('asset_favorited', {
-          asset: (preferredProviderDetail?.symbol ?? preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+          asset: (preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
           itemId: activeInstrumentId ?? undefined,
           chain: normalizedChain,
           contract: normalizedContract,
@@ -577,15 +678,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
                   ? Number.isFinite(Number(routePreview?.current_price))
                     ? formatUsdAdaptive(Number(routePreview?.current_price), i18n.language)
                     : t('trade.priceUnavailable')
-                  : Number.isFinite(Number(preferredProviderDetail?.currentPriceUsd))
-                    ? formatUsdAdaptive(Number(preferredProviderDetail?.currentPriceUsd), i18n.language)
-                    : Number.isFinite(Number(preferredProviderDetail?.currentPrice))
-                      ? formatUsdAdaptive(Number(preferredProviderDetail?.currentPrice), i18n.language)
-                      : preferredDetail?.currentPriceUsd != null && Number.isFinite(preferredDetail.currentPriceUsd)
-                        ? formatUsdAdaptive(preferredDetail.currentPriceUsd, i18n.language)
-                        : Number.isFinite(Number(routePreview?.current_price))
-                          ? formatUsdAdaptive(Number(routePreview?.current_price), i18n.language)
-                        : t('trade.priceUnavailable')}
+                  : Number.isFinite(Number(resolvedTokenDetail?.currentPriceUsd))
+                    ? formatUsdAdaptive(Number(resolvedTokenDetail?.currentPriceUsd), i18n.language)
+                    : Number.isFinite(Number(routePreview?.current_price))
+                      ? formatUsdAdaptive(Number(routePreview?.current_price), i18n.language)
+                      : t('trade.priceUnavailable')}
               </p>
               <p className={`m-0 mt-1 flex items-center gap-1 text-base font-medium ${priceChangeTone}`}>
                 <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
@@ -611,11 +708,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
               <button
                 key={option.value}
                 type="button"
-                className={`btn btn-xs border-0 px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => void switchKlinePeriod(option.value)}
-                disabled={pendingKlinePeriod != null}
+                className={`btn btn-xs border-0 px-3 ${chartRange === option.value ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => void switchChartRange(option.value)}
+                disabled={pendingChartRange != null}
               >
-                {pendingKlinePeriod === option.value ? (
+                {pendingChartRange === option.value ? (
                   <span className="loading loading-spinner loading-xs" />
                 ) : (
                   t(option.labelKey)
@@ -672,7 +769,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
               badge={false}
               window={chartWindow}
               formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
-              formatTime={() => ''}
+              formatTime={(time) => formatChartTimeLabel(time, i18n.language, candleWidth)}
               grid={false}
               scrub
               padding={{ top: 6, right: 6, bottom: 6, left: 6 }}
@@ -682,8 +779,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       </section>
 
       <section className="p-0">
-        <h2 className="m-0 text-lg font-bold">{t('trade.tokenInfo')}</h2>
-        {(isLegacyDetailLoading || isInstrumentDetailLoading) && !resolvedTokenDetail ? (
+        <h2 className="m-0 text-lg font-bold">{t('trade.about')}</h2>
+        <p className="m-0 mt-3 whitespace-pre-wrap text-sm leading-7 text-base-content/75">
+          {displayAbout || t('trade.noDescription')}
+        </p>
+        {isLegacyDetailLoading && !resolvedTokenDetail?.name ? (
           <div className="mt-3 grid grid-cols-2 gap-3">
             {Array.from({ length: 8 }).map((_, index) => (
               <div key={`token-info-skeleton-${index}`} className="rounded bg-base-200/40 p-2">
@@ -695,6 +795,30 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         ) : (
           <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div className="rounded bg-base-200/40 p-2">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.change24h')}</p>
+              <p className={`m-0 mt-1 font-medium ${priceChangeTone}`}>{formatPct(priceChangePct)}</p>
+            </div>
+            <div className="rounded bg-base-200/40 p-2">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.volume24h')}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompactUsd(displayVolume24h, i18n.language)}</p>
+            </div>
+            <div className="rounded bg-base-200/40 p-2">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.fdv')}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompactUsd(displayFdv, i18n.language)}</p>
+            </div>
+            <div className="rounded bg-base-200/40 p-2">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.liquidity')}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompactUsd(displayLiquidity, i18n.language)}</p>
+            </div>
+            <div className="rounded bg-base-200/40 p-2">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.holders')}</p>
+              <p className="m-0 mt-1 font-medium">{formatCompact(displayHolders, i18n.language)}</p>
+            </div>
+            <div className="rounded bg-base-200/40 p-2">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.top10HolderPercent')}</p>
+              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(displayTop10HolderPercent)}</p>
+            </div>
+            <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.chain')}</p>
               <p className="m-0 mt-1 font-medium">{displayChain || '--'}</p>
             </div>
@@ -704,35 +828,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
                 {displayContract
                   ? displayContract === 'native'
                     ? t('trade.nativeToken')
-                    : displayContract
+                    : formatTruncatedContract(displayContract)
                   : resolvedTokenDetail
                     ? t('trade.nativeToken')
                     : '--'}
               </p>
-            </div>
-            <div className="rounded bg-base-200/40 p-2">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.marketCap')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(routePreview?.market_cap, i18n.language)}</p>
-            </div>
-            <div className="rounded bg-base-200/40 p-2">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.turnover24h')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(routePreview?.turnover_24h, i18n.language)}</p>
-            </div>
-            <div className="rounded bg-base-200/40 p-2">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.holders')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(preferredProviderDetail?.holders ?? preferredDetail?.holders, i18n.language)}</p>
-            </div>
-            <div className="rounded bg-base-200/40 p-2">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.liquidity')}</p>
-              <p className="m-0 mt-1 font-medium">{formatCompact(preferredProviderDetail?.liquidityUsd ?? preferredDetail?.liquidityUsd, i18n.language)}</p>
-            </div>
-            <div className="rounded bg-base-200/40 p-2">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.top10HolderPercent')}</p>
-              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(preferredProviderDetail?.top10HolderPercent ?? preferredDetail?.top10HolderPercent)}</p>
-            </div>
-            <div className="rounded bg-base-200/40 p-2">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.lockLpPercent')}</p>
-              <p className="m-0 mt-1 font-medium">{formatPercentFromRatio(preferredProviderDetail?.lockLpPercent ?? preferredDetail?.lockLpPercent)}</p>
             </div>
           </div>
         )}

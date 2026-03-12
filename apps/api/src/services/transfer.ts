@@ -1,6 +1,7 @@
-import { createMeeClient, createNexusClient, type GetQuotePayload, type MeeClient } from '@biconomy/abstractjs';
+import { createMeeClient, type GetQuotePayload, type MeeClient } from '@biconomy/abstractjs';
 import {
   createPublicClient,
+  createWalletClient,
   encodeFunctionData,
   http,
   isAddress,
@@ -11,8 +12,7 @@ import {
 } from 'viem';
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, TransferQuoteRequest, TransferQuoteResponse } from '../types';
-import { decryptString } from '../utils/crypto';
-import { createBiconomyMultichainAccount, ensureWalletWithPrivateKey } from './wallet';
+import { buildEvmWalletExecutionContext, getWalletChainAddress } from './wallet';
 import {
   prepareSolanaTransfer,
   refreshSolanaTransferStatusByHash,
@@ -61,13 +61,6 @@ type TransferCall = {
   value: bigint;
 };
 
-type NexusPreparedTransfer = {
-  mode: 'nexus';
-  quote: TransferQuoteResponse;
-  call: TransferCall;
-  nexusClient: ReturnType<typeof createNexusClient>;
-};
-
 type MeePreparedTransfer = {
   mode: 'mee';
   quote: TransferQuoteResponse;
@@ -75,7 +68,21 @@ type MeePreparedTransfer = {
   meeQuote: GetQuotePayload;
 };
 
-export type PreparedTransfer = NexusPreparedTransfer | MeePreparedTransfer | PreparedSolanaTransfer;
+type EoaPreparedTransfer = {
+  mode: 'eoa';
+  quote: TransferQuoteResponse;
+  publicClient: ReturnType<typeof createPublicClient>;
+  walletClient: ReturnType<typeof createWalletClient>;
+  request: {
+    chain: Chain;
+    account: Address;
+    to: Address;
+    value: bigint;
+    data?: `0x${string}`;
+  };
+};
+
+export type PreparedTransfer = MeePreparedTransfer | EoaPreparedTransfer | PreparedSolanaTransfer;
 
 function resolveChainConfig(env: Bindings, chainId: number): ChainRuntimeConfig {
   if (chainId === mainnet.id) {
@@ -184,39 +191,72 @@ function estimateFeeWei(userOp: Record<string, unknown>): {
 }
 
 async function buildTransferContext(env: Bindings, userId: string, chainId: number) {
-  const wallet = await ensureWalletWithPrivateKey(env, userId);
-
-  let privateKey: string;
-  try {
-    privateKey = await decryptString(wallet.encryptedPrivateKey, env.APP_SECRET);
-  } catch {
-    throw new Error('wallet_key_decryption_failed');
-  }
-  const smartAccount = await createBiconomyMultichainAccount(env, privateKey as `0x${string}`);
-  const deployment = smartAccount.deploymentOn(chainId, true);
-
-  const client = createNexusClient({
-    chain: deployment.chain,
-    account: deployment,
-    ...(env.BICONOMY_BUNDLER_URL?.trim()
-      ? { bundlerUrl: env.BICONOMY_BUNDLER_URL.trim() }
-      : env.BICONOMY_BUNDLER_API_KEY?.trim()
-        ? { apiKey: env.BICONOMY_BUNDLER_API_KEY.trim() }
-        : {}),
+  const { chain, rpcUrl } = resolveChainConfig(env, chainId);
+  const { wallet, signer, account } = await buildEvmWalletExecutionContext(env, userId);
+  const deployment = account.deploymentOn(chainId, true);
+  const publicClient = deployment.publicClient;
+  const walletClient = createWalletClient({
+    account: signer,
+    chain,
+    transport: http(rpcUrl),
   });
+  const meeClient = await createMeeClient({ account });
 
   const fromAddress =
-    wallet.chainAccounts.find((row) => row.chainId === chainId)?.address ??
-    wallet.address ??
-    deployment.address;
+    getWalletChainAddress(wallet, chainId) ??
+    signer.address;
 
   return {
     wallet,
-    smartAccount,
+    signer,
+    account,
     deployment,
-    client,
+    publicClient,
+    walletClient,
+    meeClient,
     fromAddress: fromAddress as Address,
   };
+}
+
+async function estimateDirectFee(
+  publicClient: ReturnType<typeof createPublicClient>,
+  request: { account: Address; to: Address; value: bigint; data?: `0x${string}` },
+): Promise<{
+  estimatedFeeWei: string | null;
+  estimatedGas: TransferQuoteResponse['estimatedGas'];
+}> {
+  const [gasLimit, feeEstimate] = await Promise.all([
+    publicClient.estimateGas(request),
+    publicClient.estimateFeesPerGas().catch(async () => {
+      const gasPrice = await publicClient.getGasPrice();
+      return {
+        gasPrice,
+        maxFeePerGas: gasPrice,
+        maxPriorityFeePerGas: null,
+      };
+    }),
+  ]);
+  const maxFeePerGas = feeEstimate.maxFeePerGas ?? feeEstimate.gasPrice ?? null;
+  const estimatedFeeWei = maxFeePerGas !== null ? (gasLimit * maxFeePerGas).toString() : null;
+
+  return {
+    estimatedFeeWei,
+    estimatedGas: {
+      preVerificationGas: null,
+      verificationGasLimit: null,
+      callGasLimit: gasLimit.toString(),
+      maxFeePerGas: maxFeePerGas?.toString() ?? null,
+      maxPriorityFeePerGas: feeEstimate.maxPriorityFeePerGas?.toString() ?? null,
+    },
+  };
+}
+
+function resolveMeeSponsorshipEnabled(env: Bindings): boolean {
+  const raw = env.MEE_SPONSORSHIP_ENABLED?.trim().toLowerCase();
+  if (!raw) return false;
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return false;
 }
 
 export async function prepareTransfer(
@@ -236,7 +276,15 @@ export async function prepareTransfer(
   const toAddress = toAddressOrThrow(input.toAddress, 'to_address');
   const tokenAddress = input.tokenAddress?.trim() ? toAddressOrThrow(input.tokenAddress, 'token_address') : null;
 
-  const { smartAccount, client, deployment, fromAddress } = await buildTransferContext(env, userId, chain.id);
+  const {
+    account,
+    deployment,
+    publicClient,
+    walletClient,
+    meeClient,
+    fromAddress,
+    signer,
+  } = await buildTransferContext(env, userId, chain.id);
 
   let tokenDecimals = tokenAddress ? normalizeTokenDecimals(input.tokenDecimals) : 18;
   if (tokenAddress && tokenDecimals === null) {
@@ -292,7 +340,7 @@ export async function prepareTransfer(
     if (!simulationEnabled) {
       transferInstructionData.gasLimit = transferCallGasLimit;
     }
-    const instructions = await smartAccount.buildComposable(
+    const instructions = await account.buildComposable(
       {
         type: 'transfer',
         data: transferInstructionData,
@@ -309,7 +357,6 @@ export async function prepareTransfer(
       gasLimit: simulationEnabled ? null : transferCallGasLimit.toString(),
       instructions: toLogSafe(instructions),
     });
-    const meeClient = await createMeeClient({ account: smartAccount });
     try {
       await meeClient.getSupportedFeeToken({
         chainId: feeTokenChainId,
@@ -326,6 +373,8 @@ export async function prepareTransfer(
           address: feeTokenAddress,
           chainId: feeTokenChainId,
         },
+        delegate: true,
+        multichain7702Auth: true,
         ...(simulationEnabled
           ? {
               simulation: {
@@ -387,9 +436,67 @@ export async function prepareTransfer(
       meeQuote,
     };
   } else {
-    const nativeBalance = await deployment.publicClient.getBalance({ address: fromAddress });
+    const nativeBalance = await publicClient.getBalance({ address: fromAddress });
     if (nativeBalance < amountRaw) {
       throw new Error('insufficient_native_balance');
+    }
+
+    const sponsorshipEnabled = resolveMeeSponsorshipEnabled(env);
+    if (sponsorshipEnabled) {
+      const instructions = await account.buildComposable(
+        {
+          type: 'nativeTokenTransfer',
+          data: {
+            chainId: chain.id,
+            to: toAddress,
+            value: amountRaw,
+            gasLimit: resolveTransferCallGasLimit(env),
+          },
+        },
+        [],
+      );
+      const meeQuote = await meeClient.getQuote({
+        instructions,
+        sponsorship: true,
+        delegate: true,
+        multichain7702Auth: true,
+        ...(resolveMeeSimulationEnabled(env)
+          ? {
+              simulation: {
+                simulate: true,
+              },
+            }
+          : {}),
+      });
+
+      return {
+        mode: 'mee',
+        quote: {
+          chainId: chain.id,
+          fromAddress,
+          toAddress,
+          tokenAddress,
+          tokenSymbol: input.tokenSymbol?.trim().toUpperCase() || null,
+          tokenDecimals,
+          amountInput: input.amount.trim(),
+          amountRaw: amountRaw.toString(),
+          estimatedFeeWei: meeQuote.paymentInfo.tokenWeiAmount ?? '0',
+          estimatedFeeTokenAmount: meeQuote.paymentInfo.tokenAmount ?? null,
+          estimatedFeeTokenWei: meeQuote.paymentInfo.tokenWeiAmount ?? null,
+          estimatedFeeTokenAddress: meeQuote.paymentInfo.token ?? null,
+          estimatedFeeTokenChainId: Number(meeQuote.paymentInfo.chainId),
+          insufficientFeeTokenBalance: false,
+          estimatedGas: {
+            preVerificationGas: null,
+            verificationGasLimit: null,
+            callGasLimit: null,
+            maxFeePerGas: null,
+            maxPriorityFeePerGas: null,
+          },
+        },
+        meeClient,
+        meeQuote,
+      };
     }
 
     call = {
@@ -397,33 +504,43 @@ export async function prepareTransfer(
       data: '0x',
       value: amountRaw,
     };
+    const feeEstimate = await estimateDirectFee(publicClient, {
+      account: signer.address,
+      to: call.to,
+      value: call.value,
+      data: call.data,
+    });
+
+    return {
+      mode: 'eoa',
+      quote: {
+        chainId: chain.id,
+        fromAddress,
+        toAddress,
+        tokenAddress,
+        tokenSymbol: input.tokenSymbol?.trim().toUpperCase() || null,
+        tokenDecimals,
+        amountInput: input.amount.trim(),
+        amountRaw: amountRaw.toString(),
+        estimatedFeeWei: feeEstimate.estimatedFeeWei,
+        estimatedFeeTokenAmount: null,
+        estimatedFeeTokenWei: null,
+        estimatedFeeTokenAddress: null,
+        estimatedFeeTokenChainId: null,
+        insufficientFeeTokenBalance: false,
+        estimatedGas: feeEstimate.estimatedGas,
+      },
+      publicClient,
+      walletClient,
+      request: {
+        chain,
+        account: signer.address,
+        to: call.to,
+        value: call.value,
+        data: call.data,
+      },
+    };
   }
-
-  const userOp = (await client.prepareUserOperation({ calls: [call] })) as unknown as Record<string, unknown>;
-  const feeEstimate = estimateFeeWei(userOp);
-
-  return {
-    mode: 'nexus',
-    quote: {
-      chainId: chain.id,
-      fromAddress,
-      toAddress,
-      tokenAddress,
-      tokenSymbol: input.tokenSymbol?.trim().toUpperCase() || null,
-      tokenDecimals,
-      amountInput: input.amount.trim(),
-      amountRaw: amountRaw.toString(),
-      estimatedFeeWei: feeEstimate.estimatedFeeWei,
-      estimatedFeeTokenAmount: null,
-      estimatedFeeTokenWei: null,
-      estimatedFeeTokenAddress: null,
-      estimatedFeeTokenChainId: null,
-      insufficientFeeTokenBalance: false,
-      estimatedGas: feeEstimate.estimatedGas,
-    },
-    call,
-    nexusClient: client,
-  };
 }
 
 export async function sendPreparedTransfer(prepared: PreparedTransfer): Promise<Hash> {
@@ -439,8 +556,7 @@ export async function sendPreparedTransfer(prepared: PreparedTransfer): Promise<
     return payload.hash;
   }
 
-  const hash = await prepared.nexusClient.sendTransaction({ calls: [prepared.call] });
-  return hash;
+  return prepared.walletClient.sendTransaction(prepared.request);
 }
 
 export async function waitForTransferReceipt(
@@ -466,7 +582,7 @@ export async function waitForTransferReceipt(
   }
 
   try {
-    const receipt = await prepared.nexusClient.waitForTransactionReceipt({
+    const receipt = await prepared.publicClient.waitForTransactionReceipt({
       hash: txHash,
       confirmations: 1,
       timeout: 120_000,
@@ -488,8 +604,7 @@ export async function refreshTransferStatusByHash(
     return refreshSolanaTransferStatusByHash(env, txHash);
   }
   try {
-    const { smartAccount } = await buildTransferContext(env, userId, chainId);
-    const meeClient = await createMeeClient({ account: smartAccount });
+    const { meeClient } = await buildTransferContext(env, userId, chainId);
     const receipt = await meeClient.getSupertransactionReceipt({ hash: txHash, waitForReceipts: false });
     if (receipt.transactionStatus === 'SUCCESS' || receipt.transactionStatus === 'MINED_SUCCESS') {
       return 'confirmed';
@@ -500,12 +615,7 @@ export async function refreshTransferStatusByHash(
   } catch {
     // Fallback to direct chain receipt lookup for non-MEE tx hashes.
   }
-
-  const { chain, rpcUrl } = resolveChainConfig(env, chainId);
-  const publicClient = createPublicClient({
-    chain,
-    transport: http(rpcUrl),
-  });
+  const { publicClient } = await buildTransferContext(env, userId, chainId);
 
   try {
     const receipt = await publicClient.getTransactionReceipt({ hash: txHash });

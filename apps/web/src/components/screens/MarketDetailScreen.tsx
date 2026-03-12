@@ -25,7 +25,7 @@ import {
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { formatUsdAdaptive } from '../../utils/currency';
-import { computeAdaptiveChartWindowSeconds, normalizeCandlesForLiveline, toLivelinePoints } from '../../utils/kline';
+import { computeAdaptiveChartWindowSeconds, normalizeCandlesForLiveline, toLivelinePoints, toOpenAnchoredLivelinePoints } from '../../utils/kline';
 import {
   normalizeTradeMarketDetailType,
   normalizeWatchlistItemId,
@@ -384,9 +384,10 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     () => normalizeCandlesForLiveline(klineData),
     [klineData],
   );
+  const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
   const chartLine = useMemo<LivelinePoint[]>(
-    () => toLivelinePoints(chartCandles),
-    [chartCandles],
+    () => toOpenAnchoredLivelinePoints(chartCandles, candleWidth),
+    [candleWidth, chartCandles],
   );
   const predictionSeries = useMemo<PredictionKlineSeries[]>(
     () => (predictionKlineData ?? []).map((series: PredictionEventSeries) => {
@@ -414,7 +415,6 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     : normalizedType === 'prediction'
       ? Number(selectedPredictionOption?.probability ?? displayProbability ?? 0)
       : Number(displayPrice ?? 0);
-  const candleWidth = KLINE_CANDLE_WIDTH_SECONDS[klinePeriod];
   const chartWindow = useMemo(
     () => computeAdaptiveChartWindowSeconds(chartCandles, candleWidth, 60),
     [candleWidth, chartCandles],

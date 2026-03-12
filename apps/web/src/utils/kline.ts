@@ -55,6 +55,40 @@ export function toLivelinePoints(candles: CandlePoint[]): LivelinePoint[] {
   }));
 }
 
+export function toOpenAnchoredLivelinePoints(
+  candles: CandlePoint[],
+  candleWidthSeconds: number,
+): LivelinePoint[] {
+  if (!candles.length) return [];
+  if (!Number.isFinite(candleWidthSeconds) || candleWidthSeconds <= 0) {
+    return toLivelinePoints(candles);
+  }
+
+  const first = candles[0];
+  const points: LivelinePoint[] = [
+    {
+      time: first.time,
+      value: first.open,
+    },
+  ];
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  for (let index = 0; index < candles.length; index += 1) {
+    const candle = candles[index];
+    const isLastCandle = index === candles.length - 1;
+    const projectedCloseTime = candle.time + candleWidthSeconds;
+    points.push({
+      // Clamp the active candle so the chart never projects into the future.
+      // Liveline appends a live point at "now"; if our last close sits after now,
+      // the final segment appears to bend backward.
+      time: isLastCandle ? Math.min(projectedCloseTime, nowSeconds) : projectedCloseTime,
+      value: candle.close,
+    });
+  }
+
+  return points;
+}
+
 export function computeAdaptiveChartWindowSeconds(
   candles: CandlePoint[],
   candleWidthSeconds: number,
@@ -68,4 +102,30 @@ export function computeAdaptiveChartWindowSeconds(
   const nowSeconds = Math.floor(Date.now() / 1000);
   const stalenessSeconds = Math.max(0, nowSeconds - latest.time);
   return Math.max(baseWindow, stalenessSeconds + candleWidthSeconds * 10);
+}
+
+export function formatChartTimeLabel(
+  time: number,
+  locale: string,
+  candleWidthSeconds: number,
+): string {
+  const normalizedTime = normalizeUnixSeconds(time);
+  if (!normalizedTime) return '';
+
+  const date = new Date(normalizedTime * 1000);
+  const normalizedLocale = locale || undefined;
+
+  if (candleWidthSeconds >= 86_400) {
+    return new Intl.DateTimeFormat(normalizedLocale, {
+      month: 'short',
+      day: 'numeric',
+    }).format(date);
+  }
+
+  return new Intl.DateTimeFormat(normalizedLocale, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
 }

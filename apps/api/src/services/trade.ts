@@ -1,4 +1,4 @@
-import { createNexusClient } from '@biconomy/abstractjs';
+import { createMeeClient, type GetQuotePayload, type MeeClient } from '@biconomy/abstractjs';
 import {
   createPublicClient,
   encodeFunctionData,
@@ -11,8 +11,7 @@ import {
 } from 'viem';
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, TradeQuoteRequest, TradeQuoteResponse } from '../types';
-import { decryptString } from '../utils/crypto';
-import { createBiconomyMultichainAccount, ensureWalletWithPrivateKey } from './wallet';
+import { buildEvmWalletExecutionContext, getWalletChainAddress } from './wallet';
 import {
   prepareSolanaTrade,
   refreshSolanaTradeStatusByHash,
@@ -91,9 +90,10 @@ type ZeroExQuoteResponse = {
 };
 
 export type PreparedTrade = {
+  mode: 'mee';
   quote: TradeQuoteResponse;
-  calls: TradeCall[];
-  nexusClient: ReturnType<typeof createNexusClient>;
+  meeClient: MeeClient;
+  meeQuote: GetQuotePayload;
 };
 
 export type PreparedAnyTrade = PreparedTrade | PreparedSolanaTrade;
@@ -304,37 +304,27 @@ async function fetchZeroExQuote(
 }
 
 async function buildTradeContext(env: Bindings, userId: string, chainId: number) {
-  const wallet = await ensureWalletWithPrivateKey(env, userId);
-
-  let privateKey: string;
-  try {
-    privateKey = await decryptString(wallet.encryptedPrivateKey, env.APP_SECRET);
-  } catch {
-    throw new Error('wallet_key_decryption_failed');
-  }
-
-  const smartAccount = await createBiconomyMultichainAccount(env, privateKey as `0x${string}`);
-  const deployment = smartAccount.deploymentOn(chainId, true);
-  const client = createNexusClient({
-    chain: deployment.chain,
-    account: deployment,
-    ...(env.BICONOMY_BUNDLER_URL?.trim()
-      ? { bundlerUrl: env.BICONOMY_BUNDLER_URL.trim() }
-      : env.BICONOMY_BUNDLER_API_KEY?.trim()
-        ? { apiKey: env.BICONOMY_BUNDLER_API_KEY.trim() }
-        : {}),
-  });
-
+  const { wallet, account } = await buildEvmWalletExecutionContext(env, userId);
+  const deployment = account.deploymentOn(chainId, true);
+  const meeClient = await createMeeClient({ account });
   const fromAddress =
-    wallet.chainAccounts.find((row) => row.chainId === chainId)?.address
-    ?? wallet.address
-    ?? deployment.address;
+    getWalletChainAddress(wallet, chainId)
+    ?? account.signer.address;
 
   return {
+    account,
     deployment,
-    client,
+    meeClient,
     fromAddress: fromAddress as Address,
   };
+}
+
+function resolveMeeSponsorshipEnabled(env: Bindings): boolean {
+  const raw = env.MEE_SPONSORSHIP_ENABLED?.trim().toLowerCase();
+  if (!raw) return false;
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return false;
 }
 
 export async function prepareTrade(
@@ -358,7 +348,7 @@ export async function prepareTrade(
     throw new Error('invalid_trade_pair');
   }
 
-  const { deployment, client, fromAddress } = await buildTradeContext(env, userId, chain.id);
+  const { account, deployment, meeClient, fromAddress } = await buildTradeContext(env, userId, chain.id);
 
   let sellTokenDecimals = normalizeTokenDecimals(input.sellTokenDecimals);
   if (sellTokenDecimals === null) {
@@ -418,7 +408,7 @@ export async function prepareTrade(
   const allowanceTarget = allowanceTargetCandidate ? toAddressOrThrow(allowanceTargetCandidate, 'allowance_target') : null;
 
   let needsApproval = false;
-  const calls: TradeCall[] = [];
+  let instructions = [] as Awaited<ReturnType<typeof account.buildComposable>>;
 
   if (allowanceTarget) {
     const allowance = await deployment.publicClient.readContract({
@@ -430,30 +420,73 @@ export async function prepareTrade(
 
     if (allowance < quotedSellAmountRaw) {
       needsApproval = true;
-      calls.push({
-        to: sellTokenAddress,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: 'approve',
-          args: [allowanceTarget, MAX_UINT256],
-        }),
-        value: 0n,
-      });
+      instructions = await account.buildComposable(
+        {
+          type: 'rawCalldata',
+          data: {
+            to: sellTokenAddress,
+            calldata: encodeFunctionData({
+              abi: ERC20_ABI,
+              functionName: 'approve',
+              args: [allowanceTarget, MAX_UINT256],
+            }),
+            value: 0n,
+            chainId: chain.id,
+          },
+        },
+        instructions,
+      );
     }
   }
 
   const swapTo = toAddressOrThrow(providerQuote.transaction?.to ?? '', 'trade_to_address');
-  calls.push({
-    to: swapTo,
-    data: normalizeHexData(providerQuote.transaction?.data),
-    value: parseTransactionValue(providerQuote.transaction?.value),
-  });
+  instructions = await account.buildComposable(
+    {
+      type: 'rawCalldata',
+      data: {
+        to: swapTo,
+        calldata: normalizeHexData(providerQuote.transaction?.data),
+        value: parseTransactionValue(providerQuote.transaction?.value),
+        chainId: chain.id,
+      },
+    },
+    instructions,
+  );
 
-  const userOp = (await client.prepareUserOperation({ calls })) as unknown as Record<string, unknown>;
-  const feeEstimate = estimateFeeWei(userOp);
+  const sponsorshipEnabled = resolveMeeSponsorshipEnabled(env);
+  const useFeeToken = !sponsorshipEnabled;
+  if (useFeeToken) {
+    try {
+      await meeClient.getSupportedFeeToken({
+        chainId: chain.id,
+        tokenAddress: sellTokenAddress,
+      });
+    } catch {
+      if (!sponsorshipEnabled) {
+        throw new Error('unsupported_fee_token');
+      }
+    }
+  }
+
+  const meeQuote = await meeClient.getQuote({
+    instructions,
+    delegate: true,
+    multichain7702Auth: true,
+    ...(useFeeToken
+      ? {
+          feeToken: {
+            address: sellTokenAddress,
+            chainId: chain.id,
+          },
+        }
+      : {
+          sponsorship: true as const,
+        }),
+  });
   const price = Number(providerQuote.price);
 
   return {
+    mode: 'mee',
     quote: {
       chainId: chain.id,
       fromAddress,
@@ -470,12 +503,18 @@ export async function prepareTrade(
       slippageBps,
       allowanceTarget,
       needsApproval,
-      estimatedFeeWei: feeEstimate.estimatedFeeWei,
-      estimatedGas: feeEstimate.estimatedGas,
+      estimatedFeeWei: meeQuote.paymentInfo.tokenWeiAmount ?? '0',
+      estimatedGas: {
+        preVerificationGas: null,
+        verificationGasLimit: null,
+        callGasLimit: null,
+        maxFeePerGas: null,
+        maxPriorityFeePerGas: null,
+      },
       provider: '0x',
     },
-    calls,
-    nexusClient: client,
+    meeClient,
+    meeQuote,
   };
 }
 
@@ -483,8 +522,8 @@ export async function sendPreparedTrade(prepared: PreparedAnyTrade): Promise<Has
   if (isPreparedSolanaTrade(prepared)) {
     return await sendPreparedSolanaTrade(prepared) as Hash;
   }
-  const hash = await prepared.nexusClient.sendTransaction({ calls: prepared.calls });
-  return hash;
+  const payload = await prepared.meeClient.executeQuote({ quote: prepared.meeQuote });
+  return payload.hash;
 }
 
 export async function waitForTradeReceipt(
@@ -495,12 +534,14 @@ export async function waitForTradeReceipt(
     return waitForPreparedSolanaTrade(prepared, txHash);
   }
   try {
-    const receipt = await prepared.nexusClient.waitForTransactionReceipt({
-      hash: txHash,
-      confirmations: 1,
-      timeout: 120_000,
-    });
-    return receipt.status === 'success' ? 'confirmed' : 'failed';
+    const receipt = await prepared.meeClient.waitForSupertransactionReceipt({ hash: txHash });
+    if (receipt.transactionStatus === 'SUCCESS' || receipt.transactionStatus === 'MINED_SUCCESS') {
+      return 'confirmed';
+    }
+    if (receipt.transactionStatus === 'FAILED' || receipt.transactionStatus === 'MINED_FAIL') {
+      return 'failed';
+    }
+    return 'pending';
   } catch {
     return 'pending';
   }

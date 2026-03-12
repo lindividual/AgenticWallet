@@ -13,7 +13,8 @@ Passkey-only login/register MVP for an agentic crypto wallet.
 - Session token issued by Worker
 - User wallet bootstrap on first registration:
   - server-generated EOA key, encrypted-at-rest
-  - real Smart Account creation via `@biconomy/abstractjs` (Ethereum/Base/BNB)
+  - EOA address reused across Ethereum/Base/BNB
+  - EIP-7702 orchestration via `@biconomy/abstractjs` for gasless-capable flows
 - Supported chains API: Ethereum, Base, BNB Chain
 - Agent recommendation API stub
 
@@ -92,7 +93,7 @@ Notes:
 - This is MVP code and not production-hardening.
 - Passkey requires HTTPS in production.
 - WebAuthn `origin` and `rpId` are derived from each incoming request (`origin` + `hostname`), so frontend and API should be served on the same host for passkey flows.
-- Wallet creation currently uses backend-generated EOA and keeps a placeholder for Biconomy Abstract integration.
+- Wallet creation now uses backend-generated EOA addresses for EVM chains, with EIP-7702/MEE execution for orchestrated flows.
 
 ## Market Shelves (Phase 1)
 - `GET /v1/market/top-assets` supports `name` (`topGainers|topLosers|topVolume|marketCap|trending`), `source` (`auto|coingecko|bitget`), and optional `category`.

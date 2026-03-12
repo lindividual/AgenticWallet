@@ -135,7 +135,8 @@ function clampInt(value: number, min: number, max: number): number {
 }
 
 function buildTokenDetailCacheKey(chain: string, contract: string): string {
-  return `${normalizeMarketChain(chain)}:${toContractKey(contract)}`;
+  const normalizedChain = normalizeMarketChain(chain);
+  return `${normalizedChain}:${toContractKey(contract, normalizedChain)}`;
 }
 
 type NormalizedTokenDetailLookup = {
@@ -153,7 +154,7 @@ function normalizeTokenDetailLookup(
   const normalizedChain = normalizeText(input.chain);
   if (!normalizedChain) return null;
   const chain = normalizeMarketChain(normalizedChain);
-  const contract = toContractKey(input.contract);
+  const contract = toContractKey(input.contract, chain);
   return {
     cacheKey: buildTokenDetailCacheKey(chain, contract),
     chain,
@@ -168,7 +169,7 @@ function buildTokenKlineCacheKey(options: {
   size?: number;
 }): { cacheKey: string; chain: string; contract: string; period: string; size: number } {
   const chain = normalizeMarketChain(options.chain);
-  const contract = toContractKey(options.contract);
+  const contract = toContractKey(options.contract, chain);
   const period = normalizeText(options.period) ?? '1h';
   const size = clampInt(options.size ?? 60, 5, 300);
   return {
@@ -330,7 +331,7 @@ export async function fetchBitgetTopMarketAssets(
   return filtered.slice(0, limit).map((row, idx) => {
     const chain = normalizeMarketChain(row.chain);
     const contract = normalizeText(row.contract) ?? '';
-    const contractKey = toContractKey(contract);
+    const contractKey = toContractKey(contract, chain);
     const chainAssetId = buildChainAssetId(chain, contract);
     const assetId = buildAssetId(chain, contract);
     const instrumentId = `ins:spot:${chain}:${contractKey}`;
@@ -382,12 +383,12 @@ function mapBitgetBaseInfoRowToTokenDetail(
   },
 ): BitgetTokenDetail {
   const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? fallback.chain);
-  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(fallback.contract);
+  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(fallback.contract, normalizedChain);
   return {
     asset_id: buildAssetId(normalizedChain, normalizedContract),
     chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
     chain: normalizedChain,
-    contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
+    contract: toContractKey(normalizedContract, normalizedChain) === 'native' ? '' : normalizedContract,
     symbol: normalizeText(row.symbol) ?? 'UNKNOWN',
     name: normalizeText(row.name) ?? normalizeText(row.symbol) ?? 'Unknown Token',
     image: normalizeText(row.icon),
@@ -577,7 +578,7 @@ export async function fetchBitgetTokenKline(
     try {
       result = await bitgetPost<{ list?: BitgetKlineRow[] }>(env, '/bgw-pro/market/v3/coin/getKline', {
         chain: normalized.chain,
-        contract: contractKeyToUpstreamContract(normalized.contract),
+        contract: contractKeyToUpstreamContract(normalized.contract, normalized.chain),
         period: normalized.period,
         size: normalized.size,
       });
@@ -690,7 +691,7 @@ function mapBitgetSecurityAuditRow(
   },
 ): BitgetTokenSecurityAudit {
   const normalizedChain = normalizeMarketChain(normalizeText(row.chain) ?? fallback.chain);
-  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(fallback.contract);
+  const normalizedContract = normalizeText(row.contract) ?? contractKeyToUpstreamContract(fallback.contract, normalizedChain);
   const riskChecks = Array.isArray(row.riskChecks) ? row.riskChecks.map(mapSecurityCheck) : [];
   const warnChecks = Array.isArray(row.warnChecks) ? row.warnChecks.map(mapSecurityCheck) : [];
   const lowChecks = Array.isArray(row.lowChecks) ? row.lowChecks.map(mapSecurityCheck) : [];
@@ -698,7 +699,7 @@ function mapBitgetSecurityAuditRow(
     asset_id: buildAssetId(normalizedChain, normalizedContract),
     chain_asset_id: buildChainAssetId(normalizedChain, normalizedContract),
     chain: normalizedChain,
-    contract: toContractKey(normalizedContract) === 'native' ? '' : normalizedContract,
+    contract: toContractKey(normalizedContract, normalizedChain) === 'native' ? '' : normalizedContract,
     riskChecks,
     warnChecks,
     lowChecks,
@@ -742,7 +743,7 @@ export async function fetchBitgetTokenSecurityAudit(
       list: [
         {
           chain: normalized.chain,
-          contract: contractKeyToUpstreamContract(normalized.contract),
+          contract: contractKeyToUpstreamContract(normalized.contract, normalized.chain),
         },
       ],
       source: 'bg',
@@ -752,7 +753,7 @@ export async function fetchBitgetTokenSecurityAudit(
       rows.find((row) => {
         const rowLookup = normalizeTokenDetailLookup({
           chain: normalizeText(row.chain) ?? normalized.chain,
-          contract: normalizeText(row.contract) ?? contractKeyToUpstreamContract(normalized.contract),
+          contract: normalizeText(row.contract) ?? contractKeyToUpstreamContract(normalized.contract, normalized.chain),
         });
         return rowLookup?.cacheKey === normalized.cacheKey;
       })

@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { fetchBinanceSpotKlines } from '../services/binance';
+import { fetchBinanceTokenDynamicInfo, fetchBinanceTokenMeta, fetchBinanceWeb3TokenKlines } from '../services/binance';
 import {
   buildLegacyItemIdForInstrument,
   getAssetById,
@@ -41,6 +41,54 @@ function augmentTokenDetailAliases<T extends {
     currentPrice: detail.currentPriceUsd ?? null,
     change24h: detail.priceChange24h ?? null,
   };
+}
+
+type SpotProviderDetailBase = {
+  chain: string;
+  contract: string;
+  image?: string | null;
+  currentPriceUsd?: number | null;
+  priceChange24h?: number | null;
+  holders?: number | null;
+  totalSupply?: number | null;
+  liquidityUsd?: number | null;
+  top10HolderPercent?: number | null;
+  devHolderPercent?: number | null;
+  about?: string | null;
+  fdv?: number | null;
+  volume24h?: number | null;
+};
+
+async function enrichSpotProviderDetail<T extends SpotProviderDetailBase>(
+  detail: T,
+): Promise<T & {
+  currentPrice: number | null;
+  change24h: number | null;
+  about: string | null;
+  fdv: number | null;
+  volume24h: number | null;
+}> {
+  const [binanceMeta, binanceDynamic] = await Promise.allSettled([
+    fetchBinanceTokenMeta(detail.chain, detail.contract),
+    fetchBinanceTokenDynamicInfo(detail.chain, detail.contract),
+  ]);
+  const meta = binanceMeta.status === 'fulfilled' ? binanceMeta.value : null;
+  const dynamic = binanceDynamic.status === 'fulfilled' ? binanceDynamic.value : null;
+
+  return augmentTokenDetailAliases({
+    ...detail,
+    image: detail.image ?? meta?.icon ?? null,
+    currentPriceUsd: detail.currentPriceUsd ?? dynamic?.price ?? null,
+    priceChange24h: detail.priceChange24h ?? dynamic?.percentChange24h ?? null,
+    holders: detail.holders ?? dynamic?.holders ?? null,
+    totalSupply: detail.totalSupply ?? dynamic?.totalSupply ?? null,
+    liquidityUsd: detail.liquidityUsd ?? dynamic?.liquidity ?? null,
+    top10HolderPercent: detail.top10HolderPercent ?? dynamic?.top10HoldersPercentage ?? null,
+    devHolderPercent: detail.devHolderPercent ?? dynamic?.devHoldingPercent ?? null,
+    about: detail.about ?? meta?.description ?? null,
+    fdv: detail.fdv ?? dynamic?.fdv ?? null,
+    volume24h: detail.volume24h ?? dynamic?.volume24h ?? null,
+  });
 }
 
 export function registerAssetRoutes(app: Hono<AppEnv>): void {
@@ -181,7 +229,7 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
             const detail = spotLookup.chain === 'sol'
               ? (await fetchSolanaTokenDetails(c.env, [spotLookup.contract || 'native'])).get(spotLookup.contract || 'native') ?? null
               : await fetchBitgetTokenDetail(c.env, spotLookup.chain, spotLookup.contract);
-            providerDetail = detail ? augmentTokenDetailAliases(detail) : null;
+            providerDetail = detail ? await enrichSpotProviderDetail(detail) : null;
           }
         }
       } else if (instrument.market_type === 'perp') {
@@ -249,18 +297,8 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
           return c.json({ error: 'spot_instrument_lookup_failed' }, 400);
         }
 
-        const resolveBinanceFallbackCandles = async (): Promise<null | Awaited<ReturnType<typeof fetchBinanceSpotKlines>>> => {
-          let symbol = toUpperSymbol(instrument.symbol);
-          if (!symbol) {
-            try {
-              const detail = await fetchBitgetTokenDetail(c.env, spotLookup.chain, spotLookup.contract);
-              symbol = toUpperSymbol(detail?.symbol);
-            } catch {
-              symbol = null;
-            }
-          }
-          if (!symbol) return null;
-          const fallback = await fetchBinanceSpotKlines(symbol, period, size);
+        const resolveBinanceFallbackCandles = async (): Promise<null | Awaited<ReturnType<typeof fetchBinanceWeb3TokenKlines>>> => {
+          const fallback = await fetchBinanceWeb3TokenKlines(spotLookup.chain, spotLookup.contract, period, size);
           return fallback.length > 0 ? fallback : null;
         };
 
@@ -275,7 +313,7 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
         } catch (error) {
           const fallback = await resolveBinanceFallbackCandles();
           if (fallback) {
-            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_spot_fallback' });
+            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_web3_fallback' });
           }
           throw error;
         }
@@ -283,13 +321,13 @@ export function registerAssetRoutes(app: Hono<AppEnv>): void {
         if (!candles.length) {
           const fallback = await resolveBinanceFallbackCandles();
           if (fallback && shouldPreferFallbackCandles(candles, fallback, period)) {
-            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_spot_fallback' });
+            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_web3_fallback' });
           }
         }
         if (candles.length && isKlineStale(candles, period)) {
           const fallback = await resolveBinanceFallbackCandles();
           if (fallback && shouldPreferFallbackCandles(candles, fallback, period)) {
-            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_spot_fallback' });
+            return c.json({ instrumentId: instrument.instrument_id, period, candles: fallback, source: 'binance_web3_fallback' });
           }
         }
         return c.json({ instrumentId: instrument.instrument_id, period, candles });

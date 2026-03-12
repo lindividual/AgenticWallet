@@ -1,20 +1,29 @@
 import { Keypair } from '@solana/web3.js';
 import { getMEEVersion, toMultichainNexusAccount } from '@biconomy/abstractjs';
+import type { Address } from 'viem';
 import { http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, WalletProtocol, WalletSummary } from '../types';
-import { encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
+import { decryptString, encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
 import { resolveMeeVersion } from '../utils/env';
 import { nowIso } from '../utils/time';
 
 export const SOLANA_CHAIN_ID = 101;
 export const EVM_PROTOCOL: WalletProtocol = 'evm';
 export const SVM_PROTOCOL: WalletProtocol = 'svm';
+export const EVM_WALLET_PROVIDER = 'eoa-7702';
 
 export type WalletWithPrivateKey = WalletSummary & {
   encryptedPrivateKey: string;
   encryptedProtocolKeys: Partial<Record<WalletProtocol, string>>;
+};
+
+export type EvmWalletExecutionContext = {
+  wallet: WalletWithPrivateKey;
+  privateKey: `0x${string}`;
+  signer: ReturnType<typeof privateKeyToAccount>;
+  account: Awaited<ReturnType<typeof createBiconomyMultichainAccount>>;
 };
 
 type WalletChainAccountRow = {
@@ -115,13 +124,13 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
   if (existing) return existing;
 
   const privateKey = generatePrivateKeyHex();
-  const smartAccount = await createBiconomyMultichainAccount(env, privateKey);
+  const evmAccount = privateKeyToAccount(privateKey);
   const solanaKeypair = Keypair.generate();
   const solanaSecretKey = encodeBase64(solanaKeypair.secretKey);
   const chainAccounts: WalletSummary['chainAccounts'] = [
-    { chainId: mainnet.id, protocol: EVM_PROTOCOL, address: smartAccount.addressOn(mainnet.id, true) },
-    { chainId: base.id, protocol: EVM_PROTOCOL, address: smartAccount.addressOn(base.id, true) },
-    { chainId: bsc.id, protocol: EVM_PROTOCOL, address: smartAccount.addressOn(bsc.id, true) },
+    { chainId: mainnet.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+    { chainId: base.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+    { chainId: bsc.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
     { chainId: SOLANA_CHAIN_ID, protocol: SVM_PROTOCOL, address: solanaKeypair.publicKey.toBase58() },
   ];
   const primaryAddress =
@@ -133,7 +142,7 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
   const statements = [
     env.DB.prepare(
       'INSERT INTO wallets (user_id, address, encrypted_private_key, provider, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).bind(userId, primaryAddress, encryptedPrivateKey, 'biconomy-abstractjs', now),
+    ).bind(userId, primaryAddress, encryptedPrivateKey, EVM_WALLET_PROVIDER, now),
     ...chainAccounts.map((chain) =>
       env.DB.prepare(
         'INSERT INTO wallet_chain_accounts (user_id, chain_id, protocol, address, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -150,7 +159,7 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
 
   return {
     address: primaryAddress,
-    provider: 'biconomy-abstractjs',
+    provider: EVM_WALLET_PROVIDER,
     chainAccounts,
   };
 }
@@ -195,6 +204,41 @@ export async function ensureWalletWithPrivateKey(env: Bindings, userId: string):
     throw new Error('wallet_not_found');
   }
   return wallet;
+}
+
+export async function buildEvmWalletExecutionContext(
+  env: Bindings,
+  userId: string,
+): Promise<EvmWalletExecutionContext> {
+  const wallet = await ensureWalletWithPrivateKey(env, userId);
+
+  let privateKey: string;
+  try {
+    privateKey = await decryptString(wallet.encryptedPrivateKey, env.APP_SECRET);
+  } catch {
+    throw new Error('wallet_key_decryption_failed');
+  }
+
+  const signer = privateKeyToAccount(privateKey as `0x${string}`);
+  const account = await createBiconomyMultichainAccount(env, privateKey as `0x${string}`);
+
+  return {
+    wallet,
+    privateKey: privateKey as `0x${string}`,
+    signer,
+    account,
+  };
+}
+
+export function getWalletChainAddress(
+  wallet: WalletSummary | WalletWithPrivateKey,
+  chainId: number,
+  protocol: WalletProtocol = EVM_PROTOCOL,
+): Address | string | null {
+  const found = wallet.chainAccounts.find((row) => row.chainId === chainId && row.protocol === protocol)?.address;
+  if (found) return found;
+  if (protocol === EVM_PROTOCOL) return wallet.address;
+  return null;
 }
 
 export async function createBiconomyMultichainAccount(env: Bindings, privateKey: `0x${string}`) {

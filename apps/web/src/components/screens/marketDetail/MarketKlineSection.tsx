@@ -3,6 +3,7 @@ import type { CandlePoint, LivelinePoint } from 'liveline';
 import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
 import { formatUsdAdaptive } from '../../../utils/currency';
+import { formatChartTimeLabel } from '../../../utils/kline';
 
 export type PredictionKlineSeries = {
   id: string;
@@ -339,7 +340,7 @@ export function MarketKlineSection({
                 badge={false}
                 window={chartWindow}
                 formatValue={(value) => formatUsdAdaptive(value, locale)}
-                formatTime={() => ''}
+                formatTime={(time) => formatChartTimeLabel(time, locale, candleWidth)}
                 grid={false}
                 scrub
                 padding={{ top: 6, right: 6, bottom: 6, left: 6 }}

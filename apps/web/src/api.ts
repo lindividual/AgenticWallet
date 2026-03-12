@@ -338,6 +338,9 @@ export type CoinDetail = {
   top10HolderPercent: number | null;
   devHolderPercent: number | null;
   lockLpPercent: number | null;
+  about: string | null;
+  fdv: number | null;
+  volume24h: number | null;
 };
 
 export type TokenSecurityCheck = {

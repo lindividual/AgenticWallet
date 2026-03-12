@@ -28,7 +28,12 @@ import {
   normalizeTradeMarketDetailType,
   scoreSearchMatch,
 } from '../services/tradeBrowse';
-import { fetchBinanceSpotKlines, searchBinanceSpotTokens } from '../services/binance';
+import {
+  fetchBinanceWeb3TokenKlines,
+  fetchBinanceTokenDynamicInfo,
+  fetchBinanceTokenMeta,
+  searchBinanceSpotTokens,
+} from '../services/binance';
 import { fetchSolanaTokenDetails } from '../services/solana';
 import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
 import {
@@ -69,6 +74,28 @@ type MarketSearchResultItem = {
   contract: string | null;
   asset_id?: string;
   instrument_id?: string;
+};
+
+type EnrichedTokenDetail = {
+  asset_id: string;
+  chain_asset_id: string;
+  chain: string;
+  contract: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  priceChange24h: number | null;
+  currentPriceUsd: number | null;
+  holders: number | null;
+  totalSupply: number | null;
+  liquidityUsd: number | null;
+  top10HolderPercent: number | null;
+  devHolderPercent: number | null;
+  lockLpPercent: number | null;
+  instrument_id?: string;
+  about: string | null;
+  fdv: number | null;
+  volume24h: number | null;
 };
 
 function normalizeText(raw: unknown): string | null {
@@ -473,6 +500,50 @@ function applyTokenDetailIdentity(
     ...detail,
     asset_id: resolved.asset_id,
     instrument_id: resolved.instrument_id,
+  };
+}
+
+async function enrichTokenDetail(
+  detail: {
+    asset_id: string;
+    chain_asset_id: string;
+    chain: string;
+    contract: string;
+    symbol: string;
+    name: string;
+    image: string | null;
+    priceChange24h: number | null;
+    currentPriceUsd: number | null;
+    holders?: number | null;
+    totalSupply?: number | null;
+    liquidityUsd?: number | null;
+    top10HolderPercent?: number | null;
+    devHolderPercent?: number | null;
+    lockLpPercent?: number | null;
+    instrument_id?: string;
+  },
+): Promise<EnrichedTokenDetail> {
+  const [binanceMeta, binanceDynamic] = await Promise.allSettled([
+    fetchBinanceTokenMeta(detail.chain, detail.contract),
+    fetchBinanceTokenDynamicInfo(detail.chain, detail.contract),
+  ]);
+  const meta = binanceMeta.status === 'fulfilled' ? binanceMeta.value : null;
+  const dynamic = binanceDynamic.status === 'fulfilled' ? binanceDynamic.value : null;
+
+  return {
+    ...detail,
+    image: detail.image ?? meta?.icon ?? null,
+    currentPriceUsd: detail.currentPriceUsd ?? dynamic?.price ?? null,
+    priceChange24h: detail.priceChange24h ?? dynamic?.percentChange24h ?? null,
+    holders: detail.holders ?? dynamic?.holders ?? null,
+    totalSupply: detail.totalSupply ?? dynamic?.totalSupply ?? null,
+    liquidityUsd: detail.liquidityUsd ?? dynamic?.liquidity ?? null,
+    top10HolderPercent: detail.top10HolderPercent ?? dynamic?.top10HoldersPercentage ?? null,
+    devHolderPercent: detail.devHolderPercent ?? dynamic?.devHoldingPercent ?? null,
+    lockLpPercent: detail.lockLpPercent ?? null,
+    about: meta?.description ?? null,
+    fdv: dynamic?.fdv ?? null,
+    volume24h: dynamic?.volume24h ?? null,
   };
 }
 
@@ -1076,7 +1147,8 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       if (!detail) {
         return c.json({ error: 'token_not_found' }, 404);
       }
-      return c.json({ detail });
+      const enrichedDetail = await enrichTokenDetail(detail);
+      return c.json({ detail: enrichedDetail });
     }
 
     if (isNativeLikeContract(contract)) {
@@ -1101,8 +1173,10 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
             image,
           };
           const identityMap = await buildTokenDetailIdentityMap(c.env, [normalizedDetail]);
+          const detailWithIdentity = applyTokenDetailIdentity(normalizedDetail, identityMap);
+          const enrichedDetail = await enrichTokenDetail(detailWithIdentity);
           return c.json({
-            detail: applyTokenDetailIdentity(normalizedDetail, identityMap),
+            detail: enrichedDetail,
           });
         }
       } catch {
@@ -1137,8 +1211,10 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       }
 
       const identityMap = await buildTokenDetailIdentityMap(c.env, [normalizedDetail]);
+      const detailWithIdentity = applyTokenDetailIdentity(normalizedDetail, identityMap);
+      const enrichedDetail = await enrichTokenDetail(detailWithIdentity);
       return c.json({
-        detail: applyTokenDetailIdentity(normalizedDetail, identityMap),
+        detail: enrichedDetail,
       });
     } catch (error) {
       return c.json(
@@ -1295,17 +1371,8 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
     }
 
     try {
-      const resolveBinanceFallbackCandles = async (): Promise<null | Awaited<ReturnType<typeof fetchBinanceSpotKlines>>> => {
-        if (chain === 'sol') return null;
-        let symbol: string | null = null;
-        try {
-          const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
-          symbol = toUpperSymbol(detail?.symbol);
-        } catch {
-          symbol = null;
-        }
-        if (!symbol) return null;
-        const fallback = await fetchBinanceSpotKlines(symbol, period, size);
+      const resolveBinanceFallbackCandles = async (): Promise<null | Awaited<ReturnType<typeof fetchBinanceWeb3TokenKlines>>> => {
+        const fallback = await fetchBinanceWeb3TokenKlines(chain, contract, period, size);
         return fallback.length > 0 ? fallback : null;
       };
 
@@ -1319,19 +1386,15 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
         ? await resolveBinanceFallbackCandles()
         : null;
       if (fallback && shouldPreferFallbackCandles(candles, fallback, period)) {
-        return c.json({ period, candles: fallback, source: 'binance_spot_fallback' });
+        return c.json({ period, candles: fallback, source: 'binance_web3_fallback' });
       }
       return c.json({ period, candles });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown_error';
       try {
-        const detail = await fetchBitgetTokenDetail(c.env, chain, contract);
-        const symbol = toUpperSymbol(detail?.symbol);
-        if (symbol) {
-          const fallback = await fetchBinanceSpotKlines(symbol, period, size);
-          if (fallback.length > 0) {
-            return c.json({ period, candles: fallback, source: 'binance_spot_fallback' });
-          }
+        const fallback = await fetchBinanceWeb3TokenKlines(chain, contract, period, size);
+        if (fallback.length > 0) {
+          return c.json({ period, candles: fallback, source: 'binance_web3_fallback' });
         }
       } catch {
         // ignore
