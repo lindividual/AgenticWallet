@@ -593,6 +593,7 @@ export type AgentRecommendation = {
     symbol: string;
     chain: string | null;
     contract: string | null;
+    instrument_id?: string | null;
     name: string;
     image: string | null;
     price_change_percentage_24h: number | null;

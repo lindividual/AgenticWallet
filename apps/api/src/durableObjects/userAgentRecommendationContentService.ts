@@ -4,7 +4,9 @@ import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { getSupportedMarketChains } from '../config/appConfig';
 import {
   buildFallbackRecommendations,
+  EXCLUDED_RECOMMENDATION_SYMBOLS,
   isoDate,
+  isExcludedRecommendationAsset,
   mergePreferredAssets,
   parseLlmRecommendations,
   summarizeEvents,
@@ -126,12 +128,14 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
     }
   }
 
+  rows = rows.filter((row) => !isExcludedRecommendationAsset(row.asset));
+
   const allowedSymbols = new Set(
     [
       ...marketAssets.map((asset) => (asset.symbol ?? '').trim().toUpperCase()),
       ...portfolioHoldings.map((holding) => holding.symbol.trim().toUpperCase()),
       ...watchlistSymbols,
-    ].filter(Boolean),
+    ].filter((symbol) => Boolean(symbol) && !isExcludedRecommendationAsset(symbol)),
   );
   if (allowedSymbols.size > 0) {
     rows = rows.filter((row) => allowedSymbols.has(row.asset.trim().toUpperCase()));
@@ -159,6 +163,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
         asset_symbol,
         asset_chain,
         asset_contract,
+        asset_instrument_id,
         asset_display_name,
         asset_image,
         asset_price_change_24h,
@@ -166,13 +171,14 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
         score,
         generated_at,
         valid_until
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       crypto.randomUUID(),
       row.category,
       row.asset,
       symbol || null,
       snapshot?.chain ?? null,
       snapshot?.contract ?? null,
+      snapshot?.instrumentId ?? null,
       snapshot?.name ?? symbol ?? null,
       snapshot?.image ?? null,
       snapshot?.priceChange24h ?? null,
@@ -197,6 +203,7 @@ function buildRecommendationSystemPrompt(language: RecommendationLanguage): stri
     `- The score (0–1) should reflect confidence based on data quality and relevance.`,
     `- Do NOT output markdown, only raw JSON.`,
     `- Do NOT recommend coins only from user holdings — include market trending opportunities.`,
+    `- Never recommend stablecoins such as ${Array.from(EXCLUDED_RECOMMENDATION_SYMBOLS).join(', ')}.`,
   ].join('\n');
 }
 

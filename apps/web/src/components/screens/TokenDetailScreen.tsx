@@ -328,6 +328,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const isInWatchlist = watchlistKeySet.has(currentWatchKey);
   const preferredProviderDetail = hasMeaningfulTokenIdentity(providerDetail) ? providerDetail : null;
   const preferredDetail = hasMeaningfulTokenIdentity(detail) ? detail : detail ?? null;
+  const resolvedTokenDetail = preferredProviderDetail ?? preferredDetail;
 
   const rawPriceChangePct =
     preferredProviderDetail?.priceChange24h
@@ -378,13 +379,13 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     () => computeAdaptiveChartWindowSeconds(chartCandles, candleWidth, 60),
     [candleWidth, chartCandles],
   );
-  const displayContract = (preferredProviderDetail?.contract ?? preferredDetail?.contract ?? normalizedContract).trim();
-  const displayChain = (preferredProviderDetail?.chain ?? preferredDetail?.chain ?? normalizedChain).trim().toUpperCase();
-  const displayName = preferredProviderDetail?.name ?? preferredDetail?.name ?? routePreview?.name ?? displayContract;
-  const displaySymbol = (preferredProviderDetail?.symbol ?? preferredDetail?.symbol ?? routePreview?.symbol ?? '').trim();
-  const displayImage = preferredProviderDetail?.image ?? preferredDetail?.image ?? routePreview?.image ?? null;
-  const tradeMarketChain = (preferredProviderDetail?.chain ?? preferredDetail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
-  const tradeContract = (preferredProviderDetail?.contract ?? preferredDetail?.contract ?? normalizedContract).trim();
+  const displayContract = (resolvedTokenDetail?.contract ?? '').trim();
+  const displayChain = (resolvedTokenDetail?.chain ?? '').trim().toUpperCase();
+  const displayName = resolvedTokenDetail?.name ?? routePreview?.name ?? t('trade.detailTitle');
+  const displaySymbol = (resolvedTokenDetail?.symbol ?? routePreview?.symbol ?? '').trim();
+  const displayImage = resolvedTokenDetail?.image ?? routePreview?.image ?? null;
+  const tradeMarketChain = (resolvedTokenDetail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
+  const tradeContract = (resolvedTokenDetail?.contract ?? normalizedContract).trim();
   const tradeChainId = getChainIdByMarketChain(tradeMarketChain);
   const tradeTokenConfig = tradeChainId ? getTradeTokenConfig(tradeChainId) : null;
   const canTradeToken = Boolean(
@@ -408,7 +409,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         : 'text-error';
   const isPriceLoading = isLegacyDetailLoading || isInstrumentDetailLoading;
   const isChartLoading = isKlineLoading && chartCandles.length === 0;
-  const shouldShowHeaderSkeleton = (isLegacyDetailLoading || isInstrumentDetailLoading) && !detail && !providerDetail;
+  const shouldShowHeaderSkeleton = (isLegacyDetailLoading || isInstrumentDetailLoading) && !resolvedTokenDetail && !routePreview;
   const chartColor = useMemo(
     () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
     [resolvedTheme],
@@ -682,7 +683,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
       <section className="p-0">
         <h2 className="m-0 text-lg font-bold">{t('trade.tokenInfo')}</h2>
-        {(isLegacyDetailLoading || isInstrumentDetailLoading) && !detail && !providerDetail ? (
+        {(isLegacyDetailLoading || isInstrumentDetailLoading) && !resolvedTokenDetail ? (
           <div className="mt-3 grid grid-cols-2 gap-3">
             {Array.from({ length: 8 }).map((_, index) => (
               <div key={`token-info-skeleton-${index}`} className="rounded bg-base-200/40 p-2">
@@ -699,7 +700,15 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.contract')}</p>
-              <p className="m-0 mt-1 truncate font-medium">{displayContract || t('trade.nativeToken')}</p>
+              <p className="m-0 mt-1 truncate font-medium">
+                {displayContract
+                  ? displayContract === 'native'
+                    ? t('trade.nativeToken')
+                    : displayContract
+                  : resolvedTokenDetail
+                    ? t('trade.nativeToken')
+                    : '--'}
+              </p>
             </div>
             <div className="rounded bg-base-200/40 p-2">
               <p className="m-0 text-xs text-base-content/60">{t('trade.marketCap')}</p>

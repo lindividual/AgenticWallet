@@ -16,6 +16,7 @@ import {
   syncUserAgentRequestLocale,
 } from '../services/agent';
 import { hydrateArticleRelatedAssets } from '../services/articleRelatedAssets';
+import { normalizeMarketChain, toContractKey } from '../services/assetIdentity';
 import { generateWithLlm, getLlmDebugStatus, getLlmErrorInfo, getLlmStatus } from '../services/llm';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { enqueueTopicSpecialGeneration } from '../services/topicSpecialCoordinator';
@@ -35,6 +36,12 @@ function normalizePreferredLocale(raw: string | undefined): string | null {
     .filter(Boolean)[0];
   if (!first) return null;
   return first.toLowerCase();
+}
+
+function toSpotInstrumentId(chain: string | null | undefined, contract: string | null | undefined): string | null {
+  const normalizedChain = (chain ?? '').trim();
+  if (!normalizedChain) return null;
+  return `ins:spot:${normalizeMarketChain(normalizedChain)}:${toContractKey(contract ?? 'native', normalizedChain)}`;
 }
 
 function hasTopicSpecialAdminAccess(c: {
@@ -147,6 +154,11 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
             symbol: row.asset_symbol ?? row.asset_name,
             chain: row.asset_chain ?? snapshot?.chain ?? null,
             contract: row.asset_contract ?? snapshot?.contract ?? null,
+            instrument_id:
+              row.asset_instrument_id
+              ?? toSpotInstrumentId(row.asset_chain, row.asset_contract)
+              ?? snapshot?.instrumentId
+              ?? null,
             name: row.asset_display_name ?? snapshot?.name ?? row.asset_name,
             image: row.asset_image ?? snapshot?.image ?? null,
             price_change_percentage_24h: row.asset_price_change_24h ?? snapshot?.priceChange24h ?? null,

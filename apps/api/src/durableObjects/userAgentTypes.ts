@@ -16,6 +16,7 @@ export type RecommendationRow = {
   asset_symbol: string | null;
   asset_chain: string | null;
   asset_contract: string | null;
+  asset_instrument_id: string | null;
   asset_display_name: string | null;
   asset_image: string | null;
   asset_price_change_24h: number | null;

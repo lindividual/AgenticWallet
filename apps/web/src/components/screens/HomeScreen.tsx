@@ -211,7 +211,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     return output.slice(0, 100);
   }, [recommendationsData?.recommendations, watchlistData?.assets]);
 
-  const { data: tokenDetailBatch, isLoading: isTokenDetailLoading } = useQuery({
+  const { data: tokenDetailBatch } = useQuery({
     queryKey: ['home-token-details', detailLookups.map((item) => buildChainAssetId(item.chain, item.contract)).join(',')],
     queryFn: () => getCoinDetailsBatch(detailLookups),
     enabled: detailLookups.length > 0,
@@ -291,7 +291,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                 currentPrice: matched?.currentPriceUsd ?? null,
                 priceChange24h: matched?.priceChange24h ?? assetMeta?.price_change_percentage_24h ?? null,
                 assetId: matched?.asset_id ?? null,
-                instrumentId: matched?.instrument_id ?? null,
+                instrumentId: matched?.instrument_id ?? assetMeta?.instrument_id ?? null,
               })
             : null;
         return {
@@ -357,7 +357,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const totalBalance = resolvedPortfolio?.totalUsd ?? 0;
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
   const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
-  const shouldShowRecommendationSkeleton = recommendations.length === 0 && (isRecommendationsLoading || isTokenDetailLoading);
+  const shouldShowRecommendationSkeleton = !recommendationsData && isRecommendationsLoading;
   const hasWatchlistAssets = (watchlistData?.assets?.length ?? 0) > 0;
   const shouldShowWatchlistSkeleton = watchlistItems.length === 0 && isWatchlistLoading;
   const shouldRenderWatchlistSection = isWatchlistLoading || hasWatchlistAssets;

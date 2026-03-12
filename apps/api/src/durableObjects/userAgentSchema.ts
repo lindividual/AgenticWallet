@@ -245,6 +245,7 @@ export function initializeAgentSchema(sql: SqlStorage): void {
       asset_symbol TEXT,
       asset_chain TEXT,
       asset_contract TEXT,
+      asset_instrument_id TEXT,
       asset_display_name TEXT,
       asset_image TEXT,
       asset_price_change_24h REAL,
@@ -266,6 +267,11 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   }
   try {
     sql.exec('ALTER TABLE recommendations ADD COLUMN asset_contract TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    sql.exec('ALTER TABLE recommendations ADD COLUMN asset_instrument_id TEXT');
   } catch {
     // Column already exists.
   }

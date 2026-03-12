@@ -889,6 +889,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
           asset_symbol,
           asset_chain,
           asset_contract,
+          asset_instrument_id,
           asset_display_name,
           asset_image,
           asset_price_change_24h,

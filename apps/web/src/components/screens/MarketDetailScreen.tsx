@@ -158,7 +158,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const normalizedItemId = itemId.trim();
   const isInstrumentRouteItem = normalizedItemId.toLowerCase().startsWith('ins:');
 
-  const { data: resolvedIdentity } = useQuery({
+  const { data: resolvedIdentity, isFetched: isIdentityFetched } = useQuery({
     queryKey: ['trade-market-identity', normalizedType, normalizedItemId],
     queryFn: () =>
       resolveAssetIdentity(
@@ -179,7 +179,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
   const activeInstrumentId = resolvedIdentity?.instrument_id?.trim() ?? null;
 
-  const { data: instrumentMarket, isLoading: isInstrumentLoading } = useQuery({
+  const { data: instrumentMarket, isLoading: isInstrumentLoading, isFetched: isInstrumentFetched } = useQuery({
     queryKey: ['market-by-instrument', activeInstrumentId],
     queryFn: () => getMarketByInstrumentId(activeInstrumentId ?? ''),
     enabled: Boolean(activeInstrumentId),
@@ -187,7 +187,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     refetchInterval: 90_000,
   });
 
-  const { data: browseData, isLoading } = useQuery({
+  const { data: browseData, isLoading, isFetched: isBrowseFetched } = useQuery({
     queryKey: ['trade-browse'],
     queryFn: () => getTradeBrowse(),
     staleTime: 60_000,
@@ -200,7 +200,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     staleTime: 15_000,
   });
 
-  const { data: detailItem, isLoading: isDetailLoading } = useQuery({
+  const { data: detailItem, isLoading: isDetailLoading, isFetched: isDetailFetched } = useQuery({
     queryKey: ['trade-market-detail', normalizedType, normalizedItemId],
     queryFn: () => getTradeMarketDetail(normalizedType, normalizedItemId),
     staleTime: 60_000,
@@ -244,7 +244,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       || null;
   }, [instrumentMarket?.instrument.source_item_id, instrumentMarket?.providerDetail, isInstrumentRouteItem, normalizedItemId, normalizedType]);
 
-  const { data: predictionDetail, isLoading: isPredictionDetailLoading } = useQuery({
+  const { data: predictionDetail, isLoading: isPredictionDetailLoading, isFetched: isPredictionDetailFetched } = useQuery({
     queryKey: ['prediction-event-detail', predictionDetailId],
     queryFn: () => getPredictionEventDetail(predictionDetailId ?? ''),
     enabled: normalizedType === 'prediction' && Boolean(predictionDetailId),
@@ -254,7 +254,29 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
   const activeMarketItem = normalizedType === 'stock' ? stockItem : normalizedType === 'perp' ? perpItem : null;
   const activePredictionItem = normalizedType === 'prediction' ? predictionDetail : null;
-  const isSummaryLoading = (isLoading || isDetailLoading || isInstrumentLoading || isPredictionDetailLoading) && !activeMarketItem && !activePredictionItem;
+  const hasResolvedSummaryIdentity = normalizedType === 'prediction'
+    ? Boolean(activePredictionItem?.title?.trim())
+    : Boolean(activeMarketItem?.name?.trim() || activeMarketItem?.symbol?.trim());
+  const isPredictionIdentityPending = normalizedType === 'prediction'
+    && !hasResolvedSummaryIdentity
+    && (
+      isPredictionDetailLoading
+      || (isInstrumentRouteItem && (!isIdentityFetched || (Boolean(activeInstrumentId) && !isInstrumentFetched)))
+      || (!isInstrumentRouteItem && !predictionDetailId && !isPredictionDetailFetched)
+    );
+  const isMarketIdentityPending = normalizedType !== 'prediction'
+    && !hasResolvedSummaryIdentity
+    && (
+      (isInstrumentRouteItem && !isIdentityFetched)
+      ||
+      isLoading
+      || isDetailLoading
+      || isInstrumentLoading
+      || !isBrowseFetched
+      || (Boolean(activeInstrumentId) && !isInstrumentFetched)
+      || (!isInstrumentRouteItem && !isDetailFetched)
+    );
+  const isSummaryLoading = isPredictionIdentityPending || isMarketIdentityPending;
   const predictionLayout = activePredictionItem?.layout === 'winner' ? 'winner' : 'binary';
   const predictionOutcomes = activePredictionItem?.outcomes ?? [];
   const selectedPredictionOption = useMemo<PredictionEventOutcome | null>(() => {
@@ -270,7 +292,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     return ranked[0] ?? predictionOutcomes[0] ?? null;
   }, [predictionOutcomes, selectedPredictionOptionId]);
 
-  const displayName = activeMarketItem?.name ?? activePredictionItem?.title ?? normalizedItemId;
+  const displayName = activeMarketItem?.name ?? activePredictionItem?.title ?? '';
   const displaySymbol = activeMarketItem?.symbol ?? '';
   const displayImage = activeMarketItem?.image ?? activePredictionItem?.image ?? null;
   const displayPrice = activeMarketItem?.currentPrice ?? null;
@@ -650,7 +672,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
       {normalizedType === 'prediction' ? (
         <PredictionOverviewSection
-          title={displayName}
+          isLoading={isSummaryLoading}
+          title={displayName || t('trade.detailTitle')}
           image={displayImage}
           description={predictionDescription}
           volume24h={displayVolume24h}

@@ -12,6 +12,13 @@ export type RecommendationDraft = {
   score: number;
 };
 
+export const EXCLUDED_RECOMMENDATION_SYMBOLS = new Set(['USDT', 'USDC', 'USD1', 'EURC']);
+
+export function isExcludedRecommendationAsset(asset: string | null | undefined): boolean {
+  const normalized = (asset ?? '').trim().toUpperCase();
+  return Boolean(normalized) && EXCLUDED_RECOMMENDATION_SYMBOLS.has(normalized);
+}
+
 export function mergePreferredAssets(
   eventAssets: string[],
   watchlistAssets: string[] = [],
@@ -21,7 +28,7 @@ export function mergePreferredAssets(
   const seen = new Set<string>();
   for (const asset of [...watchlistAssets, ...eventAssets]) {
     const normalized = asset.trim().toUpperCase();
-    if (!normalized || seen.has(normalized)) continue;
+    if (!normalized || seen.has(normalized) || isExcludedRecommendationAsset(normalized)) continue;
     seen.add(normalized);
     output.push(normalized);
     if (output.length >= limit) break;
@@ -195,8 +202,12 @@ export function buildFallbackRecommendations(
 ): RecommendationDraft[] {
   const recs: RecommendationDraft[] = [];
   const used = new Set<string>();
+  const isAllowed = (symbol: string | null | undefined): symbol is string => {
+    const normalized = (symbol ?? '').trim().toUpperCase();
+    return Boolean(normalized) && !isExcludedRecommendationAsset(normalized) && !used.has(normalized);
+  };
 
-  const trendingCoin = marketAssets.find((a) => a.symbol && !used.has(a.symbol.toUpperCase()));
+  const trendingCoin = marketAssets.find((a) => isAllowed(a.symbol ?? null));
   if (trendingCoin?.symbol) {
     const sym = trendingCoin.symbol.toUpperCase();
     used.add(sym);
@@ -210,7 +221,7 @@ export function buildFallbackRecommendations(
     });
   }
 
-  const topHolding = portfolioHoldings.find((h) => !used.has(h.symbol));
+  const topHolding = portfolioHoldings.find((h) => isAllowed(h.symbol));
   if (topHolding) {
     used.add(topHolding.symbol);
     recs.push({
@@ -221,7 +232,7 @@ export function buildFallbackRecommendations(
     });
   }
 
-  const interest = userTopAssets.find((a) => !used.has(a));
+  const interest = userTopAssets.find((a) => isAllowed(a));
   if (interest) {
     used.add(interest);
     recs.push({
@@ -232,7 +243,7 @@ export function buildFallbackRecommendations(
     });
   }
 
-  const secondTrending = marketAssets.find((a) => a.symbol && !used.has(a.symbol.toUpperCase()));
+  const secondTrending = marketAssets.find((a) => isAllowed(a.symbol ?? null));
   if (secondTrending?.symbol) {
     const sym = secondTrending.symbol.toUpperCase();
     used.add(sym);
@@ -244,8 +255,8 @@ export function buildFallbackRecommendations(
     });
   }
 
-  const defaults = ['ETH', 'BNB', 'USDC', 'USDT', 'BTC'];
-  const diversify = defaults.find((d) => !used.has(d));
+  const defaults = ['ETH', 'BTC', 'BNB', 'SOL', 'XRP'];
+  const diversify = defaults.find((d) => isAllowed(d));
   if (diversify) {
     used.add(diversify);
     recs.push({
@@ -257,7 +268,8 @@ export function buildFallbackRecommendations(
   }
 
   while (recs.length < 5) {
-    const fallback = defaults.find((d) => !used.has(d)) ?? 'ETH';
+    const fallback = defaults.find((d) => isAllowed(d)) ?? null;
+    if (!fallback) break;
     used.add(fallback);
     recs.push({
       category: 'diversify',
@@ -293,6 +305,7 @@ export function parseLlmRecommendations(text: string): RecommendationDraft[] {
     const score = typeof row.score === 'number' ? row.score : Number(row.score ?? 0);
     if (!VALID_RECOMMENDATION_CATEGORIES.has(category)) continue;
     if (!asset || !reason || !Number.isFinite(score)) continue;
+    if (isExcludedRecommendationAsset(asset)) continue;
     if (seen.has(asset)) continue;
     seen.add(asset);
     results.push({

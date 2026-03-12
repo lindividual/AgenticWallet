@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PredictionEventOutcome } from '../../../api';
 import { CachedIconImage } from '../../CachedIconImage';
+import { SkeletonBlock } from '../../Skeleton';
 
 function formatCompactUsd(value: number | null | undefined, locale: string): string {
   if (!Number.isFinite(Number(value))) return '--';
@@ -28,6 +29,7 @@ function formatDate(value: string | null | undefined, locale: string): string {
 }
 
 type PredictionOverviewSectionProps = {
+  isLoading: boolean;
   title: string;
   image: string | null;
   description: string | null;
@@ -38,6 +40,7 @@ type PredictionOverviewSectionProps = {
 };
 
 export function PredictionOverviewSection({
+  isLoading,
   title,
   image,
   description,
@@ -49,6 +52,35 @@ export function PredictionOverviewSection({
   const { t } = useTranslation();
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
   const shouldShowDescriptionToggle = (description?.trim().length ?? 0) > 120;
+
+  if (isLoading) {
+    return (
+      <section className="p-0">
+        <div className="flex items-start gap-4">
+          <SkeletonBlock className="h-14 w-14 rounded-2xl" />
+          <div className="min-w-0 flex-1">
+            <SkeletonBlock className="h-8 w-4/5 max-w-96" />
+            <SkeletonBlock className="mt-3 h-4 w-2/3 max-w-80" />
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={`prediction-overview-skeleton-${index}`} className="rounded-2xl border border-base-content/10 bg-base-100/75 p-3">
+              <SkeletonBlock className="h-3 w-8" />
+              <SkeletonBlock className="mt-3 h-4 w-3/4" />
+              <SkeletonBlock className="mt-3 h-8 w-16" />
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          <SkeletonBlock className="h-10 w-28 rounded-full" />
+          <SkeletonBlock className="h-10 w-24 rounded-full" />
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="p-0">

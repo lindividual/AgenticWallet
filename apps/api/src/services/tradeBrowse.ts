@@ -5,6 +5,7 @@ import { fetchBinanceStockTokens, fetchBinanceStockDetail, fetchBinanceStockKlin
 import { getSupportedMarketChains } from '../config/appConfig';
 import { normalizeMarketChain } from './assetIdentity';
 import { loadTokenIconLookup, resolveTokenIconFromLookup } from './marketTopAssets';
+import { safeJsonParse } from '../utils/json';
 
 export type TradeBrowseMarketItem = {
   id: string;
@@ -119,6 +120,24 @@ export type TradeBrowseResponse = {
 };
 
 const TRADE_BROWSE_CACHE_TTL_MS = 20_000;
+type TradeBrowseShelfKey = keyof Omit<TradeBrowseResponse, 'generatedAt'>;
+type TradeBrowseShelfValueByKey = {
+  topMovers: TradeBrowseMarketItem[];
+  trendings: TradeBrowseMarketItem[];
+  stocks: TradeBrowseMarketItem[];
+  perps: TradeBrowseMarketItem[];
+  predictions: TradeBrowsePredictionItem[];
+};
+type TradeBrowseShelfCacheRow = {
+  shelf_key: string;
+  payload_json: string;
+  generated_at: string;
+  expires_at: string;
+};
+type TradeBrowseShelfCacheEntry = {
+  generatedAt: string;
+  value: unknown;
+};
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
 const POLYMARKET_EVENTS_BASE_URL = 'https://gamma-api.polymarket.com/events';
@@ -170,13 +189,14 @@ const PERP_SYMBOL_ALIASES: Record<string, string[]> = {
   STETH: ['ETH'],
 };
 
-let tradeBrowseCache: { expiresAt: number; value: TradeBrowseResponse } | null = null;
-let tradeBrowseInFlight: Promise<TradeBrowseResponse> | null = null;
+const tradeBrowseShelfValueCache = new Map<TradeBrowseShelfKey, { expiresAt: number; entry: TradeBrowseShelfCacheEntry }>();
+const tradeBrowseShelfInFlight = new Map<TradeBrowseShelfKey, Promise<TradeBrowseShelfCacheEntry>>();
 let perpSearchCache: { expiresAt: number; value: TradeBrowseMarketItem[] } | null = null;
 let perpSearchInFlight: Promise<TradeBrowseMarketItem[]> | null = null;
 let predictionSearchCache: { expiresAt: number; value: TradeBrowsePredictionItem[] } | null = null;
 let predictionSearchInFlight: Promise<TradeBrowsePredictionItem[]> | null = null;
 let predictionSchemaReady = false;
+let marketShelfCacheSchemaReady = false;
 const PREDICTION_PROJECTION_TTL_MS = 2 * 60 * 1000;
 
 const HYPERLIQUID_INTERVAL_BY_KLINE_PERIOD: Record<string, string> = {
@@ -215,6 +235,141 @@ function normalizeText(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   return value ? value : null;
+}
+
+function parseTimestamp(raw: string | null | undefined): number | null {
+  const value = normalizeText(raw);
+  if (!value) return null;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function isIsoTimestampExpired(raw: string | null | undefined): boolean {
+  const ts = parseTimestamp(raw);
+  return ts == null || ts <= Date.now();
+}
+
+async function ensureMarketShelfCacheSchema(db: D1Database): Promise<void> {
+  if (marketShelfCacheSchemaReady) return;
+  try {
+    await db.prepare('SELECT shelf_key FROM market_shelf_cache LIMIT 1').first();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`market_shelf_cache_schema_missing_run_migrations:${message}`);
+  }
+  marketShelfCacheSchemaReady = true;
+}
+
+async function readTradeBrowseShelfFromD1<K extends TradeBrowseShelfKey>(
+  env: Bindings,
+  shelfKey: K,
+): Promise<{ generatedAt: string; value: TradeBrowseShelfValueByKey[K]; isExpired: boolean } | null> {
+  await ensureMarketShelfCacheSchema(env.DB);
+  const row = await env.DB
+    .prepare(
+      `SELECT shelf_key, payload_json, generated_at, expires_at
+       FROM market_shelf_cache
+       WHERE shelf_key = ?
+       LIMIT 1`,
+    )
+    .bind(shelfKey)
+    .first<TradeBrowseShelfCacheRow>();
+  if (!row) return null;
+
+  const parsed = safeJsonParse<TradeBrowseShelfValueByKey[K]>(row.payload_json);
+  if (!parsed) return null;
+
+  return {
+    generatedAt: row.generated_at,
+    value: parsed,
+    isExpired: isIsoTimestampExpired(row.expires_at),
+  };
+}
+
+async function writeTradeBrowseShelfToD1<K extends TradeBrowseShelfKey>(
+  env: Bindings,
+  shelfKey: K,
+  value: TradeBrowseShelfValueByKey[K],
+  generatedAt: string,
+  ttlMs: number,
+): Promise<void> {
+  await ensureMarketShelfCacheSchema(env.DB);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+  await env.DB
+    .prepare(
+      `INSERT INTO market_shelf_cache (shelf_key, payload_json, generated_at, expires_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(shelf_key) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         generated_at = excluded.generated_at,
+         expires_at = excluded.expires_at,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(shelfKey, JSON.stringify(value), generatedAt, expiresAt, updatedAt)
+    .run();
+}
+
+async function getCachedTradeBrowseShelf<K extends TradeBrowseShelfKey>(
+  env: Bindings,
+  shelfKey: K,
+  fetcher: () => Promise<TradeBrowseShelfValueByKey[K]>,
+): Promise<{ generatedAt: string; value: TradeBrowseShelfValueByKey[K] }> {
+  const now = Date.now();
+  const memoryCached = tradeBrowseShelfValueCache.get(shelfKey);
+  if (memoryCached && memoryCached.expiresAt > now) {
+    return {
+      generatedAt: memoryCached.entry.generatedAt,
+      value: memoryCached.entry.value as TradeBrowseShelfValueByKey[K],
+    };
+  }
+
+  const inFlight = tradeBrowseShelfInFlight.get(shelfKey);
+  if (inFlight) {
+    const entry = await inFlight;
+    return {
+      generatedAt: entry.generatedAt,
+      value: entry.value as TradeBrowseShelfValueByKey[K],
+    };
+  }
+
+  const task = (async () => {
+    const d1Cached = await readTradeBrowseShelfFromD1(env, shelfKey).catch(() => null);
+    if (d1Cached && !d1Cached.isExpired) {
+      const entry: TradeBrowseShelfCacheEntry = {
+        generatedAt: d1Cached.generatedAt,
+        value: d1Cached.value,
+      };
+      tradeBrowseShelfValueCache.set(shelfKey, {
+        expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+        entry,
+      });
+      return entry;
+    }
+
+    const value = await fetcher();
+    const generatedAt = new Date().toISOString();
+    const entry: TradeBrowseShelfCacheEntry = {
+      generatedAt,
+      value,
+    };
+
+    tradeBrowseShelfValueCache.set(shelfKey, {
+      expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+      entry,
+    });
+    await writeTradeBrowseShelfToD1(env, shelfKey, value, generatedAt, TRADE_BROWSE_CACHE_TTL_MS).catch(() => undefined);
+    return entry;
+  })().finally(() => {
+    tradeBrowseShelfInFlight.delete(shelfKey);
+  });
+
+  tradeBrowseShelfInFlight.set(shelfKey, task);
+  const entry = await task;
+  return {
+    generatedAt: entry.generatedAt,
+    value: entry.value as TradeBrowseShelfValueByKey[K],
+  };
 }
 
 export function normalizeTradeMarketDetailType(value: unknown): TradeMarketDetailType | null {
@@ -1843,43 +1998,30 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseResponse> {
-  const now = Date.now();
-  if (tradeBrowseCache && tradeBrowseCache.expiresAt > now) {
-    return tradeBrowseCache.value;
-  }
+  const [topMovers, trendings, stocks, perps, predictions] = await Promise.all([
+    getCachedTradeBrowseShelf(env, 'topMovers', () => safeFetch(() => fetchTopMovers(env), [])),
+    getCachedTradeBrowseShelf(env, 'trendings', () => safeFetch(() => fetchTrendings(env), [])),
+    getCachedTradeBrowseShelf(env, 'stocks', () => safeFetch(() => fetchStocks(env).then((items) => items.slice(0, 5)), [])),
+    getCachedTradeBrowseShelf(env, 'perps', () => safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 5)), [])),
+    getCachedTradeBrowseShelf(env, 'predictions', () => safeFetch(() => fetchPredictions(5), [])),
+  ]);
 
-  if (tradeBrowseInFlight) {
-    return tradeBrowseInFlight;
-  }
+  const generatedTimes = [
+    topMovers.generatedAt,
+    trendings.generatedAt,
+    stocks.generatedAt,
+    perps.generatedAt,
+    predictions.generatedAt,
+  ]
+    .map((item) => parseTimestamp(item))
+    .filter((item): item is number => item != null);
 
-  const task = (async () => {
-    const [topMovers, trendings, stocks, perps, predictions] = await Promise.all([
-      safeFetch(() => fetchTopMovers(env), []),
-      safeFetch(() => fetchTrendings(env), []),
-      safeFetch(() => fetchStocks(env).then((items) => items.slice(0, 5)), []),
-      safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 5)), []),
-      safeFetch(() => fetchPredictions(5), []),
-    ]);
-
-    const value: TradeBrowseResponse = {
-      generatedAt: new Date().toISOString(),
-      topMovers,
-      trendings,
-      stocks,
-      perps,
-      predictions,
-    };
-
-    tradeBrowseCache = {
-      expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
-      value,
-    };
-
-    return value;
-  })().finally(() => {
-    tradeBrowseInFlight = null;
-  });
-
-  tradeBrowseInFlight = task;
-  return task;
+  return {
+    generatedAt: generatedTimes.length ? new Date(Math.min(...generatedTimes)).toISOString() : new Date().toISOString(),
+    topMovers: topMovers.value,
+    trendings: trendings.value,
+    stocks: stocks.value,
+    perps: perps.value,
+    predictions: predictions.value,
+  };
 }

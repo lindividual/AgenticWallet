@@ -9,6 +9,7 @@ type PortfolioSnapshotRow = {
 
 type RecommendationAssetSnapshot = {
   assetId: string;
+  instrumentId: string | null;
   symbol: string;
   chain: string | null;
   contract: string | null;
@@ -145,6 +146,7 @@ export function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): 
     if (!selected) continue;
     lookup.set(symbol, {
       assetId: selected.asset_id,
+      instrumentId: selected.instrument_id ?? null,
       symbol,
       chain: selected.chain ?? null,
       contract: selected.contract ?? null,
