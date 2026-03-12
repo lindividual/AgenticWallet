@@ -300,7 +300,8 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/chains', (c) => {
     return c.json({
-      chains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol, marketChain, protocol }) => ({
+      chains: APP_CONFIG.supportedChains.map(({ networkKey, chainId, name, symbol, marketChain, protocol }) => ({
+        networkKey,
         chainId,
         name,
         symbol,
@@ -312,7 +313,8 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/app-config', (c) => {
     return c.json({
-      supportedChains: APP_CONFIG.supportedChains.map(({ chainId, name, symbol, marketChain, protocol }) => ({
+      supportedChains: APP_CONFIG.supportedChains.map(({ networkKey, chainId, name, symbol, marketChain, protocol }) => ({
+        networkKey,
         chainId,
         name,
         symbol,

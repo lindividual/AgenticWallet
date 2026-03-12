@@ -38,13 +38,14 @@ function migrateLegacyUserEvents(sql: SqlStorage): void {
 }
 
 function migrateLegacyTransfers(sql: SqlStorage): void {
-  if (!tableHasColumn(sql, 'transfers', 'user_id')) return;
+  if (tableHasColumn(sql, 'transfers', 'network_key')) return;
 
   sql.exec('ALTER TABLE transfers RENAME TO transfers_legacy_v1');
   sql.exec(
     `CREATE TABLE transfers (
       id TEXT PRIMARY KEY,
-      chain_id INTEGER NOT NULL,
+      network_key TEXT NOT NULL,
+      chain_id INTEGER,
       from_address TEXT NOT NULL,
       to_address TEXT NOT NULL,
       token_address TEXT,
@@ -67,6 +68,7 @@ function migrateLegacyTransfers(sql: SqlStorage): void {
   sql.exec(
     `INSERT INTO transfers (
       id,
+      network_key,
       chain_id,
       from_address,
       to_address,
@@ -88,7 +90,18 @@ function migrateLegacyTransfers(sql: SqlStorage): void {
     )
     SELECT
       id,
-      chain_id,
+      CASE
+        WHEN chain_id = 1 THEN 'ethereum-mainnet'
+        WHEN chain_id = 8453 THEN 'base-mainnet'
+        WHEN chain_id = 56 THEN 'bnb-mainnet'
+        WHEN chain_id = 101 THEN 'solana-mainnet'
+        WHEN chain_id = 8332 THEN 'bitcoin-mainnet'
+        ELSE 'evm:' || CAST(chain_id AS TEXT)
+      END AS network_key,
+      CASE
+        WHEN chain_id IN (101, 8332) THEN NULL
+        ELSE chain_id
+      END AS chain_id,
       from_address,
       to_address,
       token_address,
@@ -313,7 +326,8 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS transfers (
       id TEXT PRIMARY KEY,
-      chain_id INTEGER NOT NULL,
+      network_key TEXT NOT NULL,
+      chain_id INTEGER,
       from_address TEXT NOT NULL,
       to_address TEXT NOT NULL,
       token_address TEXT,

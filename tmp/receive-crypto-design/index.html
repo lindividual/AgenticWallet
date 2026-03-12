@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Receive Crypto UX Proposal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f3ee;
+      --panel: rgba(255, 255, 255, 0.78);
+      --panel-strong: #ffffff;
+      --ink: #1a1d18;
+      --muted: #6b7265;
+      --line: rgba(28, 32, 27, 0.1);
+      --accent: #24553a;
+      --accent-2: #d7e7c8;
+      --warn: #f9edd3;
+      --warn-ink: #7a5710;
+      --shadow: 0 30px 70px rgba(37, 47, 35, 0.12);
+      --radius-xl: 32px;
+      --radius-lg: 24px;
+      --radius-md: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Manrope", "Noto Sans SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(215, 231, 200, 0.8), transparent 30%),
+        radial-gradient(circle at top right, rgba(251, 236, 201, 0.75), transparent 24%),
+        linear-gradient(180deg, #f7f6f1 0%, #f1ede4 100%);
+    }
+
+    .page {
+      width: 100%;
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 56px 44px 72px;
+    }
+
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 28px;
+      margin-bottom: 36px;
+    }
+
+    .hero-copy {
+      max-width: 760px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      backdrop-filter: blur(12px);
+    }
+
+    h1 {
+      margin: 16px 0 14px;
+      font-size: 56px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+
+    .summary {
+      width: 360px;
+      padding: 22px 24px;
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.42);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .summary h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+
+    .summary ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .summary li {
+      padding-left: 18px;
+      position: relative;
+    }
+
+    .summary li::before {
+      content: "";
+      position: absolute;
+      top: 10px;
+      left: 0;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .flow {
+      display: flex;
+      align-items: flex-start;
+      gap: 26px;
+      overflow: visible;
+    }
+
+    .screen-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      flex: 0 0 auto;
+      width: 360px;
+    }
+
+    .screen-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 6px;
+    }
+
+    .screen-meta h3 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(36, 85, 58, 0.1);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .phone {
+      position: relative;
+      min-height: 790px;
+      padding: 14px;
+      border-radius: 42px;
+      background: linear-gradient(180deg, #23271f 0%, #141610 100%);
+      box-shadow: 0 36px 80px rgba(26, 29, 24, 0.24);
+    }
+
+    .phone::before {
+      content: "";
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      width: 112px;
+      height: 28px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.68);
+      z-index: 3;
+    }
+
+    .screen {
+      position: relative;
+      min-height: 762px;
+      border-radius: 30px;
+      padding: 26px 22px 24px;
+      background:
+        radial-gradient(circle at top right, rgba(255, 255, 255, 0.75), transparent 32%),
+        linear-gradient(180deg, #fbfaf6 0%, #f4efe4 100%);
+      overflow: hidden;
+    }
+
+    .screen::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      pointer-events: none;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 20px;
+      margin-bottom: 28px;
+    }
+
+    .icon-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 999px;
+      border: 1px solid rgba(26, 29, 24, 0.08);
+      background: rgba(255, 255, 255, 0.78);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      color: var(--ink);
+      box-shadow: 0 12px 24px rgba(20, 22, 16, 0.06);
+    }
+
+    .screen-title {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+    }
+
+    .screen-subtitle {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .wallet-card,
+    .card,
+    .selector,
+    .address-card,
+    .hint-card {
+      border-radius: var(--radius-lg);
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.42);
+      backdrop-filter: blur(16px);
+      box-shadow: 0 18px 38px rgba(27, 31, 25, 0.08);
+    }
+
+    .wallet-card {
+      padding: 22px;
+      background:
+        linear-gradient(135deg, rgba(36, 85, 58, 0.98), rgba(71, 118, 89, 0.96));
+      color: white;
+    }
+
+    .wallet-card small {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.82;
+    }
+
+    .wallet-card strong {
+      font-size: 38px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .wallet-card p {
+      margin: 12px 0 0;
+      font-size: 14px;
+      line-height: 1.6;
+      opacity: 0.88;
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      margin: 18px 0 24px;
+    }
+
+    .action {
+      flex: 1;
+      padding: 15px 14px;
+      border-radius: 20px;
+      border: 1px solid rgba(26, 29, 24, 0.08);
+      background: rgba(255, 255, 255, 0.75);
+      text-align: center;
+      font-weight: 700;
+      font-size: 15px;
+      box-shadow: 0 16px 26px rgba(20, 22, 16, 0.05);
+    }
+
+    .action.primary {
+      background: var(--accent);
+      color: white;
+      border-color: transparent;
+    }
+
+    .section-label {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .selector {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    .selector.active {
+      background: linear-gradient(180deg, rgba(36, 85, 58, 0.1), rgba(215, 231, 200, 0.65));
+      border-color: rgba(36, 85, 58, 0.16);
+    }
+
+    .coin {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 800;
+      color: white;
+      flex: 0 0 auto;
+    }
+
+    .usdc { background: linear-gradient(135deg, #2775ca, #5ba7ef); }
+    .eth { background: linear-gradient(135deg, #5b5ce2, #9293ff); }
+    .sol { background: linear-gradient(135deg, #101c1c, #1fd0b5); }
+    .base { background: linear-gradient(135deg, #0052ff, #4d89ff); }
+    .bnb { background: linear-gradient(135deg, #d89c00, #f4c542); }
+
+    .selector-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .selector-main strong,
+    .selector-main p {
+      display: block;
+    }
+
+    .selector-main strong {
+      font-size: 17px;
+      letter-spacing: -0.02em;
+    }
+
+    .selector-main p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .chip {
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: rgba(36, 85, 58, 0.08);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .address-card {
+      padding: 18px;
+    }
+
+    .pill-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid rgba(26, 29, 24, 0.08);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .qr {
+      width: 236px;
+      height: 236px;
+      margin: 0 auto 18px;
+      border-radius: 24px;
+      background:
+        linear-gradient(90deg, rgba(0, 0, 0, 0.06) 10px, transparent 10px) 0 0 / 24px 24px,
+        linear-gradient(rgba(0, 0, 0, 0.06) 10px, transparent 10px) 0 0 / 24px 24px,
+        white;
+      border: 10px solid white;
+      box-shadow: inset 0 0 0 1px rgba(26, 29, 24, 0.08);
+      position: relative;
+    }
+
+    .qr::before,
+    .qr::after {
+      content: "";
+      position: absolute;
+      width: 52px;
+      height: 52px;
+      border: 12px solid #151515;
+      border-radius: 12px;
+      background: white;
+    }
+
+    .qr::before {
+      top: 18px;
+      left: 18px;
+    }
+
+    .qr::after {
+      bottom: 18px;
+      right: 18px;
+    }
+
+    .address-box {
+      padding: 16px 18px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(26, 29, 24, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .address-box small,
+    .address-box strong {
+      display: block;
+    }
+
+    .address-box small {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .address-box strong {
+      max-width: 210px;
+      font-size: 14px;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+
+    .copy-btn {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      background: var(--accent);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+      flex: 0 0 auto;
+    }
+
+    .hint-card {
+      padding: 16px 18px;
+      margin-top: 14px;
+    }
+
+    .hint-card.warn {
+      background: var(--warn);
+      color: var(--warn-ink);
+      border-color: rgba(161, 92, 0, 0.12);
+    }
+
+    .hint-title {
+      margin: 0 0 8px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+
+    .hint-text {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .mini-note {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(36, 85, 58, 0.08);
+      color: var(--accent);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .arrow {
+      width: 54px;
+      height: 54px;
+      border-radius: 999px;
+      margin-top: 370px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.42);
+      box-shadow: 0 16px 36px rgba(27, 31, 25, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      font-size: 24px;
+      flex: 0 0 auto;
+    }
+
+    @media (max-width: 1560px) {
+      .flow {
+        overflow-x: auto;
+        padding-bottom: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow">Agentic Wallet · Receive UX</span>
+        <h1>面向新手的收币流程最终稿</h1>
+        <p>核心思路是把“专业概念优先”改成“任务优先”。用户先确认自己要收什么币，再确认从哪个网络转进来，最后才进入地址页。地址页把币种、网络和风险提示固定在顶部，尽量降低错链转账和误操作。</p>
+      </div>
+      <aside class="summary">
+        <h2>这版重点优化</h2>
+        <ul>
+          <li>入口直接用“收币”，不再把它藏在“充值”下面。</li>
+          <li>资产详情页进入时自动带上当前币种，减少额外决策。</li>
+          <li>网络选择增加费用、速度、适用场景，帮助交易所用户判断。</li>
+          <li>最终地址页固定显示“USDC · Base”以及高风险提醒。</li>
+        </ul>
+      </aside>
+    </section>
+
+    <section class="flow">
+      <div class="screen-wrap">
+        <div class="screen-meta">
+          <h3>1. 钱包首页入口</h3>
+          <span class="tag">Direct entry</span>
+        </div>
+        <div class="phone">
+          <div class="screen">
+            <div class="header">
+              <div>
+                <h2 class="screen-title">钱包</h2>
+                <p class="screen-subtitle">更直接地把“收币”作为一级动作。</p>
+              </div>
+              <div class="icon-btn">⋯</div>
+            </div>
+
+            <div class="wallet-card">
+              <small>总资产</small>
+              <strong>$12,460.87</strong>
+              <p>今天你的主要操作是什么？直接开始收币、发币或交易。</p>
+            </div>
+
+            <div class="actions">
+              <div class="action primary">收币</div>
+              <div class="action">发币</div>
+              <div class="action">交易</div>
+            </div>
+
+            <p class="section-label">常用资产</p>
+            <div class="selector">
+              <div class="coin usdc">U</div>
+              <div class="selector-main">
+                <strong>USD Coin</strong>
+                <p>1,250.00 USDC</p>
+              </div>
+              <span class="chip">最常收款</span>
+            </div>
+            <div class="selector">
+              <div class="coin eth">Ξ</div>
+              <div class="selector-main">
+                <strong>Ethereum</strong>
+                <p>0.82 ETH</p>
+              </div>
+            </div>
+            <div class="selector">
+              <div class="coin sol">S</div>
+              <div class="selector-main">
+                <strong>Solana</strong>
+                <p>36.51 SOL</p>
+              </div>
+            </div>
+
+            <div class="mini-note">如果用户从某个资产详情页点进来，下一页会自动带上该币种，不再重复问一遍。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow">→</div>
+
+      <div class="screen-wrap">
+        <div class="screen-meta">
+          <h3>2. 先选币种</h3>
+          <span class="tag">Task first</span>
+        </div>
+        <div class="phone">
+          <div class="screen">
+            <div class="header">
+              <div class="icon-btn">←</div>
+              <div style="flex:1; min-width:0;">
+                <h2 class="screen-title">选择要接收的币种</h2>
+                <p class="screen-subtitle">优先展示最常见的收款币种，符合交易所提币心智。</p>
+              </div>
+              <div class="icon-btn">✕</div>
+            </div>
+
+            <div class="selector active">
+              <div class="coin usdc">U</div>
+              <div class="selector-main">
+                <strong>USDC</strong>
+                <p>适合收稳定币，支持多条网络</p>
+              </div>
+              <span class="chip">推荐</span>
+            </div>
+            <div class="selector">
+              <div class="coin eth">Ξ</div>
+              <div class="selector-main">
+                <strong>ETH</strong>
+                <p>原生资产，适合直接收主币</p>
+              </div>
+            </div>
+            <div class="selector">
+              <div class="coin sol">S</div>
+              <div class="selector-main">
+                <strong>SOL</strong>
+                <p>仅需选择 Solana 网络即可</p>
+              </div>
+            </div>
+            <div class="selector">
+              <div class="coin bnb">B</div>
+              <div class="selector-main">
+                <strong>BNB</strong>
+                <p>适合从 BNB Chain 转入</p>
+              </div>
+            </div>
+
+            <div class="hint-card">
+              <p class="hint-title">为什么先选币种？</p>
+              <p class="hint-text">新手通常知道自己要“提 USDC”或“提 ETH”，但不一定理解 EVM、SVM 这类底层概念。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow">→</div>
+
+      <div class="screen-wrap">
+        <div class="screen-meta">
+          <h3>3. 再选网络</h3>
+          <span class="tag">Explain tradeoffs</span>
+        </div>
+        <div class="phone">
+          <div class="screen">
+            <div class="header">
+              <div class="icon-btn">←</div>
+              <div style="flex:1; min-width:0;">
+                <h2 class="screen-title">选择 USDC 的接收网络</h2>
+                <p class="screen-subtitle">每个网络都告诉用户它适合什么场景，而不是只给术语。</p>
+              </div>
+              <div class="icon-btn">✕</div>
+            </div>
+
+            <div class="selector active">
+              <div class="coin base">B</div>
+              <div class="selector-main">
+                <strong>Base</strong>
+                <p>手续费较低，到账快，适合大多数普通转入</p>
+              </div>
+              <span class="chip">低费率</span>
+            </div>
+            <div class="selector">
+              <div class="coin eth">Ξ</div>
+              <div class="selector-main">
+                <strong>Ethereum</strong>
+                <p>兼容性最好，但网络费通常更高</p>
+              </div>
+              <span class="chip">兼容高</span>
+            </div>
+            <div class="selector">
+              <div class="coin bnb">B</div>
+              <div class="selector-main">
+                <strong>BNB Chain</strong>
+                <p>常见于部分交易所，成本较低</p>
+              </div>
+            </div>
+
+            <div class="hint-card warn">
+              <p class="hint-title">重要提醒</p>
+              <p class="hint-text">发送平台上选择的网络必须与这里完全一致。币种相同但网络不同，也可能导致资产丢失。</p>
+            </div>
+
+            <div class="mini-note">如果某些 EVM 网络地址相同，也要明确告诉用户：地址可以相同，但网络仍必须匹配。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow">→</div>
+
+      <div class="screen-wrap">
+        <div class="screen-meta">
+          <h3>4. 最终收款地址</h3>
+          <span class="tag">Safety first</span>
+        </div>
+        <div class="phone">
+          <div class="screen">
+            <div class="header">
+              <div class="icon-btn">←</div>
+              <div style="flex:1; min-width:0;">
+                <h2 class="screen-title">接收 USDC</h2>
+                <p class="screen-subtitle">关键信息固定在顶部，用户扫二维码前先看到“币种 + 网络”。</p>
+              </div>
+              <div class="icon-btn">✕</div>
+            </div>
+
+            <div class="address-card">
+              <div class="pill-row">
+                <span class="pill">USDC</span>
+                <span class="pill">Base 网络</span>
+                <span class="pill">预计 1-3 分钟</span>
+              </div>
+              <div class="qr"></div>
+              <div class="address-box">
+                <div>
+                  <small>你的 Base 收款地址</small>
+                  <strong>0x61b3f4c6d90f2b0a3e36fa2cf5a41ef36d11af7d</strong>
+                </div>
+                <div class="copy-btn">⧉</div>
+              </div>
+            </div>
+
+            <div class="hint-card warn">
+              <p class="hint-title">仅接收 Base 网络的 USDC</p>
+              <p class="hint-text">如果你从 Binance、OKX 或其他钱包转入，请先确认发送页也选择的是 USDC on Base。</p>
+            </div>
+
+            <div class="hint-card">
+              <p class="hint-title">共享地址说明</p>
+              <p class="hint-text">这个地址可能与其他 EVM 网络地址相同，但转账网络依然必须和当前选择一致。</p>
+            </div>
+
+            <div class="mini-note">下一步可以补“分享二维码”“复制地址”和“从交易所转入教程”三个辅助动作。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

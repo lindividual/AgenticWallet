@@ -15,7 +15,7 @@ import {
 } from '@solana/web3.js';
 import type { Bindings } from '../types';
 import { buildAssetId, buildChainAssetId, contractKeyToUpstreamContract } from './assetIdentity';
-import { ensureWalletWithPrivateKey, SOLANA_CHAIN_ID, SVM_PROTOCOL } from './wallet';
+import { ensureWalletWithPrivateKey, SOLANA_NETWORK_KEY, SVM_PROTOCOL } from './wallet';
 import { decodeBase64, encodeBase64 } from '../utils/crypto';
 import { decryptString } from '../utils/crypto';
 
@@ -58,8 +58,9 @@ type JupiterPriceRow = {
 
 export type SolanaPortfolioHolding = {
   protocol: 'svm';
+  network_key: string;
   chain: string;
-  chain_id: number;
+  chain_id: number | null;
   address: string;
   asset_id: string;
   chain_asset_id: string;
@@ -201,7 +202,7 @@ async function solanaRpc<T>(env: Bindings, method: string, params: unknown[]): P
 function getSolanaChainAccountAddress(
   wallet: Awaited<ReturnType<typeof ensureWalletWithPrivateKey>>,
 ): string {
-  const address = wallet?.chainAccounts.find((row) => row.chainId === SOLANA_CHAIN_ID)?.address;
+  const address = wallet?.chainAccounts.find((row) => row.networkKey === SOLANA_NETWORK_KEY)?.address;
   if (!address) {
     throw new Error('wallet_not_found');
   }
@@ -522,7 +523,8 @@ export async function fetchSolanaPortfolio(env: Bindings, owner: string): Promis
     holdings.push({
       protocol: 'svm',
       chain: SOLANA_MARKET_CHAIN,
-      chain_id: SOLANA_CHAIN_ID,
+      network_key: SOLANA_NETWORK_KEY,
+      chain_id: null,
       address: 'native',
       asset_id: nativeDetail.asset_id,
       chain_asset_id: nativeDetail.chain_asset_id,
@@ -547,7 +549,8 @@ export async function fetchSolanaPortfolio(env: Bindings, owner: string): Promis
     holdings.push({
       protocol: 'svm',
       chain: SOLANA_MARKET_CHAIN,
-      chain_id: SOLANA_CHAIN_ID,
+      network_key: SOLANA_NETWORK_KEY,
+      chain_id: null,
       address: token.mint,
       asset_id: detail.asset_id,
       chain_asset_id: detail.chain_asset_id,

@@ -8,16 +8,18 @@ import { ModalContentScaffold } from './ModalContentScaffold';
 type ReceiveCryptoContentProps = {
   walletAddress: string;
   chainAccounts?: Array<{
-    chainId: number;
-    protocol?: 'evm' | 'svm';
+    networkKey: string;
+    chainId: number | null;
+    protocol?: 'evm' | 'svm' | 'btc';
     address: string;
   }>;
   supportedChains: Array<{
-    chainId: number;
+    networkKey: string;
+    chainId: number | null;
     name: string;
     symbol: string;
     marketChain?: string;
-    protocol?: 'evm' | 'svm';
+    protocol?: 'evm' | 'svm' | 'btc';
   }>;
   onBack: () => void;
   onCopyAddress: (address: string) => void;
@@ -26,16 +28,65 @@ type ReceiveCryptoContentProps = {
   stageClassName?: string;
 };
 
-type ReceiveAddressType = 'svm' | 'evm';
+type ReceiveAddressType = 'svm' | 'evm' | 'btc';
+
+const evmChainIcons = [
+  { src: '/eth.svg' },
+  { src: '/base.svg' },
+  { src: '/bnb.svg' },
+  { src: '/pol.jpeg' },
+] as const;
 
 function getProtocolIconPath(protocol: ReceiveAddressType): string {
-  return protocol === 'svm' ? '/sol.svg' : '/eth.svg';
+  if (protocol === 'svm') return '/sol.svg';
+  if (protocol === 'btc') return '/btc.svg';
+  return '/eth.svg';
 }
 
 function truncateAddress(address: string, head = 6, tail = 6): string {
   if (!address) return '';
   if (address.length <= head + tail + 3) return address;
   return `${address.slice(0, head)}...${address.slice(-tail)}`;
+}
+
+function ReceiveProtocolIcon({ protocol, alt }: { protocol: ReceiveAddressType; alt: string }) {
+  if (protocol === 'evm') {
+    return (
+      <div
+        role="img"
+        aria-label={alt}
+        className="grid h-11 w-11 grid-cols-2 gap-0.5 rounded-lg border border-base-300 bg-base-200 p-1"
+      >
+        {evmChainIcons.map((icon) => (
+          <span
+            key={icon.src}
+            className="flex h-full w-full items-center justify-center overflow-hidden rounded-sm bg-white"
+          >
+            <img src={icon.src} alt="" aria-hidden className="h-3 w-3 object-contain" loading="lazy" />
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="img"
+      aria-label={alt}
+      className={[
+        'flex h-11 w-11 items-center justify-center overflow-hidden rounded-lg p-1.5',
+        protocol === 'btc' ? 'border border-[#F7931A] bg-[#F7931A]' : 'border border-base-300 bg-base-200',
+      ].join(' ')}
+    >
+      <img
+        src={getProtocolIconPath(protocol)}
+        alt=""
+        aria-hidden
+        className={protocol === 'svm' ? 'h-full w-full object-contain' : 'h-7 w-7 object-contain'}
+        loading="lazy"
+      />
+    </div>
+  );
 }
 
 export function ReceiveCryptoContent({
@@ -59,29 +110,49 @@ export function ReceiveCryptoContent({
   }
 
   const receiveOptions = useMemo(() => {
-    const evmChains = supportedChains.filter((chain) => chain.protocol !== 'svm');
+    const evmChains = supportedChains.filter((chain) => chain.protocol === 'evm');
     const solanaChains = supportedChains.filter((chain) => chain.protocol === 'svm');
-    const svmAddress = chainAccounts.find((item) => item.protocol === 'svm')?.address?.trim() || walletAddress;
+    const bitcoinChains = supportedChains.filter((chain) => chain.protocol === 'btc');
+    const evmNetworkLabel =
+      evmChains.map((chain) => chain.name).join(' / ') || t('wallet.receiveAddressNetworkFallback', { network: 'EVM' });
+    const otherEvmChains = evmChains
+      .map((chain) => chain.name)
+      .filter((name) => name.trim() && name.trim().toLowerCase() !== 'ethereum');
+    const svmAddress = chainAccounts.find((item) => item.protocol === 'svm')?.address?.trim() || '';
     const evmAddress = chainAccounts.find((item) => (item.protocol ?? 'evm') === 'evm')?.address?.trim() || walletAddress;
+    const bitcoinAddress = chainAccounts.find((item) => item.protocol === 'btc')?.address?.trim() || '';
 
     return [
-      {
-        id: 'svm' as const,
-        title: t('wallet.receiveAddressTypeSolana'),
-        address: svmAddress,
-        subtitle:
-          solanaChains.map((chain) => chain.name).join(' / ') ||
-          t('wallet.receiveAddressNetworkFallback', { network: 'Solana' }),
-      },
       {
         id: 'evm' as const,
         title: t('wallet.receiveAddressTypeEvm'),
         address: evmAddress,
-        subtitle:
-          evmChains.map((chain) => chain.name).join(' / ') ||
-          t('wallet.receiveAddressNetworkFallback', { network: 'EVM' }),
+        addressLabel: t('wallet.receiveAddressOptionLabel', { chain: t('wallet.receiveAddressTypeEthereum') }),
+        networkLabel: evmNetworkLabel,
+        helperText:
+          otherEvmChains.length > 0
+            ? t('wallet.receiveAddressSharedEvmNoticeWithNetworks', { networks: otherEvmChains.join(', ') })
+            : t('wallet.receiveAddressSharedEvmNotice'),
       },
-    ];
+      {
+        id: 'svm' as const,
+        title: t('wallet.receiveAddressTypeSolana'),
+        address: svmAddress,
+        addressLabel: t('wallet.receiveAddressOptionLabel', { chain: t('wallet.receiveAddressTypeSolana') }),
+        networkLabel:
+          solanaChains.map((chain) => chain.name).join(' / ') ||
+          t('wallet.receiveAddressNetworkFallback', { network: 'Solana' }),
+      },
+      {
+        id: 'btc' as const,
+        title: t('wallet.receiveAddressTypeBitcoin'),
+        address: bitcoinAddress,
+        addressLabel: t('wallet.receiveAddressOptionLabel', { chain: t('wallet.receiveAddressTypeBitcoin') }),
+        networkLabel:
+          bitcoinChains.map((chain) => chain.name).join(' / ') ||
+          t('wallet.receiveAddressNetworkFallback', { network: 'Bitcoin' }),
+      },
+    ].filter((option) => option.address);
   }, [chainAccounts, supportedChains, t, walletAddress]);
 
   const selectedOption = useMemo(
@@ -123,7 +194,7 @@ export function ReceiveCryptoContent({
         step === 'type' ? (
           <div className="space-y-1">
             <p className="m-0 text-sm font-semibold text-base-content/80">{t('wallet.receiveAddressTypeHelpTitle')}</p>
-            <p className="m-0 text-sm leading-6 text-base-content/60">{t('wallet.receiveAddressTypeHelpBody')}</p>
+            <p className="m-0 text-sm leading-5 text-base-content/60">{t('wallet.receiveAddressTypeHelpBody')}</p>
           </div>
         ) : undefined
       }
@@ -148,18 +219,12 @@ export function ReceiveCryptoContent({
             >
               <AssetListItem
                 className="py-3"
-                leftIcon={
-                  <img
-                    src={getProtocolIconPath(option.id)}
-                    alt={option.title}
-                    className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                    loading="lazy"
-                  />
-                }
-                leftPrimary={option.subtitle}
+                leftIcon={<ReceiveProtocolIcon protocol={option.id} alt={option.title} />}
+                leftPrimary={option.addressLabel}
                 leftPrimaryClassName="text-lg"
                 leftSecondary={option.address ? truncateAddress(option.address, 8, 8) : t('wallet.addressUnavailable')}
                 leftSecondaryClassName="text-base"
+                leftTertiary={option.helperText}
               />
             </button>
           ))}
@@ -200,7 +265,7 @@ export function ReceiveCryptoContent({
                   <span>
                     {t('wallet.receiveAddressTypeNotice', {
                       addressType: selectedOption.title,
-                      network: selectedOption.subtitle,
+                      network: selectedOption.networkLabel,
                     })}
                   </span>
                 </li>

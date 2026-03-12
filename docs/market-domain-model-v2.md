@@ -2,573 +2,727 @@
 
 ## 1. Summary
 
-这版方案的核心结论是：
+这版方案不再追求把 `coin / perps / prediction` 全部压成一套抽象一致的身份模型，而是明确拆成三类：
 
-- `spot` 和 `perp` 仍然属于“资产驱动”的市场，应该保留在 `asset` 语义之下。
-- `prediction` 不属于资产域，而属于“事件结果市场”域，不应该再映射成伪 `asset_id`。
-- 全站真正需要统一的主键不是 `asset_id`，而是 `market_id`。
-- `asset_id` 只服务于 underlying 聚合、钱包持仓、资产推荐。
-- `market_id` 服务于详情页、K 线、交易、watchlist、搜索和持仓明细。
+1. `coin`
+   - 包括 native coin 和 token
+   - 使用 `coingecko asset id + chain + contract(如有)`
+2. `perps`
+   - 直接沿用 Hyperliquid 的 id
+3. `prediction`
+   - 直接沿用 Polymarket 的 id
 
-一句话：
+这样拆的原因很直接：
 
-`asset` 表示“是什么”，`market` 表示“在哪里被定价/交易”，`prediction` 表示“某个事件结果的交易市场”。
+- `coin` 需要 canonical asset id 来做跨链聚合
+- `perps` 的真实身份是交易所 market
+- `prediction` 的真实身份是预测市场条目
 
----
-
-## 2. Why the Current Model Breaks on Prediction
-
-当前模型把 `spot / perp / prediction` 全部压进同一套 `asset_id + instrument_id` 语义里，这对 `prediction` 会出现结构性错位：
-
-1. `spot` 和 `perp` 的核心对象是 underlying asset。
-2. `prediction` 的核心对象是 event / contract / option，而不是 underlying asset。
-3. 预测市场中的 “YES / NO / Candidate A / Candidate B” 是结果选项，不是 canonical asset。
-4. 把 outcome 写成 `asset_id` 会污染资产图谱，也会让聚合、推荐、风控语义变形。
-
-因此，`prediction` 应从资产域中拆出，成为平行域模型。
+不应该再强行创造一个抽象统一但语义不自然的“万能 market id”。
 
 ---
 
-## 3. Design Principles
+## 2. Core Decision
 
-### 3.1 Domain boundaries
+### 2.1 Coin
 
-- `Asset domain`: 真实经济标的。
-- `Market domain`: 可展示、可交易、可收藏的统一市场入口。
-- `Prediction domain`: 事件、市场合同、结果选项。
+`coin` 的身份拆成两层：
 
-### 3.2 Identity principles
+- `asset_id`
+  - 表示“这是什么资产”
+  - 用于聚合
+- `chain + contract`
+  - 表示“这个资产在什么链上的哪个实例”
+  - 用于交易、转账、余额、详情、K 线
 
-1. 名称和 symbol 不能作为主身份键。
-2. 所有主键都必须 deterministic。
-3. `asset_id` 和 `market_id` 不能混用。
-4. `prediction` 的身份必须建立在 event/contract/option 或 execution key 之上。
-5. 合约地址的 canonicalization 必须链级别区分，不能全局统一处理。
+推荐形式：
 
-### 3.3 API principles
+- 优先：
+  - `asset_id = coingecko:<coin_id>`
+- fallback：
+  - `asset_id = chain:<chain>:<contract_or_native>`
+- `coin_ref = { asset_id, chain, contract? }`
 
-- 资产相关页面用 `asset_id`。
-- 市场相关页面统一用 `market_id`。
-- prediction 详情页通过 `prediction_event_id` 或 `market_id` 进入，不经过伪 `asset_id`。
+例子：
+
+- Ethereum 主网原生 ETH
+  - `asset_id = coingecko:ethereum`
+  - `chain = eth`
+  - `contract = native`
+- Base 原生 ETH
+  - `asset_id = coingecko:ethereum`
+  - `chain = base`
+  - `contract = native`
+- Ethereum 主网 USDC
+  - `asset_id = coingecko:usd-coin`
+  - `chain = eth`
+  - `contract = 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48`
+
+### 2.2 Perps
+
+`perps` 直接使用上游交易所 id，不再试图映射成 asset-first 身份。
+
+推荐形式：
+
+- `perp_id = hyperliquid:<market_id>`
+
+如果 Hyperliquid 当前稳定 id 就是 symbol，也可以暂时直接使用：
+
+- `hyperliquid:BTC`
+- `hyperliquid:ETH`
+
+前提是：
+
+- 这个 id 在 Hyperliquid 内是稳定的
+- 页面、K 线、详情、下单都可以用它唯一定位
+
+### 2.3 Prediction
+
+`prediction` 直接使用 Polymarket 的 id。
+
+推荐形式：
+
+- `prediction_id = polymarket:<id>`
+
+这里的 `<id>` 必须选择你们在产品里真正用来打开详情、获取 K 线、下单或切换市场的那一个稳定 id。
+
+注意：
+
+- 不要把 prediction outcome 映射成 `asset_id`
+- prediction 不属于资产域
 
 ---
 
-## 4. Bounded Contexts
+## 3. Why Coin Needs `asset_id + chain + contract`
 
-### 4.1 Asset Domain
+这是这版方案里最重要的设计点。
 
-`assets`
+### 3.1 Why `asset_id` is needed
+
+`coin` 需要 `asset_id`，是因为你们要做资产聚合。
+
+比如 ETH：
+
+- Ethereum 原生 ETH
+- Base 原生 ETH
+- 未来其他链上的 canonical ETH 表示
+
+这些都应该聚合成一个资产视角：
+
+- `asset_id = coingecko:ethereum`
+
+这样：
+
+- 钱包总资产可以按 ETH 聚合
+- 推荐和内容可以按 ETH 聚合
+- trade 列表可以只显示一个 ETH 入口
+
+### 3.2 Why `chain + contract` is still needed
+
+只用 `asset_id` 不够，因为交易和余额必须落到具体实例上。
+
+比如：
+
+- `coingecko:ethereum + eth + native`
+- `coingecko:ethereum + base + native`
+
+两者的 underlying 相同，但：
+
+- 所在链不同
+- 余额不同
+- 转账路径不同
+- 可交互协议不同
+- 流动性和执行环境不同
+
+所以 coin 的真实业务 identity 不是单独一个字段，而是：
+
+- 聚合 identity: `asset_id`
+- 实例 identity: `asset_id + chain + contract`
+
+---
+
+## 4. Recommended Identity Model
+
+### 4.1 Coin identity
+
+#### Asset-level
+
+优先规则：
+
+- `asset_id = coingecko:<coin_id>`
+
+fallback 规则：
+
+- `asset_id = chain:<chain>:<contract_or_native>`
+
+例子：
+
+- `coingecko:ethereum`
+- `coingecko:bitcoin`
+- `coingecko:usd-coin`
+- `coingecko:solana`
+- `chain:base:0x1234...`
+- `chain:sol:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+
+#### Instance-level
+
+推荐定义为：
+
+- `coin_instance_key = <asset_id>|<chain>|<contract_or_native>`
+
+例子：
+
+- `coingecko:ethereum|eth|native`
+- `coingecko:ethereum|base|native`
+- `coingecko:usd-coin|eth|0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48`
+- `coingecko:usd-coin|sol|EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+
+这个 key 不一定要单独暴露成产品文案中的“id 字符串”，但在后端内部应该能 deterministic 地构造出来。
+
+### 4.1.1 What if CoinGecko does not know the coin
+
+如果一个 coin 没有被 CoinGecko 收录，不应该让整个模型失败。
+
+处理规则：
+
+1. 先尝试获取 `coingecko:<coin_id>`
+2. 如果没有可信 CoinGecko 映射，则回退为链上 asset id：
+   - `chain:eth:<contract>`
+   - `chain:base:<contract>`
+   - `chain:bnb:<contract>`
+   - `chain:sol:<mint>`
+3. native coin 仍然优先使用显式内置 canonical 映射
+4. 没有 CoinGecko id 的 coin，先不做自动跨链聚合
+
+这意味着：
+
+- 交易、K 线、详情、余额不会受影响
+- 资产聚合仍然可用，但通常只在单链内高置信成立
+- 当未来出现 CoinGecko 映射或人工映射时，再把 `chain:*` asset 迁移到 canonical asset
+
+### 4.2 Perp identity
+
+- `perp_id = hyperliquid:<id>`
+
+例子：
+
+- `hyperliquid:BTC`
+- `hyperliquid:ETH`
+
+### 4.3 Prediction identity
+
+- `prediction_id = polymarket:<id>`
+
+例子：
+
+- `polymarket:12345`
+
+如果未来 Polymarket 里存在 event id、market id、token id 三层，需要只选一种作为产品主身份，不要混用。
+
+标准是：
+
+- 哪个 id 最适合打开详情、获取 K 线、下单，就用哪个
+
+---
+
+## 5. SOL / SVM Contract Rules
+
+这是本方案里的硬规则。
+
+### 5.1 Rule
+
+SOL 的 token contract 绝对不能使用 EVM 风格的 normalize 逻辑。
+
+也就是：
+
+- 不能 lower-case
+- 不能 hex 化
+- 不能 slugify
+
+### 5.2 Canonical form
+
+SVM token contract 的 canonical form 应该是：
+
+- `PublicKey(raw).toBase58()`
+
+native SOL 使用：
+
+- `native`
+
+例子：
+
+- USDC on Solana
+  - `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+- Wrapped SOL mint
+  - `So11111111111111111111111111111111111111112`
+- Native SOL
+  - `native`
+
+### 5.3 Why
+
+因为 Solana mint address 是 base58，大小写敏感。
+
+如果套用 EVM 的 address normalize：
+
+- 同一个 mint 会被错误改写
+- 资产 identity 会直接损坏
+
+所以 contract canonicalization 必须是链感知的：
+
+- EVM
+  - lowercase hex or `native`
+- SVM
+  - base58 canonical string or `native`
+
+---
+
+## 6. Trade Page Rule
+
+### 6.1 Trade page is not driven by one universal key
+
+Trade 页不应该再强求只有一个统一主键。
+
+应该使用 discriminated union：
+
+```ts
+type TradeItemRef =
+  | {
+      kind: 'coin';
+      asset_id: string;
+      chain: string;
+      contract: string | 'native';
+    }
+  | {
+      kind: 'perp';
+      perp_id: string;
+    }
+  | {
+      kind: 'prediction';
+      prediction_id: string;
+    };
+```
+
+### 6.2 Coin in trade page
+
+Trade 页里的 `coin` 有两层：
+
+- 列表层
+  - 以 `asset_id` 聚合
+  - 默认显示一个 ETH、一个 BTC、一个 SOL
+- 交易层 / 详情层
+  - 落到具体 `chain + contract`
+
+也就是说：
+
+- 列表里显示一个 ETH
+- 点进去之后再进入
+  - Ethereum ETH
+  - Base ETH
+  - 其他链上对应实例
+
+### 6.3 Perp in trade page
+
+Perp 直接按 `perp_id` 展示和跳转。
+
+### 6.4 Prediction in trade page
+
+Prediction 直接按 `prediction_id` 展示和跳转。
+
+---
+
+## 7. Data Schema
+
+### 7.1 `coin_assets`
 
 - `asset_id` (PK)
-- `asset_class`
-  - `crypto | fiat | equity | index`
+- `coingecko_id` (nullable)
 - `symbol`
 - `name`
-- `logo_uri`
-- `status`
-- `created_at`
-- `updated_at`
-
-说明：
-
-- 不再允许 `event_outcome` 作为 `asset_class`。
-- `assets` 里只放真实 underlying。
-
-建议的 `asset_id` 形式：
-
-- `ast:crypto:cg:bitcoin`
-- `ast:crypto:chain:eth:0xa0b8...`
-- `ast:fiat:usd`
-- `ast:equity:us:aapl`
-- `ast:index:sp500`
-
-规则：
-
-- 优先使用高置信度、稳定的 canonical namespace。
-- 如果没有可信 canonical mapping，则退回链上 identity。
-
-### 4.2 Market Domain
-
-`markets`
-
-- `market_id` (PK)
-- `market_type`
-  - `spot | perp | prediction`
-- `asset_id` (nullable)
-- `display_symbol`
-- `display_name`
 - `image`
-- `venue`
 - `status`
 - `created_at`
 - `updated_at`
 
-说明：
+约束：
 
-- `spot` / `perp` 的 `asset_id` 非空。
-- `prediction` 的 `asset_id` 为空。
-- `markets` 是所有前台入口的统一主表。
+- `asset_id` 允许两种形式：
+  - `coingecko:<coin_id>`
+  - `chain:<chain>:<contract_or_native>`
+- `UNIQUE(coingecko_id)` for non-null rows
 
-### 4.3 Spot Market Domain
+### 7.2 `coin_instances`
 
-`spot_markets`
-
-- `market_id` (PK, FK -> markets.market_id)
-- `asset_id` (FK -> assets.asset_id)
-- `protocol`
-  - `evm | svm`
+- `coin_instance_key` (PK)
+- `asset_id` (FK -> coin_assets.asset_id)
 - `chain`
-  - `eth | base | bnb | sol | ...`
-- `contract_key`
+- `protocol`
+- `contract`
 - `is_native`
 - `decimals`
-
-唯一约束：
-
-- `UNIQUE(protocol, chain, contract_key)`
-
-### 4.4 Perp Market Domain
-
-`perp_markets`
-
-- `market_id` (PK, FK -> markets.market_id)
-- `venue`
-- `market_key`
-- `base_asset_id`
-- `quote_asset_id`
-- `settlement_asset_id`
-- `symbol`
-- `contract_type`
 - `metadata_json`
+- `created_at`
+- `updated_at`
 
-唯一约束：
+约束：
 
-- `UNIQUE(venue, market_key)`
+- `UNIQUE(asset_id, chain, contract)`
 
-### 4.5 Prediction Domain
+说明：
 
-`prediction_events`
+- 这里的 `contract` 对原生 coin 固定为 `native`
+- 对 Solana token，必须存 canonical base58 mint
 
-- `prediction_event_id` (PK)
+### 7.3 `perp_markets`
+
+- `perp_id` (PK)
 - `venue`
-- `event_key`
+- `display_symbol`
+- `name`
+- `image`
+- `base_asset_id` (nullable)
+- `quote_asset_id` (nullable)
+- `metadata_json`
+- `created_at`
+- `updated_at`
+
+说明：
+
+- `perp_id` 直接沿用 Hyperliquid id
+- 如果需要，可以补 `base_asset_id`
+- 但它不承担主身份职责
+
+### 7.4 `prediction_markets`
+
+- `prediction_id` (PK)
+- `venue`
 - `title`
 - `description`
 - `image`
 - `url`
-- `start_time`
-- `end_time`
-- `resolution_time`
 - `status`
 - `metadata_json`
-
-唯一约束：
-
-- `UNIQUE(venue, event_key)`
-
-`prediction_contracts`
-
-- `prediction_contract_id` (PK)
-- `prediction_event_id` (FK)
-- `venue`
-- `contract_key`
-- `title`
-- `layout`
-  - `binary | multi_option`
-- `status`
-- `url`
-- `metadata_json`
-
-唯一约束：
-
-- `UNIQUE(venue, contract_key)`
-
-`prediction_option_markets`
-
-- `market_id` (PK, FK -> markets.market_id)
-- `prediction_contract_id` (FK)
-- `option_key`
-- `label`
-- `option_index`
-- `trade_ref`
-- `status`
-- `metadata_json`
-
-唯一约束：
-
-- `UNIQUE(prediction_contract_id, option_key)`
-- `UNIQUE(trade_ref)` when provider guarantees global uniqueness
+- `created_at`
+- `updated_at`
 
 说明：
 
-- 这里的每一行都是真正可交易的 prediction market entry。
-- 二元市场也不要再把 `YES/NO` 打包成一行；应该拆成两个 option market。
-- 这样 `prediction` 就和 `spot/perp` 一样，都可以用 `market_id` 做详情页、K 线、watchlist、持仓明细。
+- `prediction_id` 直接沿用 Polymarket id
+- 不写入 `asset_id`
 
----
-
-## 5. Contract Key Canonicalization
-
-这一节是强约束，不是实现细节。
-
-### 5.1 `contract_key` is chain-specific
-
-`contract_key` 不是“统一格式字符串”，而是“链级 canonical key”。
-
-不同链的规则必须分开定义。
-
-### 5.2 EVM rules
-
-EVM `contract_key` 规则：
-
-1. 去除首尾空格。
-2. 校验为 20-byte hex address。
-3. 统一转小写。
-4. 原生 gas token 使用字面值 `native`。
-5. 零地址不应作为 token contract；如果业务上表示原生资产，直接落 `native`。
-
-例子：
-
-- `0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48`
-  ->
-  `0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48`
-- Ethereum native
-  ->
-  `native`
-
-### 5.3 SVM rules
-
-SVM `contract_key` 规则：
-
-1. 去除首尾空格。
-2. 必须通过 `PublicKey` 校验。
-3. 使用 `PublicKey(raw).toBase58()` 作为 canonical form。
-4. 绝对不能 lower-case。
-5. 绝对不能 slugify。
-6. 原生 SOL 使用字面值 `native`。
-
-这是因为：
-
-- Solana mint address 是 base58，大小写敏感。
-- 对 SOL token 做 `toLowerCase()` 会直接破坏 identity。
-
-例子：
-
-- `So11111111111111111111111111111111111111112`
-  ->
-  `So11111111111111111111111111111111111111112`
-- SOL native
-  ->
-  `native`
-
-### 5.4 Recommendation
-
-建议把当前“contract normalize”从单函数语义改成：
-
-- `canonicalizeContractKey(protocol, chain, raw)`
-
-而不是：
-
-- `normalizeContract(raw)`
-
-因为后者容易误导成“所有链都能一样处理”。
-
----
-
-## 6. `market_id` Definition
-
-### 6.1 Design goals
-
-`market_id` 的定义必须满足：
-
-1. 稳定，可重复计算。
-2. 表示“可展示/可交易对象”。
-3. 不依赖文案标题。
-4. 不依赖临时排序。
-5. 能直接映射到一条 detail / kline / watchlist / position 记录。
-
-### 6.2 Core rule
-
-`market_id` 统一定义为：
-
-- `mkt:<market_type>:<namespace>:<stable_key>`
-
-其中：
-
-- `<market_type>` 取值 `spot | perp | prediction`
-- `<namespace>` 是该市场类型的身份域
-- `<stable_key>` 是该市场在该身份域内的稳定键
-
-### 6.3 Spot market ID
-
-Spot 的 market identity 就是链上 token instance 本身。
-
-格式：
-
-- `mkt:spot:<chain>:<contract_key>`
-
-例子：
-
-- Ethereum native ETH
-  ->
-  `mkt:spot:eth:native`
-- Base USDC
-  ->
-  `mkt:spot:base:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913`
-- Solana USDC
-  ->
-  `mkt:spot:sol:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
-
-说明：
-
-- Spot market 不应该以 provider 为身份来源。
-- 同一个链上 token 在不同行情源下，仍然是同一个 `market_id`。
-
-### 6.4 Perp market ID
-
-Perp 的 identity 是 venue 内的合约市场。
-
-格式：
-
-- `mkt:perp:<venue>:<market_key>`
-
-建议：
-
-- 优先使用 venue 官方稳定 market key。
-- 如果 provider 没有 market key，再用稳定 symbol。
-
-例子：
-
-- Hyperliquid BTC perp
-  ->
-  `mkt:perp:hyperliquid:BTC`
-
-说明：
-
-- `BTC-PERP` / `BTC-USD` 这类 display symbol 可以变，但 `market_key` 不应该跟着 UI 文案走。
-
-### 6.5 Prediction market ID
-
-Prediction 的 `market_id` 应该落在“可交易 option”上，而不是 event 或 contract 上。
-
-优先规则：
-
-1. 如果 provider 暴露稳定 execution key，例如 `token_id`、orderbook token key：
-   - `market_id = mkt:prediction:<venue>:<execution_key>`
-2. 如果没有 execution key，但有稳定的 `contract_key + option_key`：
-   - `market_id = mkt:prediction:<venue>:<contract_key>:<option_key>`
-
-例子：
-
-- Polymarket YES option with token id
-  ->
-  `mkt:prediction:polymarket:1234567890`
-- Generic prediction option fallback
-  ->
-  `mkt:prediction:somevenue:election-2028-president:yes`
-
-为什么不用 `event_id`：
-
-- 一个 event 下通常有多个 contract。
-- 一个 contract 下通常有多个 option。
-- 真正下单和画 K 线的对象是 option，不是 event。
-
-### 6.6 Non-tradable prediction IDs
-
-为了保持语义清晰，event 和 contract 也要有独立 ID，但它们不是 `market_id`。
-
-建议形式：
-
-- `prediction_event_id = pre:<venue>:<event_key>`
-- `prediction_contract_id = prc:<venue>:<contract_key>`
-
-这样：
-
-- `prediction_event_id` 用于事件页
-- `prediction_contract_id` 用于合同级聚合
-- `market_id` 用于 option 详情、交易、K 线
-
----
-
-## 7. Reference Tables
-
-建议把当前 `instrument_refs` 拆成更清晰的两类：
-
-### 7.1 `asset_refs`
-
-- `provider`
-- `provider_key`
-- `asset_id`
-- `confidence`
-
-用途：
-
-- CoinGecko coin id -> `asset_id`
-- 链上 `(chain, contract_key)` -> `asset_id`
-
-### 7.2 `market_refs`
-
-- `provider`
-- `provider_key`
-- `market_id`
-- `confidence`
-
-用途：
-
-- `hyperliquid + BTC` -> perp `market_id`
-- `binance-stock + alpha_id` -> stock token `market_id`
-- `polymarket + token_id` -> prediction `market_id`
-
----
-
-## 8. Cross-Domain Linking
-
-Prediction 仍然需要和资产域发生联系，但方式不应该是“伪装成资产”。
-
-建议增加：
-
-`subject_links`
+### 7.5 `subject_links`
 
 - `source_type`
-  - `prediction_event | prediction_contract | market`
+  - `perp | prediction`
 - `source_id`
-- `target_type`
-  - `asset | topic`
-- `target_id`
+- `target_asset_id`
 - `link_type`
-  - `primary_subject | related_subject | hedge_candidate | basket_member`
+  - `underlying | related | basket_member`
 - `confidence`
 
-例子：
+用途：
 
-- 某个 BTC 价格预测事件
-  ->
-  link 到 `ast:crypto:cg:bitcoin`
-- 某个 AI 板块选举类预测市场
-  ->
-  link 到多个资产或 topic
+- perp 关联到 underlying asset
+- prediction 关联到 BTC / ETH / SOL / topic
 
-这样推荐和内容系统仍然可以跨域工作，但不会污染 `assets` 主表。
+这样推荐和内容系统还能跨域工作，但不会污染 coin 聚合模型。
 
 ---
 
-## 9. API Shape
+## 8. API Shape
 
-### 9.1 Asset APIs
+### 8.1 Coin APIs
 
-- `POST /v1/assets/resolve`
-  - 只解析真实资产输入
-  - 不再处理 prediction
-- `GET /v1/assets/:assetId`
-- `GET /v1/assets/:assetId/markets`
+- `GET /v1/coins/:assetId`
+- `GET /v1/coins/:assetId/instances`
+- `POST /v1/coins/resolve`
+  - 输入：`chain + contract`
+  - 输出：`asset_id + chain + contract`
 
-### 9.2 Market APIs
+### 8.2 Perp APIs
 
-- `POST /v1/markets/resolve`
-  - 输入任意 tradable source key
-  - 输出 `market_id`
-- `GET /v1/markets/:marketId`
-- `GET /v1/markets/:marketId/candles`
+- `GET /v1/perps/:perpId`
+- `GET /v1/perps/:perpId/candles`
 
-### 9.3 Prediction APIs
+### 8.3 Prediction APIs
 
-- `GET /v1/prediction-events/:predictionEventId`
-- `GET /v1/prediction-contracts/:predictionContractId`
-- `GET /v1/prediction-events/:predictionEventId/markets`
+- `GET /v1/predictions/:predictionId`
+- `GET /v1/predictions/:predictionId/candles`
 
-说明：
+### 8.4 Trade feed API
 
-- 前端详情路由统一落在 `market_id`
-- prediction 事件页使用 `prediction_event_id`
+- `GET /v1/trade/feed`
 
----
+输出返回 discriminated union：
 
-## 10. Position Model
-
-### 10.1 Wallet holdings
-
-钱包资产持仓只面向真实资产：
-
-- `asset_id`
-- `market_id`
-- `chain`
-- `contract_key`
-- `amount`
-- `value_usd`
-
-### 10.2 Prediction positions
-
-预测仓位不并入 canonical asset holdings，而应单独存：
-
-- `market_id`
-- `prediction_contract_id`
-- `prediction_event_id`
-- `position_size`
-- `avg_entry_price`
-- `current_probability`
-- `pnl`
-
-这样：
-
-- 钱包总资产聚合不会混入 event outcome
-- prediction 账户仍可有独立资产页和 PnL 视图
+```ts
+type TradeFeedItem =
+  | {
+      kind: 'coin';
+      asset_id: string;
+      symbol: string;
+      name: string;
+      image: string | null;
+      preferred_instance: {
+        chain: string;
+        contract: string | 'native';
+      } | null;
+    }
+  | {
+      kind: 'perp';
+      perp_id: string;
+      symbol: string;
+      name: string;
+      image: string | null;
+    }
+  | {
+      kind: 'prediction';
+      prediction_id: string;
+      title: string;
+      image: string | null;
+    };
+```
 
 ---
 
-## 11. Migration Direction
+## 9. External Data Flow Simplification
 
-这不是“最小重构”，而是目标态重构方向。
+这版模型的一个重要收益，是可以显著简化外部数据获取流程。
 
-### 11.1 Remove
+当前复杂度的根源，不只是 provider 多，而是：
 
-- 从资产域中移除 `event_outcome`
-- 移除 `prediction` 参与 `asset_id` resolve
-- 移除 `prediction` 通过伪 `asset_id` 进入 `/v1/assets/*`
+- 每个 route 都在临时做身份归一化
+- 每个页面入口都在现场拼 detail / icon / fallback
+- `coin / perps / prediction` 三类数据被迫走同一套抽象桥接逻辑
 
-### 11.2 Introduce
+采用本方案后，外部数据流应改成“按域固定”，而不是“按页面临时拼”。
 
-- `markets`
-- `spot_markets`
-- `perp_markets`
-- `prediction_events`
-- `prediction_contracts`
-- `prediction_option_markets`
-- `asset_refs`
-- `market_refs`
-- `subject_links`
+### 9.1 Core principle
 
-### 11.3 Route simplification
+把流程拆成三条固定 pipeline：
 
-- 所有详情页统一走 `market_id`
-- 所有 K 线统一走 `market_id`
-- 资产聚合只走 `asset_id`
-- prediction 事件页只走 prediction domain
+1. `coin pipeline`
+2. `perp pipeline`
+3. `prediction pipeline`
+
+每条 pipeline 只负责：
+
+- 抓取
+- 标准化
+- 落库 / 投影
+
+route 层只读投影，不再现场重新做 identity stitching。
+
+### 9.2 Coin pipeline
+
+`coin` 的数据流分成两层：
+
+#### Asset layer
+
+职责：
+
+- 提供 canonical asset metadata
+- 提供 `coingecko asset id`
+- 提供 symbol / name / image / 基础 rank
+
+推荐来源：
+
+- `CoinGecko`
+
+产出：
+
+- `coin_assets`
+
+#### Instance layer
+
+职责：
+
+- 提供链上实例级 detail
+- 提供价格、K 线、余额可定位的 `chain + contract`
+- 提供 decimals / liquidity / holder metrics 等实例属性
+
+推荐来源：
+
+- EVM token detail / kline：`Bitget` 或其他链上 token provider
+- Solana token detail / price：`Jupiter`
+- Wallet balances：`SIM` + `Solana RPC`
+
+产出：
+
+- `coin_instances`
+
+#### Coin route rule
+
+route 层只做：
+
+- 读 `coin_assets`
+- 读 `coin_instances`
+- 按请求场景返回数据
+
+不再做：
+
+- 现场 `resolve -> enrich -> fallback -> merge`
+
+### 9.3 Perp pipeline
+
+`perps` 不再经过 asset-first resolver。
+
+职责：
+
+- 直接抓 Hyperliquid market 列表
+- 直接使用 Hyperliquid id
+- 直接落 `perp_markets`
+
+推荐来源：
+
+- `Hyperliquid`
+
+route 层只做：
+
+- 读 `perp_markets`
+- 返回 detail / candles / browse / search
+
+如果需要 underlying 关联：
+
+- 通过 `subject_links`
+- 而不是把 perp 主身份改写成 coin identity
+
+### 9.4 Prediction pipeline
+
+`prediction` 不再经过 coin/asset resolver。
+
+职责：
+
+- 直接抓 Polymarket market 列表
+- 直接使用 Polymarket id
+- 直接落 `prediction_markets`
+
+推荐来源：
+
+- `Polymarket`
+
+route 层只做：
+
+- 读 `prediction_markets`
+- 返回 detail / candles / browse / search
+
+如果需要关联 BTC / ETH / SOL / topic：
+
+- 通过 `subject_links`
+- 而不是把 prediction outcome 伪装成 `asset_id`
+
+### 9.5 Recommended provider ownership
+
+建议明确 provider ownership，避免同一个字段在多个 route 中反复临时拼接。
+
+#### Coin
+
+- Canonical asset metadata：
+  - `CoinGecko`
+- EVM token detail：
+  - `Bitget`
+- EVM token candles：
+  - `Bitget`
+- EVM candle fallback：
+  - `Binance Web3`
+- Solana token metadata / price：
+  - `Jupiter`
+- EVM wallet balances：
+  - `SIM`
+- Solana wallet balances：
+  - `Solana RPC`
+
+#### Perps
+
+- Browse / detail / candles：
+  - `Hyperliquid`
+
+#### Prediction
+
+- Browse / detail / candles：
+  - `Polymarket`
+
+### 9.6 Route simplification target
+
+重构后的理想状态是：
+
+- `/v1/coins/*`
+  - 只读 coin projection
+- `/v1/perps/*`
+  - 只读 perp projection
+- `/v1/predictions/*`
+  - 只读 prediction projection
+- `/v1/trade/feed`
+  - 从三套 projection 聚合列表，不做现场身份改写
+
+### 9.7 What can be removed
+
+按这个模型，很多“热路径上的临时统一化逻辑”都可以收敛掉：
+
+- route 层批量 resolve identity
+- route 层临时补 icon
+- route 层把 provider id 先转成内部 id、再回退成 provider id
+- prediction 进入 coin/asset 解析链路
+- perp 先映射成统一资产模型、再回退到 venue id
+
+### 9.8 Net result
+
+最终外部数据流会从：
+
+- “页面驱动的数据拼接”
+
+变成：
+
+- “领域驱动的数据投影”
+
+这会带来三个直接收益：
+
+1. route 更薄
+2. provider 责任更清晰
+3. `coin / perps / prediction` 的复杂度彼此隔离，不会相互污染
 
 ---
 
-## 12. Final Recommendation
+## 10. ETH Example
 
-推荐采用下面这套最简洁、长期可扩展的身份层次：
+### 10.1 Asset-level
 
-1. `asset_id`
-   - 只表示真实 underlying
-2. `market_id`
-   - 只表示可交易市场对象
-3. `prediction_event_id`
-   - 只表示事件容器
-4. `prediction_contract_id`
-   - 只表示事件下合同
+- ETH 的资产聚合 id：
+  - `coingecko:ethereum`
 
-其中：
+### 10.2 Instance-level
 
-- `spot market` 是链上 token instance
-- `perp market` 是 venue contract
-- `prediction market` 是 option-level tradable outcome
+- Ethereum native ETH
+  - `asset_id = coingecko:ethereum`
+  - `chain = eth`
+  - `contract = native`
+- Base native ETH
+  - `asset_id = coingecko:ethereum`
+  - `chain = base`
+  - `contract = native`
 
-最终统一原则：
+这意味着：
 
-- **资产统一看 `asset_id`**
-- **交易统一看 `market_id`**
-- **预测统一看 `prediction_event_id / prediction_contract_id / market_id`**
+- 钱包总览里，它们都可以聚合成 ETH
+- trade 列表里，也可以先只显示一个 ETH
+- 但交易和详情必须区分实例
 
-这比“所有东西都压成 asset/instrument”更合理，也更简洁。
+---
+
+## 11. Final Recommendation
+
+最终推荐的落地方式就是你刚才提出的这版：
+
+1. `coin`
+   - `coingecko asset id + chain + contract`
+2. `perps`
+   - 沿用 Hyperliquid id
+3. `prediction`
+   - 沿用 Polymarket id
+
+同时明确：
+
+- `coin` 用 `asset_id` 做聚合
+- `coin` 用 `chain + contract` 做实例定位
+- `perps` 和 `prediction` 不再强行塞进 coin/asset 语义
+
+这是比“统一抽象 market id”更合理、更简洁、也更符合当前数据源形态的方案。

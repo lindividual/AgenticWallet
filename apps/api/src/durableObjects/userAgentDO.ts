@@ -234,7 +234,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
     userId: string,
     input: {
       id: string;
-      chainId: number;
+      networkKey: string;
+      chainId: number | null;
       fromAddress: string;
       toAddress: string;
       tokenAddress?: string | null;
@@ -270,6 +271,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ctx.storage.sql.exec(
       `INSERT INTO transfers (
         id,
+        network_key,
         chain_id,
         from_address,
         to_address,
@@ -288,8 +290,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
         updated_at,
         submitted_at,
         confirmed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.id,
+      input.networkKey,
       input.chainId,
       input.fromAddress,
       input.toAddress,
@@ -1815,6 +1818,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT
           id,
+          network_key,
           chain_id,
           from_address,
           to_address,
@@ -1848,6 +1852,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
         .exec(
           `SELECT
             id,
+            network_key,
             chain_id,
             from_address,
             to_address,
@@ -1880,6 +1885,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .exec(
         `SELECT
           id,
+          network_key,
           chain_id,
           from_address,
           to_address,

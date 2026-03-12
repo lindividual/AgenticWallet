@@ -1,15 +1,17 @@
 import type { Bindings } from '../types';
 import { nowIso } from '../utils/time';
-import { getMarketChainByChainId, getSupportedChainIds } from '../config/appConfig';
+import { getChainConfigByChainId, getMarketChainByChainId, getMarketChainByNetworkKey } from '../config/appConfig';
 import { buildAssetId, buildChainAssetId, inferProtocolFromChain, NATIVE_CONTRACT_KEY } from './assetIdentity';
 import { resolveCoinGeckoAssetIdForContract } from './coingecko';
 import { fetchSolanaPortfolio } from './solana';
 import type { WalletSummary } from '../types';
+import { BITCOIN_NETWORK_KEY, SOLANA_NETWORK_KEY } from './wallet';
 
 type PortfolioBalanceRow = {
-  protocol?: 'evm' | 'svm';
+  protocol?: 'evm' | 'svm' | 'btc';
+  network_key: string;
   chain: string;
-  chain_id: number;
+  chain_id: number | null;
   address: string;
   asset_id?: string;
   chain_asset_id?: string;
@@ -50,6 +52,16 @@ type SimBalancesResponse = {
   balances: PortfolioBalanceRow[];
   error?: string;
   message?: string;
+};
+
+type BitcoinAddressStats = {
+  funded_txo_sum?: number;
+  spent_txo_sum?: number;
+};
+
+type BitcoinAddressResponse = {
+  chain_stats?: BitcoinAddressStats;
+  mempool_stats?: BitcoinAddressStats;
 };
 
 const FALLBACK_ASSET_NAME_BY_ID: Record<string, string> = {
@@ -112,7 +124,9 @@ function normalizeMarketChain(raw: string | undefined): string {
 }
 
 function resolveHoldingMarketChain(row: PortfolioBalanceRow): string {
-  const fromConfig = getMarketChainByChainId(Number(row.chain_id));
+  const fromNetworkKey = getMarketChainByNetworkKey(row.network_key);
+  if (fromNetworkKey) return fromNetworkKey;
+  const fromConfig = row.chain_id != null ? getMarketChainByChainId(Number(row.chain_id)) : null;
   if (fromConfig) return fromConfig;
   return normalizeMarketChain(row.chain);
 }
@@ -124,6 +138,11 @@ function resolveHoldingContractKey(row: PortfolioBalanceRow): string {
     const address = normalizeBase58(row.address);
     if (!address || address === NATIVE_CONTRACT_KEY) return NATIVE_CONTRACT_KEY;
     return address;
+  }
+  if (protocol === 'btc') {
+    const address = normalizeText(row.address);
+    if (!address || address === NATIVE_CONTRACT_KEY) return NATIVE_CONTRACT_KEY;
+    return address.toLowerCase();
   }
 
   const address = normalizeEvmAddress(row.address);
@@ -169,7 +188,7 @@ async function fetchEvmPortfolio(
     return [];
   }
 
-  const chainIds = getSupportedChainIds().join(',');
+  const chainIds = [1, 8453, 56].join(',');
   const simResponse = await fetch(
     `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=${encodeURIComponent(chainIds)}`,
     {
@@ -188,10 +207,75 @@ async function fetchEvmPortfolio(
   return (simData.balances ?? [])
     .map((row) => ({
       ...row,
+      network_key: getChainConfigByChainId(Number(row.chain_id))?.networkKey ?? `evm:${String(row.chain_id)}`,
       protocol: 'evm' as const,
     }))
     .filter((row) => Number(row.value_usd ?? 0) > 0 || hasPositiveAmount(row.amount))
     .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+}
+
+function getBitcoinBalanceSats(response: BitcoinAddressResponse): bigint {
+  const chainFunded = BigInt(response.chain_stats?.funded_txo_sum ?? 0);
+  const chainSpent = BigInt(response.chain_stats?.spent_txo_sum ?? 0);
+  const mempoolFunded = BigInt(response.mempool_stats?.funded_txo_sum ?? 0);
+  const mempoolSpent = BigInt(response.mempool_stats?.spent_txo_sum ?? 0);
+  return chainFunded - chainSpent + mempoolFunded - mempoolSpent;
+}
+
+async function fetchBitcoinPriceUsd(env: Bindings): Promise<number | null> {
+  const baseUrl = (env.COINGECKO_API_BASE_URL?.trim() || 'https://api.coingecko.com/api/v3').replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}/simple/price?ids=bitcoin&vs_currencies=usd`);
+  if (!response.ok) return null;
+  const data = (await response.json()) as {
+    bitcoin?: {
+      usd?: number;
+    };
+  };
+  const price = Number(data.bitcoin?.usd);
+  return Number.isFinite(price) ? price : null;
+}
+
+async function fetchBitcoinPortfolio(
+  env: Bindings,
+  walletAddress: string,
+): Promise<PortfolioBalanceRow[]> {
+  const [balanceResponse, priceUsd] = await Promise.all([
+    fetch(`https://mempool.space/api/address/${encodeURIComponent(walletAddress)}`),
+    fetchBitcoinPriceUsd(env).catch(() => null),
+  ]);
+  if (!balanceResponse.ok) {
+    throw new Error('failed_to_fetch_bitcoin_portfolio');
+  }
+
+  const balanceData = (await balanceResponse.json()) as BitcoinAddressResponse;
+  const balanceSats = getBitcoinBalanceSats(balanceData);
+  if (balanceSats <= 0n) {
+    return [];
+  }
+
+  const numericBalance = Number(balanceSats) / 100_000_000;
+  const valueUsd = priceUsd != null ? numericBalance * priceUsd : null;
+
+  return [
+    {
+      protocol: 'btc',
+      network_key: BITCOIN_NETWORK_KEY,
+      chain: 'btc',
+      chain_id: null,
+      address: NATIVE_CONTRACT_KEY,
+      asset_id: 'coingecko:bitcoin',
+      chain_asset_id: buildChainAssetId('btc', NATIVE_CONTRACT_KEY),
+      amount: balanceSats.toString(),
+      symbol: 'BTC',
+      name: 'Bitcoin',
+      decimals: 8,
+      price_usd: priceUsd,
+      value_usd: valueUsd,
+      logo: null,
+      logo_uri: null,
+      url: null,
+    },
+  ];
 }
 
 export async function fetchWalletPortfolio(
@@ -199,13 +283,16 @@ export async function fetchWalletPortfolio(
   wallet: WalletSummary,
 ): Promise<{ totalUsd: number; holdings: PortfolioBalanceRow[]; asOf: string }> {
   const evmAccounts = wallet.chainAccounts.filter((row) => row.protocol === 'evm');
-  const solanaAccount = wallet.chainAccounts.find((row) => row.chainId === 101);
+  const solanaAccount = wallet.chainAccounts.find((row) => row.networkKey === SOLANA_NETWORK_KEY);
+  const bitcoinAccount = wallet.chainAccounts.find((row) => row.networkKey === BITCOIN_NETWORK_KEY);
   const evmPrimary = evmAccounts[0]?.address ?? wallet.address;
-  const [evmHoldings, solanaHoldings] = await Promise.all([
+  const [evmHoldings, solanaHoldings, bitcoinHoldings] = await Promise.all([
     evmPrimary ? fetchEvmPortfolio(env, evmPrimary).catch(() => []) : Promise.resolve([]),
     solanaAccount ? fetchSolanaPortfolio(env, solanaAccount.address).catch(() => []) : Promise.resolve([]),
+    bitcoinAccount ? fetchBitcoinPortfolio(env, bitcoinAccount.address).catch(() => []) : Promise.resolve([]),
   ]);
-  const holdings = [...evmHoldings, ...solanaHoldings].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+  const holdings = [...evmHoldings, ...solanaHoldings, ...bitcoinHoldings]
+    .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
   const totalUsd = holdings.reduce((acc, row) => acc + Number(row.value_usd ?? 0), 0);
   return {
     totalUsd,

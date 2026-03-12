@@ -15,7 +15,7 @@ import { ModalContentScaffold } from './ModalContentScaffold';
 
 export type TradePreset = {
   mode: 'buy' | 'sell' | 'stableSwap';
-  chainId: number;
+  networkKey: string;
   sellToken: TradeTokenPreset;
   buyToken: TradeTokenPreset;
   slippageBps?: number;
@@ -26,7 +26,8 @@ type TradeContentProps = {
   active: boolean;
   preset: TradePreset | null;
   supportedChains: Array<{
-    chainId: number;
+    networkKey: string;
+    chainId: number | null;
     name: string;
     symbol: string;
   }>;
@@ -74,7 +75,7 @@ export function TradeContent({
   const { showError, showSuccess } = useToast();
   const [sellToken, setSellToken] = useState<TradeTokenPreset | null>(null);
   const [buyToken, setBuyToken] = useState<TradeTokenPreset | null>(null);
-  const [chainId, setChainId] = useState<number>(1);
+  const [networkKey, setNetworkKey] = useState<string>('ethereum-mainnet');
   const [slippageBps, setSlippageBps] = useState<number>(100);
   const [sellAmount, setSellAmount] = useState('');
   const [quote, setQuote] = useState<TradeQuoteResponse | null>(null);
@@ -84,7 +85,7 @@ export function TradeContent({
 
   useEffect(() => {
     if (!active || !preset) return;
-    setChainId(preset.chainId);
+    setNetworkKey(preset.networkKey);
     setSellToken({ ...preset.sellToken });
     setBuyToken({ ...preset.buyToken });
     setSlippageBps(Number.isFinite(Number(preset.slippageBps)) ? Number(preset.slippageBps) : 100);
@@ -100,13 +101,13 @@ export function TradeContent({
     emitAgentInterventionSignal({
       type: 'trade_form_struggle',
       reason: 'repeated_edits',
-      entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+      entityKey: `trade:${preset?.mode ?? 'default'}:${networkKey}`,
     });
-  }, [active, chainId, editCount, preset?.mode]);
+  }, [active, networkKey, editCount, preset?.mode]);
 
   const selectedChain = useMemo(
-    () => supportedChains.find((item) => item.chainId === chainId) ?? null,
-    [chainId, supportedChains],
+    () => supportedChains.find((item) => item.networkKey === networkKey) ?? null,
+    [networkKey, supportedChains],
   );
 
   function handleButtonClick(action: () => void) {
@@ -144,7 +145,7 @@ export function TradeContent({
     }
 
     const requestPayload = {
-      chainId,
+      networkKey,
       sellTokenAddress: sellToken.address,
       buyTokenAddress: buyToken.address,
       sellAmount: sellAmount.trim(),
@@ -164,7 +165,7 @@ export function TradeContent({
       emitAgentInterventionSignal({
         type: 'trade_form_struggle',
         reason: 'quote_failed',
-        entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+        entityKey: `trade:${preset?.mode ?? 'default'}:${networkKey}`,
       });
       showError(`${t('wallet.tradeFailed')}: ${(error as Error).message}`);
     } finally {
@@ -186,7 +187,7 @@ export function TradeContent({
     setSubmitting(true);
     try {
       const result = await submitTrade({
-        chainId,
+        networkKey,
         sellTokenAddress: sellToken.address,
         buyTokenAddress: buyToken.address,
         sellAmount: quote.sellAmountInput,
@@ -201,7 +202,7 @@ export function TradeContent({
         emitAgentInterventionSignal({
           type: 'trade_form_struggle',
           reason: 'submit_failed',
-          entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+          entityKey: `trade:${preset?.mode ?? 'default'}:${networkKey}`,
         });
         showError(t('wallet.tradeSubmitFailed'));
         return;
@@ -209,7 +210,7 @@ export function TradeContent({
 
       if (preset?.mode === 'buy') {
         ingestAgentEvent('trade_buy', {
-          chainId,
+          networkKey,
           asset: preset.assetSymbolForEvent ?? buyToken.symbol,
           sellToken: sellToken.symbol,
           buyToken: buyToken.symbol,
@@ -217,7 +218,7 @@ export function TradeContent({
       }
       if (preset?.mode === 'sell') {
         ingestAgentEvent('trade_sell', {
-          chainId,
+          networkKey,
           asset: preset.assetSymbolForEvent ?? sellToken.symbol,
           sellToken: sellToken.symbol,
           buyToken: buyToken.symbol,
@@ -231,7 +232,7 @@ export function TradeContent({
       emitAgentInterventionSignal({
         type: 'trade_form_struggle',
         reason: 'submit_failed',
-        entityKey: `trade:${preset?.mode ?? 'default'}:${chainId}`,
+        entityKey: `trade:${preset?.mode ?? 'default'}:${networkKey}`,
       });
       showError(`${t('wallet.tradeFailed')}: ${(error as Error).message}`);
     } finally {
@@ -254,7 +255,7 @@ export function TradeContent({
       <div className="mt-8 flex flex-col gap-4">
         <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
           <p className="m-0 text-base-content/70">{t('wallet.transferChain')}</p>
-          <p className="m-0 mt-1 font-semibold">{selectedChain?.name ?? chainId}</p>
+          <p className="m-0 mt-1 font-semibold">{selectedChain?.name ?? networkKey}</p>
         </div>
 
         <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">

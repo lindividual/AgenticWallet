@@ -8,13 +8,14 @@ import { ModalContentScaffold } from './ModalContentScaffold';
 type TransferContentProps = {
   active: boolean;
   presetAsset?: {
-    chainId: number;
-    tokenAddress: string;
+    networkKey: string;
+    tokenAddress?: string;
     tokenSymbol?: string;
     tokenDecimals?: number;
   } | null;
   supportedChains: Array<{
-    chainId: number;
+    networkKey: string;
+    chainId: number | null;
     name: string;
     symbol: string;
   }>;
@@ -68,7 +69,7 @@ export function TransferContent({
 }: TransferContentProps) {
   const { t } = useTranslation();
   const { showError, showSuccess } = useToast();
-  const [chainId, setChainId] = useState<number>(supportedChains[0]?.chainId ?? 1);
+  const [networkKey, setNetworkKey] = useState<string>(supportedChains[0]?.networkKey ?? 'ethereum-mainnet');
   const [toAddress, setToAddress] = useState('');
   const [amount, setAmount] = useState('');
   const [quote, setQuote] = useState<TransferQuoteResponse | null>(null);
@@ -77,10 +78,11 @@ export function TransferContent({
   const [step, setStep] = useState<TransferStep>('address');
   const [resultState, setResultState] = useState<TransferResultState>(null);
   const isTokenTransfer = Boolean(presetAsset?.tokenAddress);
+  const chainLocked = Boolean(presetAsset);
 
   useEffect(() => {
     if (!active) return;
-    setChainId(presetAsset?.chainId ?? supportedChains[0]?.chainId ?? 1);
+    setNetworkKey(presetAsset?.networkKey ?? supportedChains[0]?.networkKey ?? 'ethereum-mainnet');
     setToAddress('');
     setAmount('');
     setQuote(null);
@@ -91,8 +93,8 @@ export function TransferContent({
   }, [active, supportedChains, presetAsset]);
 
   const selectedChain = useMemo(
-    () => supportedChains.find((item) => item.chainId === chainId) ?? supportedChains[0] ?? null,
-    [chainId, supportedChains],
+    () => supportedChains.find((item) => item.networkKey === networkKey) ?? supportedChains[0] ?? null,
+    [networkKey, supportedChains],
   );
   const stepIndex = useMemo(() => {
     const mapping: Record<TransferStep, number> = {
@@ -126,7 +128,7 @@ export function TransferContent({
     const normalizedAddress = toAddress.trim();
     const normalizedAmount = amount.trim();
     const requestPayload = {
-      chainId,
+      networkKey,
       toAddress: normalizedAddress,
       amount: normalizedAmount,
       tokenAddress: presetAsset?.tokenAddress,
@@ -141,7 +143,7 @@ export function TransferContent({
       setQuote(nextQuote);
       setStep('review');
       console.log('[wallet-ui][transfer/quote] success', {
-        chainId: nextQuote.chainId,
+        networkKey: nextQuote.networkKey,
         toAddress: nextQuote.toAddress,
         tokenAddress: nextQuote.tokenAddress,
         tokenSymbol: nextQuote.tokenSymbol,
@@ -206,7 +208,7 @@ export function TransferContent({
       }
 
       const submitPayload = {
-        chainId: quote.chainId,
+        networkKey: quote.networkKey,
         toAddress: quote.toAddress,
         amount: quote.amountInput,
         tokenAddress: quote.tokenAddress ?? undefined,
@@ -220,7 +222,7 @@ export function TransferContent({
         id: result.transfer.id,
         status: result.transfer.status,
         txHash: result.transfer.txHash,
-        chainId: result.transfer.chainId,
+        networkKey: result.transfer.networkKey,
       });
 
       onSubmitted(result.transfer);
@@ -229,7 +231,7 @@ export function TransferContent({
       setStep('result');
     } catch (error) {
       console.error('[wallet-ui][transfer/submit] failed', {
-        chainId: quote.chainId,
+        networkKey: quote.networkKey,
         toAddress: quote.toAddress,
         tokenAddress: quote.tokenAddress,
         tokenSymbol: quote.tokenSymbol,
@@ -284,13 +286,29 @@ export function TransferContent({
   }
 
   function renderStepContent() {
+    const addressPlaceholder = selectedChain?.symbol === 'BTC' ? 'bc1...' : '0x...';
+
     if (step === 'address') {
       return (
         <div className="mt-8 flex flex-col gap-4">
-          <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
-            <p className="m-0 text-base-content/70">{t('wallet.transferChain')}</p>
-            <p className="m-0 mt-1 font-semibold">{selectedChain?.name ?? chainId}</p>
-          </div>
+          <label className="flex flex-col gap-2">
+            <span className="text-sm text-base-content/70">{t('wallet.transferChain')}</span>
+            <select
+              className="select select-bordered w-full"
+              value={networkKey}
+              onChange={(event) => {
+                setNetworkKey(event.target.value);
+                setQuote(null);
+              }}
+              disabled={chainLocked || submitting || quoting}
+            >
+              {supportedChains.map((chain) => (
+                <option key={chain.networkKey} value={chain.networkKey}>
+                  {chain.name}
+                </option>
+              ))}
+            </select>
+          </label>
 
           {isTokenTransfer ? (
             <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
@@ -304,7 +322,7 @@ export function TransferContent({
             <span className="text-sm text-base-content/70">{t('wallet.transferToAddress')}</span>
             <input
               className="input input-bordered w-full"
-              placeholder="0x..."
+              placeholder={addressPlaceholder}
               value={toAddress}
               onChange={(event) => {
                 setToAddress(event.target.value);
@@ -371,7 +389,7 @@ export function TransferContent({
                 {t('wallet.transferAmount')}: {quote.amountInput}
               </p>
               <p className="m-0 text-base-content/60">
-                {t('wallet.transferChain')}: {selectedChain?.name ?? quote.chainId}
+                {t('wallet.transferChain')}: {selectedChain?.name ?? quote.networkKey}
               </p>
             </div>
           ) : (

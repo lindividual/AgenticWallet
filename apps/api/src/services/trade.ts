@@ -11,7 +11,15 @@ import {
 } from 'viem';
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, TradeQuoteRequest, TradeQuoteResponse } from '../types';
-import { buildEvmWalletExecutionContext, getWalletChainAddress } from './wallet';
+import { getChainConfigByNetworkKey } from '../config/appConfig';
+import {
+  BASE_NETWORK_KEY,
+  BNB_NETWORK_KEY,
+  ETHEREUM_NETWORK_KEY,
+  SOLANA_NETWORK_KEY,
+  buildEvmWalletExecutionContext,
+  getWalletChainAddress,
+} from './wallet';
 import {
   prepareSolanaTrade,
   refreshSolanaTradeStatusByHash,
@@ -102,20 +110,20 @@ function isPreparedSolanaTrade(prepared: PreparedAnyTrade): prepared is Prepared
   return 'mode' in prepared && prepared.mode === 'solana';
 }
 
-function resolveChainConfig(env: Bindings, chainId: number): ChainRuntimeConfig {
-  if (chainId === mainnet.id) {
+function resolveChainConfig(env: Bindings, networkKey: string): ChainRuntimeConfig {
+  if (networkKey === ETHEREUM_NETWORK_KEY) {
     return {
       chain: mainnet,
       rpcUrl: env.ETHEREUM_RPC_URL?.trim() || undefined,
     };
   }
-  if (chainId === base.id) {
+  if (networkKey === BASE_NETWORK_KEY) {
     return {
       chain: base,
       rpcUrl: env.BASE_RPC_URL?.trim() || undefined,
     };
   }
-  if (chainId === bsc.id) {
+  if (networkKey === BNB_NETWORK_KEY) {
     return {
       chain: bsc,
       rpcUrl: env.BNB_RPC_URL?.trim() || undefined,
@@ -303,12 +311,13 @@ async function fetchZeroExQuote(
   return payload;
 }
 
-async function buildTradeContext(env: Bindings, userId: string, chainId: number) {
+async function buildTradeContext(env: Bindings, userId: string, networkKey: string) {
   const { wallet, account } = await buildEvmWalletExecutionContext(env, userId);
-  const deployment = account.deploymentOn(chainId, true);
+  const { chain } = resolveChainConfig(env, networkKey);
+  const deployment = account.deploymentOn(chain.id, true);
   const meeClient = await createMeeClient({ account });
   const fromAddress =
-    getWalletChainAddress(wallet, chainId)
+    getWalletChainAddress(wallet, networkKey)
     ?? account.signer.address;
 
   return {
@@ -332,15 +341,16 @@ export async function prepareTrade(
   userId: string,
   input: TradeQuoteRequest,
 ): Promise<PreparedAnyTrade> {
-  const chainId = Number(input.chainId);
-  if (!Number.isFinite(chainId)) {
-    throw new Error('invalid_chain_id');
+  const networkKey = input.networkKey?.trim().toLowerCase();
+  const chainConfig = getChainConfigByNetworkKey(networkKey);
+  if (!chainConfig) {
+    throw new Error('invalid_network_key');
   }
-  if (chainId === 101) {
+  if (networkKey === SOLANA_NETWORK_KEY) {
     return prepareSolanaTrade(env, userId, input);
   }
 
-  const { chain } = resolveChainConfig(env, chainId);
+  const { chain } = resolveChainConfig(env, networkKey);
   const sellTokenAddress = toAddressOrThrow(input.sellTokenAddress, 'sell_token_address');
   const buyTokenAddress = toAddressOrThrow(input.buyTokenAddress, 'buy_token_address');
 
@@ -348,7 +358,7 @@ export async function prepareTrade(
     throw new Error('invalid_trade_pair');
   }
 
-  const { account, deployment, meeClient, fromAddress } = await buildTradeContext(env, userId, chain.id);
+  const { account, deployment, meeClient, fromAddress } = await buildTradeContext(env, userId, networkKey);
 
   let sellTokenDecimals = normalizeTokenDecimals(input.sellTokenDecimals);
   if (sellTokenDecimals === null) {
@@ -488,6 +498,7 @@ export async function prepareTrade(
   return {
     mode: 'mee',
     quote: {
+      networkKey,
       chainId: chain.id,
       fromAddress,
       sellTokenAddress,
@@ -549,13 +560,13 @@ export async function waitForTradeReceipt(
 
 export async function refreshTradeStatusByHash(
   env: Bindings,
-  chainId: number,
+  networkKey: string,
   txHash: Hash,
 ): Promise<'confirmed' | 'failed' | 'pending'> {
-  if (chainId === 101) {
+  if (networkKey === SOLANA_NETWORK_KEY) {
     return refreshSolanaTradeStatusByHash(env, txHash);
   }
-  const { chain, rpcUrl } = resolveChainConfig(env, chainId);
+  const { chain, rpcUrl } = resolveChainConfig(env, networkKey);
   const publicClient = createPublicClient({
     chain,
     transport: http(rpcUrl),

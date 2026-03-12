@@ -6,6 +6,7 @@ import {
   waitForTradeReceipt,
 } from '../services/trade';
 import { isSolanaSignature } from '../services/solana';
+import { SOLANA_NETWORK_KEY } from '../services/wallet';
 import type { AppEnv, TradeQuoteRequest, TradeSubmitRequest } from '../types';
 
 function toErrorStatus(error: unknown): 400 | 404 | 502 {
@@ -42,7 +43,7 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
     console.log('[trade/quote] request', {
       requestId,
       userId,
-      chainId: body.chainId,
+      networkKey: body.networkKey,
       sellTokenAddress: body.sellTokenAddress,
       buyTokenAddress: body.buyTokenAddress,
       sellAmount: body.sellAmount,
@@ -54,7 +55,7 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
       console.log('[trade/quote] success', {
         requestId,
         userId,
-        chainId: prepared.quote.chainId,
+        networkKey: prepared.quote.networkKey,
         sellAmountRaw: prepared.quote.sellAmountRaw,
         expectedBuyAmountRaw: prepared.quote.expectedBuyAmountRaw,
         needsApproval: prepared.quote.needsApproval,
@@ -67,7 +68,7 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
       console.error('[trade/quote] failed', {
         requestId,
         userId,
-        chainId: body.chainId,
+        networkKey: body.networkKey,
         sellTokenAddress: body.sellTokenAddress,
         buyTokenAddress: body.buyTokenAddress,
         sellAmount: body.sellAmount,
@@ -93,7 +94,7 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
     console.log('[trade/submit] request', {
       requestId,
       userId,
-      chainId: body.chainId,
+      networkKey: body.networkKey,
       sellTokenAddress: body.sellTokenAddress,
       buyTokenAddress: body.buyTokenAddress,
       sellAmount: body.sellAmount,
@@ -109,7 +110,7 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
       console.log('[trade/submit] sent', {
         requestId,
         userId,
-        chainId: prepared.quote.chainId,
+        networkKey: prepared.quote.networkKey,
         txHash,
         status,
       });
@@ -125,7 +126,7 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
       console.error('[trade/submit] failed', {
         requestId,
         userId,
-        chainId: body.chainId,
+        networkKey: body.networkKey,
         sellTokenAddress: body.sellTokenAddress,
         buyTokenAddress: body.buyTokenAddress,
         sellAmount: body.sellAmount,
@@ -136,18 +137,18 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
     }
   });
 
-  app.get('/v1/trade/status/:chainId/:txHash', async (c) => {
-    const chainId = Number(c.req.param('chainId'));
+  app.get('/v1/trade/status/:networkKey/:txHash', async (c) => {
+    const networkKey = c.req.param('networkKey')?.trim().toLowerCase();
     const txHash = c.req.param('txHash') as `0x${string}`;
 
-    const isValidHash = chainId === 101 ? isSolanaSignature(txHash) : txHash?.startsWith('0x');
-    if (!Number.isFinite(chainId) || !isValidHash) {
+    const isValidHash = networkKey === SOLANA_NETWORK_KEY ? isSolanaSignature(txHash) : txHash?.startsWith('0x');
+    if (!networkKey || !isValidHash) {
       return c.json({ error: 'invalid_trade_status_query' }, 400);
     }
 
     try {
-      const status = await refreshTradeStatusByHash(c.env, chainId, txHash);
-      return c.json({ chainId, txHash, status });
+      const status = await refreshTradeStatusByHash(c.env, networkKey, txHash);
+      return c.json({ networkKey, txHash, status });
     } catch (error) {
       return c.json(
         {

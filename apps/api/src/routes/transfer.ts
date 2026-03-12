@@ -41,6 +41,11 @@ function normalizeChainId(raw: string | undefined): number | undefined {
   return Math.trunc(parsed);
 }
 
+function normalizeNetworkKey(raw: string | undefined): string | undefined {
+  const value = raw?.trim().toLowerCase();
+  return value || undefined;
+}
+
 function normalizeTokenAddress(raw: string | undefined): string | null | undefined {
   if (raw == null) return undefined;
   const value = raw.trim();
@@ -65,6 +70,7 @@ function toApiTransfer(row: AgentTransfer): TransferHistoryRecord {
   return {
     id: row.id,
     source: 'app',
+    networkKey: row.network_key,
     chainId: row.chain_id,
     fromAddress: row.from_address,
     toAddress: row.to_address,
@@ -93,10 +99,12 @@ function toErrorStatus(error: unknown): 400 | 404 | 502 {
     message.startsWith('invalid_') ||
     message.startsWith('insufficient_') ||
     message === 'unsupported_fee_token' ||
+    message === 'unsupported_bitcoin_token_transfer' ||
     normalizedMessage.includes('insufficient balance to pay for the gas') ||
     normalizedMessage.includes('orchestration fee') ||
     message === 'unsupported_chain' ||
-    message === 'wallet_key_decryption_failed'
+    message === 'wallet_key_decryption_failed' ||
+    message === 'wallet_key_mismatch'
   ) {
     return 400;
   }
@@ -115,7 +123,7 @@ async function maybeRefreshSubmittedTransfer(
     return transfer;
   }
 
-  const refreshed = await refreshTransferStatusByHash(env, userId, transfer.chain_id, transfer.tx_hash as `0x${string}`);
+  const refreshed = await refreshTransferStatusByHash(env, userId, transfer.network_key, transfer.tx_hash);
   if (refreshed === 'pending') {
     return transfer;
   }
@@ -145,7 +153,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
     console.log('[transfer/quote] request', {
       requestId,
       userId,
-      chainId: body.chainId,
+      networkKey: body.networkKey,
       toAddress: body.toAddress,
       amount: body.amount,
       tokenAddress: body.tokenAddress ?? null,
@@ -158,7 +166,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       console.log('[transfer/quote] success', {
         requestId,
         userId,
-        chainId: prepared.quote.chainId,
+        networkKey: prepared.quote.networkKey,
         fromAddress: prepared.quote.fromAddress,
         toAddress: prepared.quote.toAddress,
         tokenAddress: prepared.quote.tokenAddress,
@@ -180,7 +188,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       console.error('[transfer/quote] failed', {
         requestId,
         userId,
-        chainId: body.chainId,
+        networkKey: body.networkKey,
         toAddress: body.toAddress,
         tokenAddress: body.tokenAddress ?? null,
         tokenSymbol: body.tokenSymbol ?? null,
@@ -212,7 +220,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
     console.log('[transfer/submit] request', {
       requestId,
       userId,
-      chainId: body.chainId,
+      networkKey: body.networkKey,
       toAddress: body.toAddress,
       amount: body.amount,
       tokenAddress: body.tokenAddress ?? null,
@@ -227,6 +235,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       const nowIso = new Date().toISOString();
       const transferCreated = await createUserTransfer(c.env, userId, {
         id: transferId,
+        networkKey: prepared.quote.networkKey,
         chainId: prepared.quote.chainId,
         fromAddress: prepared.quote.fromAddress,
         toAddress: prepared.quote.toAddress,
@@ -252,7 +261,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
         });
       }
 
-      let txHash: `0x${string}` | null = null;
+      let txHash: string | null = null;
       try {
         txHash = await sendPreparedTransfer(prepared);
       } catch (error) {
@@ -324,7 +333,7 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       console.error('[transfer/submit] failed', {
         requestId,
         userId,
-        chainId: body.chainId,
+        networkKey: body.networkKey,
         toAddress: body.toAddress,
         tokenAddress: body.tokenAddress ?? null,
         tokenSymbol: body.tokenSymbol ?? null,
@@ -348,12 +357,13 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
     const filters: TransferHistoryFilters = {
       limit: normalizeHistoryLimit(c.req.query('limit')),
       status,
+      networkKey: normalizeNetworkKey(c.req.query('networkKey')),
       chainId: normalizeChainId(c.req.query('chainId')),
       tokenAddress: normalizeTokenAddress(c.req.query('tokenAddress')),
       tokenSymbol: normalizeTokenSymbol(c.req.query('tokenSymbol')),
       assetType: normalizeAssetType(c.req.query('assetType')),
     };
-    const localLimit = filters.chainId || filters.tokenAddress !== undefined || filters.tokenSymbol || filters.assetType
+    const localLimit = filters.networkKey || filters.chainId || filters.tokenAddress !== undefined || filters.tokenSymbol || filters.assetType
       ? 100
       : filters.limit;
 

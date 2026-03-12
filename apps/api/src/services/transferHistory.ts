@@ -1,12 +1,13 @@
 import { formatUnits } from 'viem';
-import { APP_CONFIG } from '../config/appConfig';
+import { APP_CONFIG, getChainConfigByChainId, getChainConfigByNetworkKey } from '../config/appConfig';
 import type { Bindings, TransferStatus, WalletSummary } from '../types';
-import { SOLANA_CHAIN_ID } from './wallet';
+import { SOLANA_NETWORK_KEY } from './wallet';
 
 export type TransferHistoryRecord = {
   id: string;
   source: 'app' | 'sim';
-  chainId: number;
+  networkKey: string;
+  chainId: number | null;
   fromAddress: string;
   toAddress: string;
   tokenAddress: string | null;
@@ -29,6 +30,7 @@ export type TransferHistoryRecord = {
 export type TransferHistoryFilters = {
   limit: number;
   status?: TransferStatus;
+  networkKey?: string;
   chainId?: number;
   tokenAddress?: string | null;
   tokenSymbol?: string | null;
@@ -71,8 +73,8 @@ function normalizeAddress(raw: unknown): string | null {
   return value;
 }
 
-function normalizeAddressForChain(chainId: number, raw: unknown): string | null {
-  if (chainId === SOLANA_CHAIN_ID) {
+function normalizeAddressForChain(networkKey: string, raw: unknown): string | null {
+  if (networkKey === SOLANA_NETWORK_KEY) {
     return normalizeText(raw);
   }
   return normalizeAddress(raw);
@@ -99,24 +101,26 @@ function clampLimit(limit: number): number {
 
 function buildExternalRowId(activity: SimActivityItem, walletAddress: string): string {
   const chainId = Number(activity.chain_id ?? 0);
+  const networkKey = getChainConfigByChainId(chainId)?.networkKey ?? `evm:${chainId}`;
   const txHash = normalizeText(activity.tx_hash) ?? 'unknown';
   const type = normalizeText(activity.type) ?? 'unknown';
   const tokenAddress = normalizeTokenAddress(activity.token_address) ?? 'native';
   const value = normalizeText(activity.value) ?? '0';
-  return `sim:${chainId}:${walletAddress}:${txHash}:${type}:${tokenAddress}:${value}`;
+  return `sim:${networkKey}:${walletAddress}:${txHash}:${type}:${tokenAddress}:${value}`;
 }
 
-function getChainNativeSymbol(chainId: number): string | null {
-  return APP_CONFIG.supportedChains.find((item) => item.chainId === chainId)?.symbol ?? null;
+function getChainNativeSymbol(networkKey: string, chainId: number | null): string | null {
+  return getChainConfigByNetworkKey(networkKey)?.symbol ?? (chainId != null ? getChainConfigByChainId(chainId)?.symbol ?? null : null);
 }
 
 function getChainAccountMap(wallet: WalletSummary | null | undefined): Map<number, string> {
   const byChainId = new Map<number, string>();
   for (const account of wallet?.chainAccounts ?? []) {
     if (account.protocol !== 'evm') continue;
+    if (!Number.isFinite(account.chainId)) continue;
     const address = normalizeAddress(account.address);
     if (!address) continue;
-    byChainId.set(account.chainId, address);
+    byChainId.set(account.chainId as number, address);
   }
   const primaryAddress = normalizeAddress(wallet?.address);
   if (primaryAddress && !byChainId.has(1)) {
@@ -151,10 +155,13 @@ function formatAmountInput(rawAmount: string, decimals: number): string {
 }
 
 export function matchesTransferHistoryFilters(
-  row: Pick<TransferHistoryRecord, 'chainId' | 'tokenAddress' | 'tokenSymbol' | 'status'>,
+  row: Pick<TransferHistoryRecord, 'networkKey' | 'chainId' | 'tokenAddress' | 'tokenSymbol' | 'status'>,
   filters: TransferHistoryFilters,
 ): boolean {
   if (filters.status && row.status !== filters.status) {
+    return false;
+  }
+  if (filters.networkKey && row.networkKey !== filters.networkKey) {
     return false;
   }
   if (filters.chainId && row.chainId !== filters.chainId) {
@@ -179,19 +186,19 @@ export function matchesTransferHistoryFilters(
 }
 
 function buildDeduplicationKey(row: TransferHistoryRecord, ownedAddresses: Set<string>): string {
-  const normalizedTo = normalizeAddressForChain(row.chainId, row.toAddress) ?? '';
-  const normalizedFrom = normalizeAddressForChain(row.chainId, row.fromAddress) ?? '';
+  const normalizedTo = normalizeAddressForChain(row.networkKey, row.toAddress) ?? '';
+  const normalizedFrom = normalizeAddressForChain(row.networkKey, row.fromAddress) ?? '';
   const direction = ownedAddresses.has(normalizedTo)
     ? 'receive'
     : ownedAddresses.has(normalizedFrom)
       ? 'send'
       : 'unknown';
-  const tokenKey = row.chainId === SOLANA_CHAIN_ID
+  const tokenKey = row.networkKey === SOLANA_NETWORK_KEY
     ? (normalizeText(row.tokenAddress) ?? 'native')
     : (normalizeTokenAddress(row.tokenAddress) ?? 'native');
   const amountKey = normalizeText(row.amountRaw) ?? normalizeText(row.txValue) ?? '0';
   const txKey = normalizeText(row.txHash) ?? row.id;
-  return [row.chainId, txKey.toLowerCase(), direction, tokenKey, amountKey].join(':');
+  return [row.networkKey, txKey.toLowerCase(), direction, tokenKey, amountKey].join(':');
 }
 
 function getSortTimestamp(row: TransferHistoryRecord): number {
@@ -234,9 +241,13 @@ export async function fetchExternalTransferHistory(
   if (!chainAccountMap.size) return [];
 
   const requestedLimit = clampLimit(filters.limit);
-  const requestedChains = filters.chainId
-    ? [filters.chainId]
-    : [...new Set(APP_CONFIG.supportedChains.filter((item) => item.protocol === 'evm').map((item) => item.chainId))];
+  const requestedChains = filters.networkKey
+    ? APP_CONFIG.supportedChains
+        .filter((item) => item.protocol === 'evm' && item.networkKey === filters.networkKey && item.chainId != null)
+        .map((item) => item.chainId as number)
+    : filters.chainId
+      ? [filters.chainId]
+      : [...new Set(APP_CONFIG.supportedChains.filter((item) => item.protocol === 'evm' && item.chainId != null).map((item) => item.chainId as number))];
   const assetType = filters.assetType === 'native'
     ? 'native'
     : filters.tokenAddress
@@ -287,6 +298,7 @@ export async function fetchExternalTransferHistory(
           if (!matchesDirection(activityType)) return null;
 
           const rowChainId = Number(item.chain_id ?? chainId);
+          const rowNetworkKey = getChainConfigByChainId(rowChainId)?.networkKey ?? `evm:${rowChainId}`;
           const tokenDecimals = Number.isFinite(Number(item.token_metadata?.decimals))
             ? Number(item.token_metadata?.decimals)
             : 18;
@@ -296,12 +308,13 @@ export async function fetchExternalTransferHistory(
           const fromAddress = normalizeAddress(item.from) ?? (activityType === 'send' ? walletAddress : '');
           const toAddress = normalizeAddress(item.to) ?? (activityType === 'receive' ? walletAddress : '');
           const tokenSymbol = normalizeTokenSymbol(item.token_metadata?.symbol) ?? (
-            tokenAddress == null ? getChainNativeSymbol(rowChainId) : null
+            tokenAddress == null ? getChainNativeSymbol(rowNetworkKey, rowChainId) : null
           );
 
           return {
             id: buildExternalRowId(item, walletAddress),
             source: 'sim',
+            networkKey: rowNetworkKey,
             chainId: rowChainId,
             fromAddress,
             toAddress,

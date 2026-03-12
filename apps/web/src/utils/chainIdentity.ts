@@ -1,4 +1,4 @@
-export type WalletProtocol = 'evm' | 'svm';
+export type WalletProtocol = 'evm' | 'svm' | 'btc';
 
 export function normalizeMarketChain(raw: string | null | undefined): string {
   const value = (raw ?? '').trim().toLowerCase();
@@ -6,11 +6,23 @@ export function normalizeMarketChain(raw: string | null | undefined): string {
   if (value === 'ethereum' || value === 'mainnet') return 'eth';
   if (value === 'bsc' || value === 'binance-smart-chain' || value === 'bnb-smart-chain') return 'bnb';
   if (value === 'solana') return 'sol';
+  if (value === 'bitcoin' || value === 'btc') return 'btc';
   return value;
 }
 
 export function inferProtocolFromChain(chain: string | null | undefined): WalletProtocol {
-  return normalizeMarketChain(chain) === 'sol' ? 'svm' : 'evm';
+  const normalizedChain = normalizeMarketChain(chain);
+  if (normalizedChain === 'sol') return 'svm';
+  if (normalizedChain === 'btc') return 'btc';
+  return 'evm';
+}
+
+export function inferWalletProtocolFromAddress(address: string | null | undefined): WalletProtocol | null {
+  const value = (address ?? '').trim();
+  if (!value) return null;
+  if (value.startsWith('0x')) return 'evm';
+  if (value.toLowerCase().startsWith('bc1')) return 'btc';
+  return 'svm';
 }
 
 export function normalizeContractForChain(
@@ -21,7 +33,7 @@ export function normalizeContractForChain(
   if (!normalized || normalized.toLowerCase() === 'native' || normalized === '0x0000000000000000000000000000000000000000') {
     return 'native';
   }
-  return inferProtocolFromChain(chain) === 'svm' ? normalized : normalized.toLowerCase();
+  return inferProtocolFromChain(chain) === 'evm' ? normalized.toLowerCase() : normalized;
 }
 
 export function normalizeAssetId(raw: string | null | undefined): string | null {
@@ -32,34 +44,38 @@ export function normalizeAssetId(raw: string | null | undefined): string | null 
 export function normalizeWalletAddress(protocol: WalletProtocol, address: string | null | undefined): string {
   const value = (address ?? '').trim();
   if (!value) return '';
-  return protocol === 'svm' ? value : value.toLowerCase();
+  return protocol === 'evm' || protocol === 'btc' ? value.toLowerCase() : value;
 }
 
 export function buildWalletAccountsFingerprint(
-  chainAccounts: Array<{ chainId: number; protocol?: WalletProtocol; address: string }> | null | undefined,
+  chainAccounts: Array<{ networkKey: string; chainId: number | null; protocol?: WalletProtocol; address: string }> | null | undefined,
   fallbackAddress?: string | null,
 ): string {
   const accounts = (chainAccounts ?? [])
     .map((item) => ({
+      networkKey: item.networkKey,
       chainId: item.chainId,
-      protocol: item.protocol ?? inferProtocolFromChain(String(item.chainId)),
-      address: normalizeWalletAddress(item.protocol ?? 'evm', item.address),
+      protocol: item.protocol ?? inferWalletProtocolFromAddress(item.address) ?? inferProtocolFromChain(String(item.chainId)),
+      address: normalizeWalletAddress(
+        item.protocol ?? inferWalletProtocolFromAddress(item.address) ?? inferProtocolFromChain(String(item.chainId)),
+        item.address,
+      ),
     }))
     .filter((item) => item.address)
-    .sort((a, b) => a.chainId - b.chainId || a.protocol.localeCompare(b.protocol));
+    .sort((a, b) => a.networkKey.localeCompare(b.networkKey) || a.protocol.localeCompare(b.protocol));
   if (accounts.length > 0) {
-    return accounts.map((item) => `${item.protocol}:${item.chainId}:${item.address}`).join('|');
+    return accounts.map((item) => `${item.protocol}:${item.networkKey}:${item.address}`).join('|');
   }
-  return normalizeWalletAddress('evm', fallbackAddress);
+  return normalizeWalletAddress(inferWalletProtocolFromAddress(fallbackAddress) ?? 'evm', fallbackAddress);
 }
 
 export function getChainAccountAddress(
-  chainAccounts: Array<{ chainId: number; protocol?: WalletProtocol; address: string }> | null | undefined,
-  chainId: number | null | undefined,
+  chainAccounts: Array<{ networkKey: string; chainId: number | null; protocol?: WalletProtocol; address: string }> | null | undefined,
+  networkKey: string | null | undefined,
   fallbackAddress?: string | null,
 ): string {
-  if (Number.isFinite(chainId)) {
-    const matched = (chainAccounts ?? []).find((item) => item.chainId === chainId);
+  if (networkKey) {
+    const matched = (chainAccounts ?? []).find((item) => item.networkKey === networkKey);
     if (matched?.address?.trim()) return matched.address.trim();
   }
   return (fallbackAddress ?? '').trim();

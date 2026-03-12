@@ -37,8 +37,8 @@ type WalletAssetDetailScreenProps = {
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
 type TransferPresetAsset = {
-  chainId: number;
-  tokenAddress: string;
+  networkKey: string;
+  tokenAddress?: string;
   tokenSymbol?: string;
   tokenDecimals?: number;
 };
@@ -95,12 +95,14 @@ function resolveAssetIdFallbackIcon(assetId: string | null, symbol: string): str
   if (normalizedAssetId === 'coingecko:tether') return '/usdt.svg';
   if (normalizedAssetId === 'coingecko:ethereum') return '/eth.svg';
   if (normalizedAssetId === 'coingecko:binancecoin') return '/bnb.svg';
+  if (normalizedAssetId === 'coingecko:bitcoin') return '/btc.svg';
 
   const normalizedSymbol = symbol.trim().toUpperCase();
   if (normalizedSymbol === 'USDC') return '/usdc.svg';
   if (normalizedSymbol === 'USDT') return '/usdt.svg';
   if (normalizedSymbol === 'ETH') return '/eth.svg';
   if (normalizedSymbol === 'BNB') return '/bnb.svg';
+  if (normalizedSymbol === 'BTC') return '/btc.svg';
   return null;
 }
 
@@ -180,7 +182,7 @@ function resolveSelectedHolding(
 
   const grouped = [...portfolio.holdings].reduce<Map<string, { totalValueUsd: number; variants: SimEvmBalance[] }>>(
     (acc, asset) => {
-      const key = normalizeAssetId(asset.asset_id) ?? `${asset.chain_id}:${normalizeLower(asset.address)}`;
+      const key = normalizeAssetId(asset.asset_id) ?? `${asset.network_key}:${normalizeLower(asset.address)}`;
       const current = acc.get(key);
       const valueUsd = Number(asset.value_usd ?? 0);
       if (current) {
@@ -362,14 +364,15 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     queryKey: [
       'transfer-history',
       50,
-      selectedHolding?.transferAsset.chain_id ?? null,
+      selectedHolding?.transferAsset.network_key ?? null,
       selectedHolding ? normalizeContractForMatch(selectedHolding.transferAsset.address) : null,
       selectedHolding?.symbol ?? null,
     ],
     queryFn: () =>
       getTransferHistory({
         limit: 50,
-        chainId: selectedHolding?.transferAsset.chain_id,
+        networkKey: selectedHolding?.transferAsset.network_key,
+        chainId: selectedHolding?.transferAsset.chain_id ?? undefined,
         tokenAddress:
           normalizeContractForMatch(selectedHolding?.transferAsset.address) === 'native'
             ? null
@@ -411,6 +414,14 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   });
 
   const supportedChains = appConfig?.supportedChains ?? [];
+  const transferSupportedChains = useMemo(
+    () => supportedChains.filter((item) => item.protocol === 'evm' || item.protocol === 'svm' || item.protocol === 'btc'),
+    [supportedChains],
+  );
+  const tradeSupportedChains = useMemo(
+    () => supportedChains.filter((item) => item.protocol === 'evm' || item.protocol === 'svm'),
+    [supportedChains],
+  );
   const displaySymbol = (selectedHolding?.symbol ?? detail?.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
   const displayName = (selectedHolding?.name ?? detail?.name ?? '').trim() || t('wallet.token');
   const displayLogo = selectedHolding?.logo ?? resolveHoldingIcon(detail?.image);
@@ -424,8 +435,9 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   const priceChangePct = Number.isFinite(Number(detail?.priceChange24h)) ? Number(detail?.priceChange24h) : null;
   const priceChangeClassName = toneClass(priceChangePct);
   const sparklinePath = useMemo(() => buildSparklinePath(klineData, 90, 28), [klineData]);
+  const supportedTradeNetworkKey = selectedHolding?.transferAsset.network_key ?? null;
   const supportedTradeChain = selectedHolding?.transferAsset.chain_id ?? null;
-  const tradeTokenConfig = supportedTradeChain ? getTradeTokenConfig(supportedTradeChain) : null;
+  const tradeTokenConfig = supportedTradeNetworkKey ? getTradeTokenConfig(supportedTradeNetworkKey) : null;
   const tradeTokenAddress = normalizeText(selectedHolding?.transferAsset.address);
   const canTradeToken = Boolean(
     supportedTradeChain
@@ -433,6 +445,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
       && /^0x[a-fA-F0-9]{40}$/.test(tradeTokenAddress)
       && normalizeContractForMatch(tradeTokenAddress) !== 'native',
   );
+  const canTransferAsset = Boolean(selectedHolding);
   const hasPerpCard = Boolean(
     perpInstrumentMarket?.instrument?.market_type === 'perp'
       && perpInstrumentMarket.instrument.venue?.trim().toLowerCase() === 'hyperliquid',
@@ -617,14 +630,15 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   }
 
   function buildDefaultTradePreset(mode: 'buy' | 'stableSwap'): TradePreset | null {
-    const chainId = supportedChains[0]?.chainId ?? 1;
-    const config = getTradeTokenConfig(chainId);
+    const chain = tradeSupportedChains[0] ?? null;
+    const networkKey = chain?.networkKey ?? 'ethereum-mainnet';
+    const config = getTradeTokenConfig(networkKey);
     if (!config) return null;
 
     if (mode === 'stableSwap') {
       return {
         mode: 'stableSwap',
-        chainId,
+        networkKey,
         sellToken: cloneTradeToken(config.usdc),
         buyToken: cloneTradeToken(config.usdt),
       };
@@ -632,7 +646,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
 
     return {
       mode: 'buy',
-      chainId,
+      networkKey,
       sellToken: cloneTradeToken(config.usdc),
       buyToken: cloneTradeToken(config.defaultBuy),
       assetSymbolForEvent: config.defaultBuy.symbol,
@@ -654,12 +668,16 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     const isNative = normalizeContractForMatch(tokenAddress) === 'native';
 
     setPresetTransferAsset(
-      asset && isValidTokenAddress && !isNative
+      asset
         ? {
-            chainId: asset.chain_id,
-            tokenAddress,
-            tokenSymbol: asset.symbol,
-            tokenDecimals: asset.decimals,
+            networkKey: asset.network_key,
+            ...(isValidTokenAddress && !isNative
+              ? {
+                  tokenAddress,
+                  tokenSymbol: asset.symbol,
+                  tokenDecimals: asset.decimals,
+                }
+              : {}),
           }
         : null,
     );
@@ -668,11 +686,11 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   }
 
   function openTradeModal(): void {
-    if (!canTradeToken || !tradeTokenConfig || !supportedTradeChain || !selectedHolding) return;
+    if (!canTradeToken || !tradeTokenConfig || !supportedTradeNetworkKey || !selectedHolding) return;
     setTradeBackTarget('close');
     setTradePreset({
       mode: 'buy',
-      chainId: supportedTradeChain,
+      networkKey: supportedTradeNetworkKey,
       sellToken: cloneTradeToken(tradeTokenConfig.usdc),
       buyToken: {
         address: tradeTokenAddress,
@@ -732,7 +750,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         <TransferContent
           active={activeModalContent === 'transfer'}
           presetAsset={presetTransferAsset}
-          supportedChains={supportedChains}
+          supportedChains={transferSupportedChains}
           onBack={closeModal}
           onClose={closeModal}
           onSubmitted={() => {
@@ -747,7 +765,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
       <TradeContent
         active={activeModalContent === 'trade'}
         preset={tradePreset}
-        supportedChains={supportedChains}
+        supportedChains={tradeSupportedChains}
         onBack={tradeBackTarget === 'topUp' ? backToTopUp : closeModal}
         onClose={closeModal}
         onSubmitted={() => {
@@ -948,7 +966,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
           type="button"
           className="btn btn-outline text-base font-semibold"
           onClick={openTransferModal}
-          disabled={!selectedHolding}
+          disabled={!canTransferAsset}
         >
           {t('wallet.transfer')}
         </button>

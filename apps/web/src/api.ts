@@ -32,8 +32,9 @@ export type AuthVerifyResponse = {
     address: string;
     provider: string;
     chainAccounts?: Array<{
-      chainId: number;
-      protocol: 'evm' | 'svm';
+      networkKey: string;
+      chainId: number | null;
+      protocol: 'evm' | 'svm' | 'btc';
       address: string;
     }>;
   } | null;
@@ -55,8 +56,9 @@ export type MeResponse = {
     address: string;
     provider: string;
     chainAccounts?: Array<{
-      chainId: number;
-      protocol: 'evm' | 'svm';
+      networkKey: string;
+      chainId: number | null;
+      protocol: 'evm' | 'svm' | 'btc';
       address: string;
     }>;
   } | null;
@@ -64,29 +66,32 @@ export type MeResponse = {
 
 export type ChainsResponse = {
   chains: Array<{
-    chainId: number;
+    networkKey: string;
+    chainId: number | null;
     name: string;
     symbol: string;
     marketChain: string;
-    protocol: 'evm' | 'svm';
+    protocol: 'evm' | 'svm' | 'btc';
   }>;
 };
 
 export type AppConfigResponse = {
   supportedChains: Array<{
-    chainId: number;
+    networkKey: string;
+    chainId: number | null;
     name: string;
     symbol: string;
     marketChain: string;
-    protocol: 'evm' | 'svm';
+    protocol: 'evm' | 'svm' | 'btc';
   }>;
   defaultReceiveTokens: string[];
 };
 
 export type SimEvmBalance = {
-  protocol?: 'evm' | 'svm';
+  protocol?: 'evm' | 'svm' | 'btc';
+  network_key: string;
   chain: string;
-  chain_id: number;
+  chain_id: number | null;
   address: string;
   asset_id?: string;
   chain_asset_id?: string;
@@ -198,7 +203,7 @@ export type PredictionBetResponse = {
 };
 
 export type TransferQuoteRequest = {
-  chainId: number;
+  networkKey: string;
   toAddress: string;
   amount: string;
   tokenAddress?: string;
@@ -209,7 +214,8 @@ export type TransferQuoteRequest = {
 };
 
 export type TransferQuoteResponse = {
-  chainId: number;
+  networkKey: string;
+  chainId: number | null;
   fromAddress: string;
   toAddress: string;
   tokenAddress: string | null;
@@ -235,7 +241,8 @@ export type TransferQuoteResponse = {
 export type TransferRecord = {
   id: string;
   source: 'app' | 'sim';
-  chainId: number;
+  networkKey: string;
+  chainId: number | null;
   fromAddress: string;
   toAddress: string;
   tokenAddress: string | null;
@@ -256,7 +263,7 @@ export type TransferRecord = {
 };
 
 export type TradeQuoteRequest = {
-  chainId: number;
+  networkKey: string;
   sellTokenAddress: string;
   buyTokenAddress: string;
   sellAmount: string;
@@ -268,7 +275,8 @@ export type TradeQuoteRequest = {
 };
 
 export type TradeQuoteResponse = {
-  chainId: number;
+  networkKey: string;
+  chainId: number | null;
   fromAddress: string;
   sellTokenAddress: string;
   sellTokenSymbol: string | null;
@@ -758,6 +766,7 @@ export async function submitPredictionBet(request: PredictionBetRequest): Promis
 export async function getTransferHistory(params?: {
   limit?: number;
   status?: TransferRecord['status'];
+  networkKey?: string;
   chainId?: number;
   tokenAddress?: string | null;
   tokenSymbol?: string;
@@ -766,6 +775,7 @@ export async function getTransferHistory(params?: {
   const query = new URLSearchParams();
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.status) query.set('status', params.status);
+  if (params?.networkKey) query.set('networkKey', params.networkKey);
   if (params?.chainId) query.set('chainId', String(params.chainId));
   if (params?.tokenAddress !== undefined) {
     query.set('tokenAddress', params.tokenAddress ?? 'native');

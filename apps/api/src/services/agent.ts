@@ -73,7 +73,8 @@ type AgentPortfolioSnapshotPoint = {
 
 export type AgentTransfer = {
   id: string;
-  chain_id: number;
+  network_key: string;
+  chain_id: number | null;
   from_address: string;
   to_address: string;
   token_address: string | null;
@@ -158,7 +159,8 @@ type UserAgentRpcStub = DurableObjectStub & {
     userId: string,
     input: {
       id: string;
-      chainId: number;
+      networkKey: string;
+      chainId: number | null;
       fromAddress: string;
       toAddress: string;
       tokenAddress?: string | null;

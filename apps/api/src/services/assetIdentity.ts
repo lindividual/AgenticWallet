@@ -5,6 +5,7 @@ const NATIVE_ASSET_ID_BY_CHAIN: Record<string, string> = {
   base: 'coingecko:ethereum',
   bnb: 'coingecko:binancecoin',
   sol: 'coingecko:solana',
+  btc: 'coingecko:bitcoin',
 };
 
 function normalizeText(raw: unknown): string | null {
@@ -18,11 +19,15 @@ export function normalizeMarketChain(raw: unknown): string {
   if (value === 'ethereum' || value === 'mainnet') return 'eth';
   if (value === 'bsc' || value === 'binance-smart-chain' || value === 'bnb-smart-chain') return 'bnb';
   if (value === 'solana') return 'sol';
+  if (value === 'bitcoin' || value === 'btc') return 'btc';
   return value;
 }
 
-export function inferProtocolFromChain(raw: unknown): 'evm' | 'svm' {
-  return normalizeMarketChain(raw) === 'sol' ? 'svm' : 'evm';
+export function inferProtocolFromChain(raw: unknown): 'evm' | 'svm' | 'btc' {
+  const chain = normalizeMarketChain(raw);
+  if (chain === 'sol') return 'svm';
+  if (chain === 'btc') return 'btc';
+  return 'evm';
 }
 
 export function toContractKey(raw: unknown, chain?: unknown): string {

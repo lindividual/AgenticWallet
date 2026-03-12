@@ -1,9 +1,10 @@
 export type ChainConfig = {
-  chainId: number;
+  networkKey: string;
+  chainId: number | null;
   name: string;
   symbol: string;
-  marketChain: 'eth' | 'base' | 'bnb' | 'sol';
-  protocol: 'evm' | 'svm';
+  marketChain: 'eth' | 'base' | 'bnb' | 'sol' | 'btc';
+  protocol: 'evm' | 'svm' | 'btc';
 };
 
 export type AppConfig = {
@@ -13,29 +14,83 @@ export type AppConfig = {
 
 export const APP_CONFIG: AppConfig = {
   supportedChains: [
-    { chainId: 1, name: 'Ethereum', symbol: 'ETH', marketChain: 'eth', protocol: 'evm' },
-    { chainId: 8453, name: 'Base', symbol: 'ETH', marketChain: 'base', protocol: 'evm' },
-    { chainId: 56, name: 'BNB Chain', symbol: 'BNB', marketChain: 'bnb', protocol: 'evm' },
-    { chainId: 101, name: 'Solana', symbol: 'SOL', marketChain: 'sol', protocol: 'svm' },
+    {
+      networkKey: 'ethereum-mainnet',
+      chainId: 1,
+      name: 'Ethereum',
+      symbol: 'ETH',
+      marketChain: 'eth',
+      protocol: 'evm',
+    },
+    {
+      networkKey: 'base-mainnet',
+      chainId: 8453,
+      name: 'Base',
+      symbol: 'ETH',
+      marketChain: 'base',
+      protocol: 'evm',
+    },
+    {
+      networkKey: 'bnb-mainnet',
+      chainId: 56,
+      name: 'BNB Chain',
+      symbol: 'BNB',
+      marketChain: 'bnb',
+      protocol: 'evm',
+    },
+    {
+      networkKey: 'solana-mainnet',
+      chainId: null,
+      name: 'Solana',
+      symbol: 'SOL',
+      marketChain: 'sol',
+      protocol: 'svm',
+    },
+    {
+      networkKey: 'bitcoin-mainnet',
+      chainId: null,
+      name: 'Bitcoin',
+      symbol: 'BTC',
+      marketChain: 'btc',
+      protocol: 'btc',
+    },
   ],
-  defaultReceiveTokens: ['ETH', 'USDC', 'USDT', 'BNB', 'SOL'],
+  defaultReceiveTokens: ['ETH', 'USDC', 'USDT', 'BNB', 'SOL', 'BTC'],
 };
 
 export function getSupportedChainIds(): number[] {
-  return APP_CONFIG.supportedChains.map((item) => item.chainId);
+  return APP_CONFIG.supportedChains.flatMap((item) => (typeof item.chainId === 'number' ? [item.chainId] : []));
 }
 
-export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb' | 'sol'> {
+export function getChainConfigByNetworkKey(networkKey: string): ChainConfig | null {
+  const normalized = (networkKey ?? '').trim().toLowerCase();
+  return APP_CONFIG.supportedChains.find((item) => item.networkKey === normalized) ?? null;
+}
+
+export function getChainConfigByChainId(chainId: number): ChainConfig | null {
+  return APP_CONFIG.supportedChains.find((item) => item.chainId === chainId) ?? null;
+}
+
+export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'> {
   return [...new Set(APP_CONFIG.supportedChains.map((item) => item.marketChain))];
 }
 
 export function getMarketChainByChainId(chainId: number): ChainConfig['marketChain'] | null {
-  const matched = APP_CONFIG.supportedChains.find((item) => item.chainId === chainId);
-  return matched?.marketChain ?? null;
+  return getChainConfigByChainId(chainId)?.marketChain ?? null;
+}
+
+export function getMarketChainByNetworkKey(networkKey: string): ChainConfig['marketChain'] | null {
+  return getChainConfigByNetworkKey(networkKey)?.marketChain ?? null;
 }
 
 export function getChainIdByMarketChain(marketChain: string): number | null {
   const normalized = (marketChain ?? '').trim().toLowerCase();
   const matched = APP_CONFIG.supportedChains.find((item) => item.marketChain === normalized);
   return matched?.chainId ?? null;
+}
+
+export function getNetworkKeyByMarketChain(marketChain: string): string | null {
+  const normalized = (marketChain ?? '').trim().toLowerCase();
+  const matched = APP_CONFIG.supportedChains.find((item) => item.marketChain === normalized);
+  return matched?.networkKey ?? null;
 }

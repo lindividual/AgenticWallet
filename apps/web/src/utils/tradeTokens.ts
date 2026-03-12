@@ -10,8 +10,8 @@ type TradeTokenConfig = {
   defaultBuy: TradeTokenPreset;
 };
 
-const TRADE_TOKENS_BY_CHAIN: Record<number, TradeTokenConfig> = {
-  1: {
+const TRADE_TOKENS_BY_NETWORK_KEY: Record<string, TradeTokenConfig> = {
+  'ethereum-mainnet': {
     usdc: {
       address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
       symbol: 'USDC',
@@ -28,7 +28,7 @@ const TRADE_TOKENS_BY_CHAIN: Record<number, TradeTokenConfig> = {
       decimals: 18,
     },
   },
-  8453: {
+  'base-mainnet': {
     usdc: {
       address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
       symbol: 'USDC',
@@ -45,7 +45,7 @@ const TRADE_TOKENS_BY_CHAIN: Record<number, TradeTokenConfig> = {
       decimals: 18,
     },
   },
-  56: {
+  'bnb-mainnet': {
     usdc: {
       address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
       symbol: 'USDC',
@@ -62,7 +62,7 @@ const TRADE_TOKENS_BY_CHAIN: Record<number, TradeTokenConfig> = {
       decimals: 18,
     },
   },
-  101: {
+  'solana-mainnet': {
     usdc: {
       address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
       symbol: 'USDC',
@@ -81,27 +81,27 @@ const TRADE_TOKENS_BY_CHAIN: Record<number, TradeTokenConfig> = {
   },
 };
 
-const MARKET_CHAIN_TO_CHAIN_ID: Record<string, number> = {
-  eth: 1,
-  ethereum: 1,
-  mainnet: 1,
-  base: 8453,
-  bnb: 56,
-  bsc: 56,
-  'bnb chain': 56,
-  bnbchain: 56,
-  'binance smart chain': 56,
-  sol: 101,
-  solana: 101,
+const MARKET_CHAIN_TO_NETWORK_KEY: Record<string, string> = {
+  eth: 'ethereum-mainnet',
+  ethereum: 'ethereum-mainnet',
+  mainnet: 'ethereum-mainnet',
+  base: 'base-mainnet',
+  bnb: 'bnb-mainnet',
+  bsc: 'bnb-mainnet',
+  'bnb chain': 'bnb-mainnet',
+  bnbchain: 'bnb-mainnet',
+  'binance smart chain': 'bnb-mainnet',
+  sol: 'solana-mainnet',
+  solana: 'solana-mainnet',
 };
 
-export function getTradeTokenConfig(chainId: number): TradeTokenConfig | null {
-  return TRADE_TOKENS_BY_CHAIN[chainId] ?? null;
+export function getTradeTokenConfig(networkKey: string): TradeTokenConfig | null {
+  return TRADE_TOKENS_BY_NETWORK_KEY[networkKey] ?? null;
 }
 
-export function getChainIdByMarketChain(marketChain: string): number | null {
+export function getNetworkKeyByMarketChain(marketChain: string): string | null {
   const normalized = marketChain.trim().toLowerCase();
-  return MARKET_CHAIN_TO_CHAIN_ID[normalized] ?? null;
+  return MARKET_CHAIN_TO_NETWORK_KEY[normalized] ?? null;
 }
 
 export function cloneTradeToken(token: TradeTokenPreset): TradeTokenPreset {

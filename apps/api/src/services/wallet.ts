@@ -4,14 +4,20 @@ import type { Address } from 'viem';
 import { http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base, bsc, mainnet } from 'viem/chains';
-import type { Bindings, WalletProtocol, WalletSummary } from '../types';
+import type { Bindings, WalletNetworkKey, WalletProtocol, WalletSummary } from '../types';
 import { decryptString, encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
+import { privateKeyToBitcoinSegwitAddress } from '../utils/bitcoin';
 import { resolveMeeVersion } from '../utils/env';
 import { nowIso } from '../utils/time';
 
-export const SOLANA_CHAIN_ID = 101;
+export const ETHEREUM_NETWORK_KEY: WalletNetworkKey = 'ethereum-mainnet';
+export const BASE_NETWORK_KEY: WalletNetworkKey = 'base-mainnet';
+export const BNB_NETWORK_KEY: WalletNetworkKey = 'bnb-mainnet';
+export const SOLANA_NETWORK_KEY: WalletNetworkKey = 'solana-mainnet';
+export const BITCOIN_NETWORK_KEY: WalletNetworkKey = 'bitcoin-mainnet';
 export const EVM_PROTOCOL: WalletProtocol = 'evm';
 export const SVM_PROTOCOL: WalletProtocol = 'svm';
+export const BTC_PROTOCOL: WalletProtocol = 'btc';
 export const EVM_WALLET_PROVIDER = 'eoa-7702';
 
 export type WalletWithPrivateKey = WalletSummary & {
@@ -27,25 +33,32 @@ export type EvmWalletExecutionContext = {
 };
 
 type WalletChainAccountRow = {
-  chain_id: number;
+  network_key: string;
+  chain_id: number | null;
   protocol: WalletProtocol;
   address: string;
 };
 
+function normalizeWalletProtocol(raw: string | null | undefined): WalletProtocol | null {
+  if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
+  return null;
+}
+
 async function getWalletChainAccounts(db: D1Database, userId: string): Promise<WalletChainAccountRow[]> {
   const chains = await db
     .prepare(
-      `SELECT chain_id, COALESCE(protocol, 'evm') AS protocol, address
+      `SELECT network_key, chain_id, COALESCE(protocol, 'evm') AS protocol, address
        FROM wallet_chain_accounts
        WHERE user_id = ?
-       ORDER BY chain_id ASC`,
+       ORDER BY network_key ASC`,
     )
     .bind(userId)
     .all<WalletChainAccountRow>();
 
   return chains.results.map((row) => ({
+    network_key: row.network_key,
     chain_id: row.chain_id,
-    protocol: row.protocol === SVM_PROTOCOL ? SVM_PROTOCOL : EVM_PROTOCOL,
+    protocol: normalizeWalletProtocol(row.protocol) ?? EVM_PROTOCOL,
     address: row.address,
   }));
 }
@@ -62,7 +75,7 @@ async function getProtocolKeyMap(db: D1Database, userId: string): Promise<Partia
 
   const output: Partial<Record<WalletProtocol, string>> = {};
   for (const row of result.results) {
-    const protocol = row.protocol === SVM_PROTOCOL ? SVM_PROTOCOL : row.protocol === EVM_PROTOCOL ? EVM_PROTOCOL : null;
+    const protocol = normalizeWalletProtocol(row.protocol);
     if (!protocol) continue;
     output[protocol] = row.encrypted_key_material;
   }
@@ -83,6 +96,7 @@ export async function getWallet(db: D1Database, userId: string): Promise<WalletS
     address: wallet.address,
     provider: wallet.provider,
     chainAccounts: chains.map((row) => ({
+      networkKey: row.network_key,
       chainId: row.chain_id,
       protocol: row.protocol,
       address: row.address,
@@ -112,6 +126,7 @@ async function readWalletWithPrivateKey(
     encryptedPrivateKey: protocolKeys[EVM_PROTOCOL] ?? wallet.encrypted_private_key,
     encryptedProtocolKeys: protocolKeys,
     chainAccounts: chains.map((row) => ({
+      networkKey: row.network_key,
       chainId: row.chain_id,
       protocol: row.protocol,
       address: row.address,
@@ -125,16 +140,18 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
 
   const privateKey = generatePrivateKeyHex();
   const evmAccount = privateKeyToAccount(privateKey);
+  const bitcoinAddress = privateKeyToBitcoinSegwitAddress(privateKey);
   const solanaKeypair = Keypair.generate();
   const solanaSecretKey = encodeBase64(solanaKeypair.secretKey);
   const chainAccounts: WalletSummary['chainAccounts'] = [
-    { chainId: mainnet.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
-    { chainId: base.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
-    { chainId: bsc.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
-    { chainId: SOLANA_CHAIN_ID, protocol: SVM_PROTOCOL, address: solanaKeypair.publicKey.toBase58() },
+    { networkKey: ETHEREUM_NETWORK_KEY, chainId: mainnet.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+    { networkKey: BASE_NETWORK_KEY, chainId: base.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+    { networkKey: BNB_NETWORK_KEY, chainId: bsc.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+    { networkKey: SOLANA_NETWORK_KEY, chainId: null, protocol: SVM_PROTOCOL, address: solanaKeypair.publicKey.toBase58() },
+    { networkKey: BITCOIN_NETWORK_KEY, chainId: null, protocol: BTC_PROTOCOL, address: bitcoinAddress },
   ];
   const primaryAddress =
-    chainAccounts.find((x) => x.chainId === mainnet.id)?.address ?? chainAccounts[0].address;
+    chainAccounts.find((x) => x.networkKey === ETHEREUM_NETWORK_KEY)?.address ?? chainAccounts[0].address;
   const encryptedPrivateKey = await encryptString(privateKey, env.APP_SECRET);
   const encryptedSolanaKey = await encryptString(solanaSecretKey, env.APP_SECRET);
 
@@ -145,12 +162,15 @@ export async function bootstrapWalletForUser(env: Bindings, userId: string): Pro
     ).bind(userId, primaryAddress, encryptedPrivateKey, EVM_WALLET_PROVIDER, now),
     ...chainAccounts.map((chain) =>
       env.DB.prepare(
-        'INSERT INTO wallet_chain_accounts (user_id, chain_id, protocol, address, created_at) VALUES (?, ?, ?, ?, ?)',
-      ).bind(userId, chain.chainId, chain.protocol, chain.address, now),
+        'INSERT INTO wallet_chain_accounts (user_id, network_key, chain_id, protocol, address, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).bind(userId, chain.networkKey, chain.chainId, chain.protocol, chain.address, now),
     ),
     env.DB.prepare(
       'INSERT INTO wallet_protocol_keys (user_id, protocol, encrypted_key_material, key_format, created_at) VALUES (?, ?, ?, ?, ?)',
     ).bind(userId, EVM_PROTOCOL, encryptedPrivateKey, 'hex_private_key', now),
+    env.DB.prepare(
+      'INSERT INTO wallet_protocol_keys (user_id, protocol, encrypted_key_material, key_format, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).bind(userId, BTC_PROTOCOL, encryptedPrivateKey, 'hex_private_key', now),
     env.DB.prepare(
       'INSERT INTO wallet_protocol_keys (user_id, protocol, encrypted_key_material, key_format, created_at) VALUES (?, ?, ?, ?, ?)',
     ).bind(userId, SVM_PROTOCOL, encryptedSolanaKey, 'solana_secret_key_base64', now),
@@ -232,10 +252,10 @@ export async function buildEvmWalletExecutionContext(
 
 export function getWalletChainAddress(
   wallet: WalletSummary | WalletWithPrivateKey,
-  chainId: number,
+  networkKey: WalletNetworkKey,
   protocol: WalletProtocol = EVM_PROTOCOL,
 ): Address | string | null {
-  const found = wallet.chainAccounts.find((row) => row.chainId === chainId && row.protocol === protocol)?.address;
+  const found = wallet.chainAccounts.find((row) => row.networkKey === networkKey && row.protocol === protocol)?.address;
   if (found) return found;
   if (protocol === EVM_PROTOCOL) return wallet.address;
   return null;

@@ -8,6 +8,8 @@ type AssetListItemProps = {
   leftPrimaryClassName?: string;
   leftSecondary?: ReactNode;
   leftSecondaryClassName?: string;
+  leftTertiary?: ReactNode;
+  leftTertiaryClassName?: string;
   rightPrimary?: ReactNode;
   rightSecondary?: ReactNode;
 };
@@ -20,10 +22,13 @@ export function AssetListItem({
   leftPrimaryClassName = '',
   leftSecondary,
   leftSecondaryClassName = '',
+  leftTertiary,
+  leftTertiaryClassName = '',
   rightPrimary,
   rightSecondary,
 }: AssetListItemProps) {
-  const hasLeftText = Boolean(leftPrimary) || Boolean(leftSecondary);
+  const hasLeftText = Boolean(leftPrimary) || Boolean(leftSecondary) || Boolean(leftTertiary);
+  const hasLeftTertiary = Boolean(leftTertiary);
   const hasRightText = Boolean(rightPrimary) || Boolean(rightSecondary);
   const hasLeft = Boolean(leftIcon) || hasLeftText;
   const interactiveClassName = onClick
@@ -35,7 +40,7 @@ export function AssetListItem({
     <div className={rootClassName}>
       <div className="flex items-center justify-between gap-3">
         {hasLeft ? (
-          <div className="flex min-w-0 items-center gap-3">
+          <div className={['flex min-w-0 gap-3', hasLeftTertiary ? 'items-start' : 'items-center'].join(' ')}>
             {leftIcon ? <div className="shrink-0">{leftIcon}</div> : null}
             {hasLeftText ? (
               <div className="min-w-0">
@@ -51,6 +56,11 @@ export function AssetListItem({
                       .join(' ')}
                   >
                     {leftSecondary}
+                  </p>
+                ) : null}
+                {leftTertiary ? (
+                  <p className={['mt-1 text-xs leading-5 text-base-content/50', leftTertiaryClassName].filter(Boolean).join(' ')}>
+                    {leftTertiary}
                   </p>
                 ) : null}
               </div>

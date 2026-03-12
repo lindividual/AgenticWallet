@@ -21,7 +21,7 @@ import {
 import { useToast } from '../../contexts/ToastContext';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { computeAdaptiveChartWindowSeconds, formatChartTimeLabel, normalizeCandlesForLiveline, toOpenAnchoredLivelinePoints } from '../../utils/kline';
-import { cloneTradeToken, getChainIdByMarketChain, getTradeTokenConfig } from '../../utils/tradeTokens';
+import { cloneTradeToken, getNetworkKeyByMarketChain, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { CachedIconImage } from '../CachedIconImage';
 import { Modal } from '../modals/Modal';
 import { TradeContent, type TradePreset } from '../modals/TradeContent';
@@ -475,10 +475,10 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const displayTop10HolderPercent = resolvedTokenDetail?.top10HolderPercent ?? null;
   const tradeMarketChain = (resolvedTokenDetail?.chain ?? routePreview?.chain ?? normalizedChain).trim().toLowerCase();
   const tradeContract = (resolvedTokenDetail?.contract ?? normalizedContract).trim();
-  const tradeChainId = getChainIdByMarketChain(tradeMarketChain);
-  const tradeTokenConfig = tradeChainId ? getTradeTokenConfig(tradeChainId) : null;
+  const tradeNetworkKey = getNetworkKeyByMarketChain(tradeMarketChain);
+  const tradeTokenConfig = tradeNetworkKey ? getTradeTokenConfig(tradeNetworkKey) : null;
   const canTradeToken = Boolean(
-    tradeChainId
+    tradeNetworkKey
       && tradeTokenConfig
       && (tradeMarketChain === 'sol' ? tradeContract && tradeContract !== 'native' : /^0x[a-fA-F0-9]{40}$/.test(tradeContract)),
   );
@@ -571,7 +571,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   }
 
   function openTrade(mode: 'buy' | 'sell'): void {
-    if (!tradeChainId || !tradeTokenConfig || !canTradeToken) {
+    if (!tradeNetworkKey || !tradeTokenConfig || !canTradeToken) {
       showError(t('wallet.tradeChainNotSupported'));
       return;
     }
@@ -584,14 +584,14 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       mode === 'buy'
         ? {
             mode: 'buy',
-            chainId: tradeChainId,
+            networkKey: tradeNetworkKey,
             sellToken: cloneTradeToken(tradeTokenConfig.usdc),
             buyToken: tokenPreset,
             assetSymbolForEvent: displaySymbol || undefined,
           }
         : {
             mode: 'sell',
-            chainId: tradeChainId,
+            networkKey: tradeNetworkKey,
             sellToken: tokenPreset,
             buyToken: cloneTradeToken(tradeTokenConfig.usdc),
             assetSymbolForEvent: displaySymbol || undefined,

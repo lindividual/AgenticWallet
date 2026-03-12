@@ -46,7 +46,8 @@ export type Bindings = {
   PREDICTION_SIGNATURE_TYPE?: string;
 };
 
-export type WalletProtocol = 'evm' | 'svm';
+export type WalletProtocol = 'evm' | 'svm' | 'btc';
+export type WalletNetworkKey = string;
 
 export type Variables = {
   userId: string;
@@ -95,7 +96,8 @@ export type WalletSummary = {
   address: string;
   provider: string;
   chainAccounts: Array<{
-    chainId: number;
+    networkKey: WalletNetworkKey;
+    chainId: number | null;
     protocol: WalletProtocol;
     address: string;
   }>;
@@ -104,7 +106,7 @@ export type WalletSummary = {
 export type TransferStatus = 'created' | 'submitted' | 'confirmed' | 'failed';
 
 export type TransferQuoteRequest = {
-  chainId: number;
+  networkKey: WalletNetworkKey;
   toAddress: string;
   amount: string;
   tokenAddress?: string;
@@ -115,7 +117,8 @@ export type TransferQuoteRequest = {
 };
 
 export type TransferQuoteResponse = {
-  chainId: number;
+  networkKey: WalletNetworkKey;
+  chainId: number | null;
   fromAddress: string;
   toAddress: string;
   tokenAddress: string | null;
@@ -143,7 +146,7 @@ export type TransferSubmitRequest = TransferQuoteRequest & {
 };
 
 export type TradeQuoteRequest = {
-  chainId: number;
+  networkKey: WalletNetworkKey;
   sellTokenAddress: string;
   buyTokenAddress: string;
   sellAmount: string;
@@ -155,7 +158,8 @@ export type TradeQuoteRequest = {
 };
 
 export type TradeQuoteResponse = {
-  chainId: number;
+  networkKey: WalletNetworkKey;
+  chainId: number | null;
   fromAddress: string;
   sellTokenAddress: string;
   sellTokenSymbol: string | null;

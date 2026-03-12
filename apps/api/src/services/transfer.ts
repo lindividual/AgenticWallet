@@ -12,7 +12,23 @@ import {
 } from 'viem';
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, TransferQuoteRequest, TransferQuoteResponse } from '../types';
-import { buildEvmWalletExecutionContext, getWalletChainAddress } from './wallet';
+import { getChainConfigByNetworkKey } from '../config/appConfig';
+import {
+  prepareBitcoinTransfer,
+  refreshBitcoinTransferStatusByHash,
+  sendPreparedBitcoinTransfer,
+  waitForPreparedBitcoinTransfer,
+  type PreparedBitcoinTransfer,
+} from './bitcoinTransfer';
+import {
+  BASE_NETWORK_KEY,
+  BITCOIN_NETWORK_KEY,
+  BNB_NETWORK_KEY,
+  ETHEREUM_NETWORK_KEY,
+  SOLANA_NETWORK_KEY,
+  buildEvmWalletExecutionContext,
+  getWalletChainAddress,
+} from './wallet';
 import {
   prepareSolanaTransfer,
   refreshSolanaTransferStatusByHash,
@@ -82,22 +98,22 @@ type EoaPreparedTransfer = {
   };
 };
 
-export type PreparedTransfer = MeePreparedTransfer | EoaPreparedTransfer | PreparedSolanaTransfer;
+export type PreparedTransfer = MeePreparedTransfer | EoaPreparedTransfer | PreparedSolanaTransfer | PreparedBitcoinTransfer;
 
-function resolveChainConfig(env: Bindings, chainId: number): ChainRuntimeConfig {
-  if (chainId === mainnet.id) {
+function resolveChainConfig(env: Bindings, networkKey: string): ChainRuntimeConfig {
+  if (networkKey === ETHEREUM_NETWORK_KEY) {
     return {
       chain: mainnet,
       rpcUrl: env.ETHEREUM_RPC_URL?.trim() || undefined,
     };
   }
-  if (chainId === base.id) {
+  if (networkKey === BASE_NETWORK_KEY) {
     return {
       chain: base,
       rpcUrl: env.BASE_RPC_URL?.trim() || undefined,
     };
   }
-  if (chainId === bsc.id) {
+  if (networkKey === BNB_NETWORK_KEY) {
     return {
       chain: bsc,
       rpcUrl: env.BNB_RPC_URL?.trim() || undefined,
@@ -190,10 +206,10 @@ function estimateFeeWei(userOp: Record<string, unknown>): {
   };
 }
 
-async function buildTransferContext(env: Bindings, userId: string, chainId: number) {
-  const { chain, rpcUrl } = resolveChainConfig(env, chainId);
+async function buildTransferContext(env: Bindings, userId: string, networkKey: string) {
+  const { chain, rpcUrl } = resolveChainConfig(env, networkKey);
   const { wallet, signer, account } = await buildEvmWalletExecutionContext(env, userId);
-  const deployment = account.deploymentOn(chainId, true);
+  const deployment = account.deploymentOn(chain.id, true);
   const publicClient = deployment.publicClient;
   const walletClient = createWalletClient({
     account: signer,
@@ -203,7 +219,7 @@ async function buildTransferContext(env: Bindings, userId: string, chainId: numb
   const meeClient = await createMeeClient({ account });
 
   const fromAddress =
-    getWalletChainAddress(wallet, chainId) ??
+    getWalletChainAddress(wallet, networkKey) ??
     signer.address;
 
   return {
@@ -264,15 +280,19 @@ export async function prepareTransfer(
   userId: string,
   input: TransferQuoteRequest,
 ): Promise<PreparedTransfer> {
-  const chainId = Number(input.chainId);
-  if (!Number.isFinite(chainId)) {
-    throw new Error('invalid_chain_id');
+  const networkKey = input.networkKey?.trim().toLowerCase();
+  const chainConfig = getChainConfigByNetworkKey(networkKey);
+  if (!chainConfig) {
+    throw new Error('invalid_network_key');
   }
-  if (chainId === 101) {
+  if (networkKey === SOLANA_NETWORK_KEY) {
     return prepareSolanaTransfer(env, userId, input);
   }
+  if (networkKey === BITCOIN_NETWORK_KEY) {
+    return prepareBitcoinTransfer(env, userId, input);
+  }
 
-  const { chain } = resolveChainConfig(env, chainId);
+  const { chain } = resolveChainConfig(env, networkKey);
   const toAddress = toAddressOrThrow(input.toAddress, 'to_address');
   const tokenAddress = input.tokenAddress?.trim() ? toAddressOrThrow(input.tokenAddress, 'token_address') : null;
 
@@ -284,7 +304,7 @@ export async function prepareTransfer(
     meeClient,
     fromAddress,
     signer,
-  } = await buildTransferContext(env, userId, chain.id);
+  } = await buildTransferContext(env, userId, networkKey);
 
   let tokenDecimals = tokenAddress ? normalizeTokenDecimals(input.tokenDecimals) : 18;
   if (tokenAddress && tokenDecimals === null) {
@@ -409,6 +429,7 @@ export async function prepareTransfer(
     return {
       mode: 'mee',
       quote: {
+        networkKey,
         chainId: chain.id,
         fromAddress,
         toAddress,
@@ -472,6 +493,7 @@ export async function prepareTransfer(
       return {
         mode: 'mee',
         quote: {
+          networkKey,
           chainId: chain.id,
           fromAddress,
           toAddress,
@@ -514,6 +536,7 @@ export async function prepareTransfer(
     return {
       mode: 'eoa',
       quote: {
+        networkKey,
         chainId: chain.id,
         fromAddress,
         toAddress,
@@ -543,12 +566,15 @@ export async function prepareTransfer(
   }
 }
 
-export async function sendPreparedTransfer(prepared: PreparedTransfer): Promise<Hash> {
+export async function sendPreparedTransfer(prepared: PreparedTransfer): Promise<string> {
   if (prepared.quote.insufficientFeeTokenBalance) {
     throw new Error('insufficient_fee_token_balance');
   }
   if (prepared.mode === 'solana') {
-    return await sendPreparedSolanaTransfer(prepared) as Hash;
+    return await sendPreparedSolanaTransfer(prepared);
+  }
+  if (prepared.mode === 'btc') {
+    return sendPreparedBitcoinTransfer(prepared);
   }
 
   if (prepared.mode === 'mee') {
@@ -561,14 +587,17 @@ export async function sendPreparedTransfer(prepared: PreparedTransfer): Promise<
 
 export async function waitForTransferReceipt(
   prepared: PreparedTransfer,
-  txHash: Hash,
+  txHash: string,
 ): Promise<'confirmed' | 'failed' | 'pending'> {
   if (prepared.mode === 'solana') {
     return waitForPreparedSolanaTransfer(prepared, txHash);
   }
+  if (prepared.mode === 'btc') {
+    return waitForPreparedBitcoinTransfer(txHash);
+  }
   if (prepared.mode === 'mee') {
     try {
-      const receipt = await prepared.meeClient.waitForSupertransactionReceipt({ hash: txHash });
+      const receipt = await prepared.meeClient.waitForSupertransactionReceipt({ hash: txHash as Hash });
       if (receipt.transactionStatus === 'SUCCESS' || receipt.transactionStatus === 'MINED_SUCCESS') {
         return 'confirmed';
       }
@@ -583,7 +612,7 @@ export async function waitForTransferReceipt(
 
   try {
     const receipt = await prepared.publicClient.waitForTransactionReceipt({
-      hash: txHash,
+      hash: txHash as Hash,
       confirmations: 1,
       timeout: 120_000,
     });
@@ -597,15 +626,18 @@ export async function waitForTransferReceipt(
 export async function refreshTransferStatusByHash(
   env: Bindings,
   userId: string,
-  chainId: number,
-  txHash: Hash,
+  networkKey: string,
+  txHash: string,
 ): Promise<'confirmed' | 'failed' | 'pending'> {
-  if (chainId === 101) {
-    return refreshSolanaTransferStatusByHash(env, txHash);
+  if (networkKey === SOLANA_NETWORK_KEY) {
+    return refreshSolanaTransferStatusByHash(env, txHash as Hash);
+  }
+  if (networkKey === BITCOIN_NETWORK_KEY) {
+    return refreshBitcoinTransferStatusByHash(txHash);
   }
   try {
-    const { meeClient } = await buildTransferContext(env, userId, chainId);
-    const receipt = await meeClient.getSupertransactionReceipt({ hash: txHash, waitForReceipts: false });
+    const { meeClient } = await buildTransferContext(env, userId, networkKey);
+    const receipt = await meeClient.getSupertransactionReceipt({ hash: txHash as Hash, waitForReceipts: false });
     if (receipt.transactionStatus === 'SUCCESS' || receipt.transactionStatus === 'MINED_SUCCESS') {
       return 'confirmed';
     }
@@ -615,10 +647,10 @@ export async function refreshTransferStatusByHash(
   } catch {
     // Fallback to direct chain receipt lookup for non-MEE tx hashes.
   }
-  const { publicClient } = await buildTransferContext(env, userId, chainId);
+  const { publicClient } = await buildTransferContext(env, userId, networkKey);
 
   try {
-    const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
+    const receipt = await publicClient.getTransactionReceipt({ hash: txHash as Hash });
     return receipt.status === 'success' ? 'confirmed' : 'failed';
   } catch {
     return 'pending';

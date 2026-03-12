@@ -160,23 +160,33 @@ export function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): 
 
 export function getPortfolioHoldings(
   sql: SqlStorage,
-  supportedChains: Array<'eth' | 'base' | 'bnb' | 'sol'>,
+  supportedChains: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'>,
 ): Array<{ symbol: string; valueUsd: number }> {
   const snapshot = getLatestPortfolioSnapshot(sql);
   if (!snapshot?.holdings_json) return [];
-  const chainIdAllowlist = new Set<number>(
-    supportedChains.map((chain) => (chain === 'eth' ? 1 : chain === 'base' ? 8453 : chain === 'bnb' ? 56 : 101)),
+  const networkKeyAllowlist = new Set<string>(
+    supportedChains.map((chain) =>
+      chain === 'eth'
+        ? 'ethereum-mainnet'
+        : chain === 'base'
+          ? 'base-mainnet'
+          : chain === 'bnb'
+            ? 'bnb-mainnet'
+            : chain === 'sol'
+              ? 'solana-mainnet'
+              : 'bitcoin-mainnet',
+    ),
   );
   try {
     const holdings = JSON.parse(snapshot.holdings_json) as Array<{
       symbol?: string;
       value_usd?: number;
-      chain_id?: number;
+      network_key?: string;
     }>;
     return holdings
       .filter((h) => {
-        const chainId = Number(h.chain_id ?? 0);
-        return h.symbol && Number(h.value_usd ?? 0) > 0 && chainIdAllowlist.has(chainId);
+        const networkKey = String(h.network_key ?? '').trim().toLowerCase();
+        return h.symbol && Number(h.value_usd ?? 0) > 0 && networkKeyAllowlist.has(networkKey);
       })
       .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0))
       .slice(0, 10)

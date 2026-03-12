@@ -214,7 +214,7 @@ function buildRecommendationUserPrompt(
   marketAssets: MarketTopAsset[],
   userTopAssets: string[],
   language: RecommendationLanguage,
-  supportedChains: Array<'eth' | 'base' | 'bnb' | 'sol'>,
+  supportedChains: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'>,
 ): string {
   const marketLines = marketAssets
     .slice(0, 10)
@@ -239,7 +239,7 @@ function buildRecommendationUserPrompt(
     ``,
     `--- Market Trending (CoinGecko + Bitget) ---`,
     marketLines || '  No market data available.',
-    `Supported chains: ${supportedChains.join(', ') || 'eth,base,bnb,sol'}`,
+    `Supported chains: ${supportedChains.join(', ') || 'eth,base,bnb,sol,btc'}`,
     ``,
     `Return a JSON array with exactly 5 objects. Each object must have:`,
     `- "category": one of "trending", "portfolio", "interest", "diversify", "momentum"`,

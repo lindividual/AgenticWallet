@@ -58,7 +58,8 @@ export type TransferStatus = 'created' | 'submitted' | 'confirmed' | 'failed';
 
 export type TransferRow = {
   id: string;
-  chain_id: number;
+  network_key: string;
+  chain_id: number | null;
   from_address: string;
   to_address: string;
   token_address: string | null;

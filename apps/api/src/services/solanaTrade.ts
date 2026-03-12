@@ -11,7 +11,7 @@ import {
   parseSolanaAmountInput,
   waitForSolanaSignature,
 } from './solana';
-import { ensureWalletForUser } from './wallet';
+import { ensureWalletForUser, SOLANA_NETWORK_KEY } from './wallet';
 
 export type PreparedSolanaTrade = {
   mode: 'solana';
@@ -42,7 +42,7 @@ export async function prepareSolanaTrade(
 ): Promise<PreparedSolanaTrade> {
   const wallet = await ensureWalletForUser(env, userId);
 
-  const fromAddress = wallet.chainAccounts.find((row) => row.chainId === 101)?.address;
+  const fromAddress = wallet.chainAccounts.find((row) => row.networkKey === SOLANA_NETWORK_KEY)?.address;
   if (!fromAddress) {
     throw new Error('wallet_not_found');
   }
@@ -94,7 +94,8 @@ export async function prepareSolanaTrade(
     env,
     transactionBytes: signed.transactionBytes,
     quote: {
-      chainId: 101,
+      networkKey: SOLANA_NETWORK_KEY,
+      chainId: null,
       fromAddress,
       sellTokenAddress: sellMint,
       sellTokenSymbol: input.sellTokenSymbol?.trim().toUpperCase() || (sellMint === WRAPPED_SOL_MINT ? 'SOL' : null),

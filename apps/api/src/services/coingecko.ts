@@ -5,7 +5,7 @@ import { buildAssetId, buildChainAssetId, toContractKey } from './assetIdentity'
 const DEFAULT_COINGECKO_BASE_URL = 'https://api.coingecko.com/api/v3';
 const DEFAULT_COINGECKO_USER_AGENT = 'AgenticWallet-MVP/0.1 (market-shelves; +https://agentic-wallet.local)';
 const MAX_MARKETS_PAGE_SIZE = 250;
-const DEFAULT_SUPPORTED_CHAINS: Array<'eth' | 'base' | 'bnb' | 'sol'> = ['eth', 'base', 'bnb', 'sol'];
+const DEFAULT_SUPPORTED_CHAINS: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'> = ['eth', 'base', 'bnb', 'sol', 'btc'];
 const PLATFORM_CACHE_TTL_MS = 10 * 60 * 1000;
 const COIN_LIST_CACHE_TTL_MS = 60 * 60 * 1000;
 const COIN_LIST_SYNC_MIN_INTERVAL_MS = 10 * 60 * 1000;
@@ -47,7 +47,7 @@ type CoinGeckoCoinListItem = {
 };
 
 type ChainMatch = {
-  chain: 'eth' | 'base' | 'bnb' | 'sol';
+  chain: 'eth' | 'base' | 'bnb' | 'sol' | 'btc';
   contract: string;
 };
 
@@ -157,23 +157,26 @@ function resolveCoinGeckoUserAgent(raw: string | undefined): string {
   return value || DEFAULT_COINGECKO_USER_AGENT;
 }
 
-function normalizeChains(chains?: string[]): Array<'eth' | 'base' | 'bnb' | 'sol'> {
+function normalizeChains(chains?: string[]): Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'> {
   const normalized = new Set(
     (chains ?? [])
       .map((item) => item.trim().toLowerCase())
-      .filter((item): item is 'eth' | 'base' | 'bnb' | 'sol' => item === 'eth' || item === 'base' || item === 'bnb' || item === 'sol'),
+      .filter(
+        (item): item is 'eth' | 'base' | 'bnb' | 'sol' | 'btc' =>
+          item === 'eth' || item === 'base' || item === 'bnb' || item === 'sol' || item === 'btc',
+      ),
   );
   if (normalized.size === 0) return [...DEFAULT_SUPPORTED_CHAINS];
   return [...normalized];
 }
 
-function normalizeSingleChain(raw: unknown): 'eth' | 'base' | 'bnb' | 'sol' | null {
+function normalizeSingleChain(raw: unknown): 'eth' | 'base' | 'bnb' | 'sol' | 'btc' | null {
   const value = normalizeText(raw)?.toLowerCase();
-  if (value === 'eth' || value === 'base' || value === 'bnb' || value === 'sol') return value;
+  if (value === 'eth' || value === 'base' || value === 'bnb' || value === 'sol' || value === 'btc') return value;
   return null;
 }
 
-function mapPlatformToChain(platform: string): 'eth' | 'base' | 'bnb' | 'sol' | null {
+function mapPlatformToChain(platform: string): 'eth' | 'base' | 'bnb' | 'sol' | 'btc' | null {
   if (platform === 'ethereum') return 'eth';
   if (platform === 'base') return 'base';
   if (platform === 'binance-smart-chain' || platform === 'bnb-smart-chain') return 'bnb';
@@ -181,7 +184,7 @@ function mapPlatformToChain(platform: string): 'eth' | 'base' | 'bnb' | 'sol' | 
   return null;
 }
 
-function buildContractLookupKey(chain: 'eth' | 'base' | 'bnb' | 'sol', contract: string): string {
+function buildContractLookupKey(chain: 'eth' | 'base' | 'bnb' | 'sol' | 'btc', contract: string): string {
   return `${chain}:${contract}`;
 }
 
@@ -193,7 +196,7 @@ function getOrderByListName(name: TopAssetListName): string {
 
 function pickChainFromPlatforms(
   platforms: Record<string, string | null | undefined> | undefined,
-  preferredChains: Array<'eth' | 'base' | 'bnb' | 'sol'>,
+  preferredChains: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'>,
 ): ChainMatch | null {
   if (!platforms) return null;
   const normalizedPlatforms = Object.fromEntries(
@@ -227,7 +230,7 @@ function pickChainFromPlatforms(
 function pickNativeChainFallback(
   coinId: string | null,
   symbol: string | null,
-  preferredChains: Array<'eth' | 'base' | 'bnb' | 'sol'>,
+  preferredChains: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'>,
 ): ChainMatch | null {
   const id = (coinId ?? '').trim().toLowerCase();
   const sym = (symbol ?? '').trim().toUpperCase();
@@ -242,6 +245,9 @@ function pickNativeChainFallback(
   }
   if ((id === 'solana' || sym === 'SOL') && preferred.has('sol')) {
     return { chain: 'sol', contract: '' };
+  }
+  if ((id === 'bitcoin' || sym === 'BTC') && preferred.has('btc')) {
+    return { chain: 'btc', contract: '' };
   }
   return null;
 }

@@ -42,8 +42,8 @@ type WalletScreenProps = {
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
 type TransferPresetAsset = {
-  chainId: number;
-  tokenAddress: string;
+  networkKey: string;
+  tokenAddress?: string;
   tokenSymbol?: string;
   tokenDecimals?: number;
 };
@@ -116,12 +116,14 @@ function resolveAssetIdFallbackIcon(assetId: string | null, symbol: string): str
   if (normalizedAssetId === 'coingecko:tether') return '/usdt.svg';
   if (normalizedAssetId === 'coingecko:ethereum') return '/eth.svg';
   if (normalizedAssetId === 'coingecko:binancecoin') return '/bnb.svg';
+  if (normalizedAssetId === 'coingecko:bitcoin') return '/btc.svg';
 
   const normalizedSymbol = symbol.trim().toUpperCase();
   if (normalizedSymbol === 'USDC') return '/usdc.svg';
   if (normalizedSymbol === 'USDT') return '/usdt.svg';
   if (normalizedSymbol === 'ETH') return '/eth.svg';
   if (normalizedSymbol === 'BNB') return '/bnb.svg';
+  if (normalizedSymbol === 'BTC') return '/btc.svg';
   return null;
 }
 
@@ -293,8 +295,16 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   const predictionAccount = portfolioData?.predictionAccount ?? null;
   const totalBalance = portfolioData?.totalUsd ?? 0;
   const supportedChains = appConfig?.supportedChains ?? [];
-  const chainNameById = useMemo(
-    () => new Map(supportedChains.map((chain) => [chain.chainId, chain.name] as const)),
+  const transferSupportedChains = useMemo(
+    () => supportedChains.filter((chain) => chain.protocol === 'evm' || chain.protocol === 'svm' || chain.protocol === 'btc'),
+    [supportedChains],
+  );
+  const tradeSupportedChains = useMemo(
+    () => supportedChains.filter((chain) => chain.protocol === 'evm' || chain.protocol === 'svm'),
+    [supportedChains],
+  );
+  const chainNameByNetworkKey = useMemo(
+    () => new Map(supportedChains.map((chain) => [chain.networkKey, chain.name] as const)),
     [supportedChains],
   );
 
@@ -345,11 +355,10 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
             ...new Set(
               variants
                 .map((variant) => {
-                  const fromConfig = chainNameById.get(Number(variant.chain_id));
+                  const fromConfig = chainNameByNetworkKey.get(variant.network_key);
                   if (fromConfig) return fromConfig;
                   if (variant.chain) return variant.chain.toUpperCase();
-                  const fallbackChainId = Number(variant.chain_id);
-                  return Number.isFinite(fallbackChainId) ? String(fallbackChainId) : '--';
+                  return variant.network_key || '--';
                 })
                 .filter(Boolean),
             ),
@@ -370,7 +379,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
 
           return [
             {
-              key: item.asset_id || `${primary.chain_id}-${primary.address}`,
+              key: item.asset_id || `${primary.network_key}-${primary.address}`,
               assetId: normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id),
               chainAssetId,
               symbol,
@@ -393,7 +402,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
 
     const grouped = [...portfolioData.holdings].reduce<Map<string, { totalValueUsd: number; variants: SimEvmBalance[] }>>(
       (acc, asset) => {
-        const key = normalizeAssetId(asset.asset_id) ?? `${asset.chain_id}:${asset.address?.toLowerCase() ?? ''}`;
+        const key = normalizeAssetId(asset.asset_id) ?? `${asset.network_key}:${asset.address?.toLowerCase() ?? ''}`;
         const current = acc.get(key);
         const valueUsd = Number(asset.value_usd ?? 0);
         if (current) {
@@ -421,11 +430,10 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
           ...new Set(
             variants
               .map((variant) => {
-                const fromConfig = chainNameById.get(Number(variant.chain_id));
+                const fromConfig = chainNameByNetworkKey.get(variant.network_key);
                 if (fromConfig) return fromConfig;
                 if (variant.chain) return variant.chain.toUpperCase();
-                const fallbackChainId = Number(variant.chain_id);
-                return Number.isFinite(fallbackChainId) ? String(fallbackChainId) : '--';
+                return variant.network_key || '--';
               })
               .filter(Boolean),
           ),
@@ -444,7 +452,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
           0,
         );
         return {
-          key: normalizeAssetId(primary.asset_id) ?? `${primary.chain_id}-${primary.address}`,
+          key: normalizeAssetId(primary.asset_id) ?? `${primary.network_key}-${primary.address}`,
           assetId: normalizeAssetId(primary.asset_id),
           chainAssetId,
           symbol,
@@ -462,7 +470,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
         } satisfies WalletHoldingListItem;
       })
       .sort((a, b) => b.valueUsd - a.valueUsd);
-  }, [chainNameById, hiddenAssetKeys, portfolioData, t]);
+  }, [chainNameByNetworkKey, hiddenAssetKeys, portfolioData, t]);
 
   const stableAndCryptos = useMemo(() => {
     const stableHoldings = holdings.filter((asset) => {
@@ -668,8 +676,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   }
 
   function buildTradePreset(mode: 'buy' | 'stableSwap'): TradePreset | null {
-    const chainId = supportedChains[0]?.chainId ?? 1;
-    const tokenConfig = getTradeTokenConfig(chainId);
+    const chain = tradeSupportedChains[0] ?? null;
+    const networkKey = chain?.networkKey ?? 'ethereum-mainnet';
+    const tokenConfig = getTradeTokenConfig(networkKey);
     if (!tokenConfig) {
       showError(t('wallet.tradeChainNotSupported'));
       return null;
@@ -678,7 +687,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
     if (mode === 'stableSwap') {
       return {
         mode: 'stableSwap',
-        chainId,
+        networkKey,
         sellToken: cloneTradeToken(tokenConfig.usdc),
         buyToken: cloneTradeToken(tokenConfig.usdt),
       };
@@ -686,7 +695,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
 
     return {
       mode: 'buy',
-      chainId,
+      networkKey,
       sellToken: cloneTradeToken(tokenConfig.usdc),
       buyToken: cloneTradeToken(tokenConfig.defaultBuy),
       assetSymbolForEvent: tokenConfig.defaultBuy.symbol,
@@ -783,7 +792,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
         <TransferContent
           active={activeModalContent === 'transfer'}
           presetAsset={presetTransferAsset}
-          supportedChains={supportedChains}
+          supportedChains={transferSupportedChains}
           onBack={closeActiveModal}
           onClose={closeActiveModal}
           onSubmitted={handleTransferSubmitted}
@@ -796,7 +805,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
       <TradeContent
         active={activeModalContent === 'trade'}
         preset={tradePreset}
-        supportedChains={supportedChains}
+        supportedChains={tradeSupportedChains}
         onBack={backToTopUp}
         onClose={closeActiveModal}
         onSubmitted={handleTradeSubmitted}
@@ -811,7 +820,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
       id: transfer.id,
       status: transfer.status,
       txHash: transfer.txHash,
-      chainId: transfer.chainId,
+      networkKey: transfer.networkKey,
     });
     void refetch();
   }

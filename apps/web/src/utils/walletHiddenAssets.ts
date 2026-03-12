@@ -1,8 +1,8 @@
 import { buildChainAssetId } from './assetIdentity';
-import { normalizeWalletAddress } from './chainIdentity';
+import { inferWalletProtocolFromAddress, normalizeWalletAddress } from './chainIdentity';
 
 function buildWalletHiddenAssetsStorageKey(walletAddress: string): string | null {
-  const protocol = walletAddress.startsWith('0x') ? 'evm' : 'svm';
+  const protocol = inferWalletProtocolFromAddress(walletAddress) ?? 'evm';
   const normalizedWalletAddress = normalizeWalletAddress(protocol, walletAddress);
   if (!normalizedWalletAddress) return null;
   return `wallet-hidden-assets:v1:${normalizedWalletAddress}`;
