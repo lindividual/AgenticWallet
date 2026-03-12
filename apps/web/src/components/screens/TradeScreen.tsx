@@ -441,50 +441,59 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
 
           <section className="flex flex-col gap-3">
             <SectionTitle title={t('trade.trending')} />
-            <div className="flex flex-wrap gap-2">
-              {payload.trendings.length === 0 && (
-                <div className="rounded-full bg-base-200 px-3 py-2 text-xs text-base-content/65">
-                  {t('trade.noSectionData')}
-                </div>
-              )}
-              {payload.trendings.map((item) => {
-                const clickable = canOpenToken(item);
-                const content = (
-                  <>
-                    <IconAvatar
-                      symbol={item.symbol}
-                      name={item.name}
-                      image={item.image}
-                      className="h-6 w-6 rounded-full bg-base-300 object-cover"
-                      fallbackClassName="flex h-6 w-6 items-center justify-center rounded-full bg-base-300 text-[10px] font-semibold text-base-content/75"
-                    />
-                    <span className="line-clamp-1 max-w-[11rem] text-sm font-semibold">{item.name}</span>
-                  </>
-                );
+            {payload.trendings.length === 0 ? (
+              <div className="rounded-full bg-base-200 px-3 py-2 text-xs text-base-content/65">
+                {t('trade.noSectionData')}
+              </div>
+            ) : (
+              <div className="-mx-1 overflow-x-auto px-1 pb-1">
+                <div className="inline-flex flex-col gap-2">
+                  {[0, 1].map((rowIndex) => (
+                    <div key={rowIndex} className="flex w-max gap-2">
+                      {payload.trendings
+                        .filter((_, index) => index % 2 === rowIndex)
+                        .map((item) => {
+                          const clickable = canOpenToken(item);
+                          const content = (
+                            <>
+                              <IconAvatar
+                                symbol={item.symbol}
+                                name={item.name}
+                                image={item.image}
+                                className="h-6 w-6 rounded-full bg-base-300 object-cover"
+                                fallbackClassName="flex h-6 w-6 items-center justify-center rounded-full bg-base-300 text-[10px] font-semibold text-base-content/75"
+                              />
+                              <span className="line-clamp-1 max-w-[11rem] text-sm font-semibold">{item.name}</span>
+                            </>
+                          );
 
-                if (!clickable) {
-                  return (
-                    <div
-                      key={item.id}
-                      className="inline-flex items-center gap-2 rounded-full bg-base-200 px-3 py-2"
-                    >
-                      {content}
+                          if (!clickable) {
+                            return (
+                              <div
+                                key={item.id}
+                                className="inline-flex w-fit shrink-0 items-center gap-2 rounded-full bg-base-200 px-3 py-2"
+                              >
+                                {content}
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className="inline-flex w-fit shrink-0 items-center gap-2 rounded-full bg-base-200 px-3 py-2 text-left transition-colors hover:bg-base-300"
+                              onClick={() => handleOpenToken(item, 'trendings')}
+                            >
+                              {content}
+                            </button>
+                          );
+                        })}
                     </div>
-                  );
-                }
-
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="inline-flex items-center gap-2 rounded-full bg-base-200 px-3 py-2 text-left transition-colors hover:bg-base-300"
-                    onClick={() => handleOpenToken(item, 'trendings')}
-                  >
-                    {content}
-                  </button>
-                );
-              })}
-            </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="flex flex-col gap-2">
@@ -495,7 +504,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
               {payload.stocks.length === 0 && (
                 <div className="px-4 py-4 text-sm text-base-content/65">{t('trade.noSectionData')}</div>
               )}
-              {payload.stocks.map((item) => {
+              {payload.stocks.slice(0, 5).map((item) => {
                 const changeClass = pctClassname(item.change24h);
                 return (
                   <div
@@ -533,7 +542,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
               {payload.perps.length === 0 && (
                 <div className="px-4 py-4 text-sm text-base-content/65">{t('trade.noSectionData')}</div>
               )}
-              {payload.perps.map((item) => {
+              {payload.perps.slice(0, 5).map((item) => {
                 return (
                   <div
                     key={item.id}
@@ -575,7 +584,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
               {payload.predictions.length === 0 && (
                 <div className="px-4 py-4 text-sm text-base-content/65">{t('trade.noSectionData')}</div>
               )}
-              {payload.predictions.map((market: TradeBrowsePredictionItem) => {
+              {payload.predictions.slice(0, 5).map((market: TradeBrowsePredictionItem) => {
                 return (
                   <div
                     key={market.id}

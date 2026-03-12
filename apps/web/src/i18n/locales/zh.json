@@ -3,7 +3,9 @@
     "brand": "umi wallet",
     "error": "错误",
     "close": "关闭",
-    "logout": "退出登录"
+    "logout": "退出登录",
+    "more": "更多",
+    "less": "收起"
   },
   "auth": {
     "title": "足够智能\n简单易用",

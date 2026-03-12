@@ -3,7 +3,9 @@
     "brand": "umi wallet",
     "error": "Error",
     "close": "Close",
-    "logout": "Log out"
+    "logout": "Log out",
+    "more": "More",
+    "less": "Less"
   },
   "auth": {
     "title": "Smart enough\nto feel simple",

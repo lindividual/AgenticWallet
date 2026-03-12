@@ -48,6 +48,8 @@ type TransferPresetAsset = {
   tokenDecimals?: number;
 };
 
+const MODAL_CONTENT_SWITCH_MS = 280;
+
 function formatTokenAmount(rawAmount: string | undefined, decimals: number | undefined): string {
   const amount = Number(rawAmount ?? 0);
   if (!Number.isFinite(amount)) return '0';
@@ -242,6 +244,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeModalContent, setActiveModalContent] = useState<ActiveModalContent>('topUp');
+  const [exitingModalContent, setExitingModalContent] = useState<ActiveModalContent | null>(null);
+  const [modalDirection, setModalDirection] = useState<1 | -1>(1);
+  const [modalTransitionKey, setModalTransitionKey] = useState(0);
   const [modalVisible, setModalVisible] = useState(false);
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
@@ -250,9 +255,11 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   const [detailPriceChangeByHoldingKey, setDetailPriceChangeByHoldingKey] = useState<Record<string, number | null>>({});
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
+  const modalSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const detailPriceChangeCacheRef = useRef<Map<string, { value: number | null; expiresAt: number }>>(new Map());
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
+  const tradeButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
   const walletFingerprint = buildWalletAccountsFingerprint(auth.wallet?.chainAccounts, auth.wallet?.address);
   const [hiddenAssetKeys, setHiddenAssetKeys] = useState<Set<string>>(() => getHiddenWalletAssetKeys(walletAddress));
@@ -591,12 +598,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
 
   useEffect(
     () => () => {
-      if (closeTimerRef.current) {
-        clearTimeout(closeTimerRef.current);
-      }
-      if (openRafRef.current !== null) {
-        cancelAnimationFrame(openRafRef.current);
-      }
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      if (modalSwitchTimerRef.current) clearTimeout(modalSwitchTimerRef.current);
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current);
     },
     [],
   );
@@ -623,7 +627,11 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
     if (openRafRef.current !== null) {
       cancelAnimationFrame(openRafRef.current);
     }
-
+    if (modalSwitchTimerRef.current) {
+      clearTimeout(modalSwitchTimerRef.current);
+      modalSwitchTimerRef.current = null;
+    }
+    setExitingModalContent(null);
     setIsModalOpen(true);
     setModalOriginRect(originRect);
     setModalVisible(false);
@@ -631,6 +639,26 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
       setModalVisible(true);
       openRafRef.current = null;
     });
+  }
+
+  function switchModalContent(nextContent: ActiveModalContent, direction: 1 | -1) {
+    if (!isModalOpen || nextContent === activeModalContent) {
+      setActiveModalContent(nextContent);
+      setExitingModalContent(null);
+      setModalDirection(direction);
+      return;
+    }
+    if (modalSwitchTimerRef.current) {
+      clearTimeout(modalSwitchTimerRef.current);
+    }
+    setModalDirection(direction);
+    setExitingModalContent(activeModalContent);
+    setActiveModalContent(nextContent);
+    setModalTransitionKey((value) => value + 1);
+    modalSwitchTimerRef.current = setTimeout(() => {
+      setExitingModalContent(null);
+      modalSwitchTimerRef.current = null;
+    }, MODAL_CONTENT_SWITCH_MS);
   }
 
   function openTopUpModal() {
@@ -670,14 +698,14 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
     if (!preset) return;
     setTradePreset(preset);
     setActiveModalContent('trade');
-    showModal(snapshotRect(topUpButtonRef.current));
+    showModal(snapshotRect(tradeButtonRef.current));
   }
 
   function openTradeFromTopUp(mode: 'buy' | 'stableSwap') {
     const preset = buildTradePreset(mode);
     if (!preset) return;
     setTradePreset(preset);
-    setActiveModalContent('trade');
+    switchModalContent('trade', 1);
   }
 
   function openTransferModal() {
@@ -688,24 +716,94 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   }
 
   function openReceiveModal() {
-    setActiveModalContent('receive');
+    switchModalContent('receive', 1);
   }
 
   function backToTopUp() {
-    setActiveModalContent('topUp');
+    switchModalContent('topUp', -1);
   }
 
   function closeActiveModal() {
     if (!isModalOpen) return;
-
     setModalVisible(false);
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
     }
     closeTimerRef.current = setTimeout(() => {
       setIsModalOpen(false);
+      setExitingModalContent(null);
       closeTimerRef.current = null;
     }, 300);
+  }
+
+  function getStageClassName(kind: 'enter' | 'exit'): string {
+    if (modalDirection === 1) {
+      return kind === 'enter' ? 'modal-sheet-enter-forward' : 'modal-sheet-exit-forward';
+    }
+    return kind === 'enter' ? 'modal-sheet-enter-backward' : 'modal-sheet-exit-backward';
+  }
+
+  function renderModalPane(
+    content: ActiveModalContent,
+    options: {
+      footerVisible: boolean;
+      stageClassName?: string;
+    },
+  ) {
+    if (content === 'topUp') {
+      return (
+        <TopUpContent
+          active={activeModalContent === 'topUp'}
+          onOpenReceive={openReceiveModal}
+          onOpenTrade={openTradeFromTopUp}
+          onClose={closeActiveModal}
+          footerVisible={options.footerVisible}
+          stageClassName={options.stageClassName}
+        />
+      );
+    }
+    if (content === 'receive') {
+      return (
+        <ReceiveCryptoContent
+          walletAddress={walletAddress}
+          chainAccounts={auth.wallet?.chainAccounts}
+          supportedChains={supportedChains}
+          onBack={backToTopUp}
+          onCopyAddress={(address) => {
+            void handleCopyAddress(address);
+          }}
+          onClose={closeActiveModal}
+          footerVisible={options.footerVisible}
+          stageClassName={options.stageClassName}
+        />
+      );
+    }
+    if (content === 'transfer') {
+      return (
+        <TransferContent
+          active={activeModalContent === 'transfer'}
+          presetAsset={presetTransferAsset}
+          supportedChains={supportedChains}
+          onBack={closeActiveModal}
+          onClose={closeActiveModal}
+          onSubmitted={handleTransferSubmitted}
+          footerVisible={options.footerVisible}
+          stageClassName={options.stageClassName}
+        />
+      );
+    }
+    return (
+      <TradeContent
+        active={activeModalContent === 'trade'}
+        preset={tradePreset}
+        supportedChains={supportedChains}
+        onBack={backToTopUp}
+        onClose={closeActiveModal}
+        onSubmitted={handleTradeSubmitted}
+        footerVisible={options.footerVisible}
+        stageClassName={options.stageClassName}
+      />
+    );
   }
 
   function handleTransferSubmitted(transfer: TransferRecord) {
@@ -829,6 +927,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
         </button>
         <button
           type="button"
+          ref={tradeButtonRef}
           className="btn btn-primary h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
           onClick={() => openTradeModal('buy')}
         >
@@ -931,69 +1030,19 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
       {isModalOpen && (
         <Modal visible={modalVisible} originRect={modalOriginRect} onClose={closeActiveModal}>
           <div className="relative flex-1 overflow-hidden">
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'topUp'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none -translate-x-4 opacity-0'
-              }`}
-            >
-              <TopUpContent
-                active={activeModalContent === 'topUp'}
-                onOpenReceive={openReceiveModal}
-                onOpenTrade={openTradeFromTopUp}
-                onClose={closeActiveModal}
-              />
-            </div>
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'receive'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none translate-x-4 opacity-0'
-              }`}
-            >
-              <ReceiveCryptoContent
-                walletAddress={walletAddress}
-                chainAccounts={auth.wallet?.chainAccounts}
-                supportedChains={supportedChains}
-                onBack={backToTopUp}
-                onCopyAddress={(address) => {
-                  void handleCopyAddress(address);
-                }}
-                onClose={closeActiveModal}
-              />
-            </div>
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'transfer'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none translate-x-4 opacity-0'
-              }`}
-            >
-              <TransferContent
-                active={activeModalContent === 'transfer'}
-                presetAsset={presetTransferAsset}
-                supportedChains={supportedChains}
-                onBack={closeActiveModal}
-                onClose={closeActiveModal}
-                onSubmitted={handleTransferSubmitted}
-              />
-            </div>
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'trade'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none translate-x-4 opacity-0'
-              }`}
-            >
-              <TradeContent
-                active={activeModalContent === 'trade'}
-                preset={tradePreset}
-                supportedChains={supportedChains}
-                onBack={backToTopUp}
-                onClose={closeActiveModal}
-                onSubmitted={handleTradeSubmitted}
-              />
+            {exitingModalContent ? (
+              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+                {renderModalPane(exitingModalContent, {
+                  footerVisible: false,
+                  stageClassName: getStageClassName('exit'),
+                })}
+              </div>
+            ) : null}
+            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+              {renderModalPane(activeModalContent, {
+                footerVisible: true,
+                stageClassName: exitingModalContent ? getStageClassName('enter') : undefined,
+              })}
             </div>
           </div>
         </Modal>

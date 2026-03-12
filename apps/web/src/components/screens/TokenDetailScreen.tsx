@@ -53,6 +53,7 @@ const KLINE_CANDLE_WIDTH_SECONDS: Record<KlinePeriod, number> = {
   '4h': 14_400,
   '1d': 86_400,
   '1w': 604_800,
+  all: 86_400,
 };
 const TOKEN_ROUTE_PREVIEW_QUERY_KEY = 'trade-token-route-preview';
 
@@ -74,6 +75,57 @@ function formatCompact(value: number | null | undefined, locale: string): string
 function formatPercentFromRatio(value: number | null | undefined): string {
   if (!Number.isFinite(Number(value))) return '--';
   return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function ChangeTriangle({ direction }: { direction: 'up' | 'down' | 'flat' }) {
+  const rotationClass = direction === 'up' ? '' : direction === 'down' ? 'rotate-180' : 'rotate-90';
+
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 10 10"
+      className={`h-2.5 w-2.5 ${rotationClass}`}
+      fill="currentColor"
+    >
+      <path d="M5 1.5 8.5 7.5h-7Z" />
+    </svg>
+  );
+}
+
+function ChartModeToggleButton({
+  chartMode,
+  setChartMode,
+}: {
+  chartMode: 'line' | 'candle';
+  setChartMode: (mode: 'line' | 'candle') => void;
+}) {
+  const isLineMode = chartMode === 'line';
+
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-xs border-0 px-2.5"
+      onClick={() => setChartMode(isLineMode ? 'candle' : 'line')}
+      aria-label={isLineMode ? 'switch to candle chart' : 'switch to line chart'}
+    >
+      <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
+        {isLineMode ? (
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3.5 3.5v9" />
+            <path d="M12.5 3.5v9" />
+            <path d="M7.75 2.5v11" />
+            <rect x="2.5" y="6.25" width="2" height="3.5" rx="1" fill="currentColor" stroke="none" />
+            <rect x="6.75" y="4.25" width="2" height="4.5" rx="1" fill="currentColor" stroke="none" />
+            <rect x="11.5" y="7.25" width="2" height="3" rx="1" fill="currentColor" stroke="none" />
+          </svg>
+        ) : (
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 10.5 5.25 7.75 7.75 9.5 11.5 5.5 14 6.75" />
+          </svg>
+        )}
+      </span>
+    </button>
+  );
 }
 
 function getTokenInitial(symbol: string | null | undefined, name: string | null | undefined): string {
@@ -537,20 +589,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
               <p className={`m-0 mt-1 flex items-center gap-1 text-base font-medium ${priceChangeTone}`}>
                 <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
                   {hasPriceChangePct && numericPriceChangePct > 0 ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 19V5" />
-                      <path d="M6 11l6-6 6 6" />
-                    </svg>
+                    <ChangeTriangle direction="up" />
                   ) : hasPriceChangePct && numericPriceChangePct < 0 ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 5v14" />
-                      <path d="M18 13l-6 6-6-6" />
-                    </svg>
+                    <ChangeTriangle direction="down" />
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 12h14" />
-                      <path d="M15 8l4 4-4 4" />
-                    </svg>
+                    <ChangeTriangle direction="flat" />
                   )}
                 </span>
                 <span>{formatPct(priceChangePct)}</span>
@@ -561,38 +604,25 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       </section>
 
       <section className="p-0">
-        <div className="mt-3 flex flex-wrap gap-2">
-          {KLINE_PERIOD_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={`btn btn-xs border-0 px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => void switchKlinePeriod(option.value)}
-              disabled={pendingKlinePeriod != null}
-            >
-              {pendingKlinePeriod === option.value ? (
-                <span className="loading loading-spinner loading-xs" />
-              ) : (
-                t(option.labelKey)
-              )}
-            </button>
-          ))}
-        </div>
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            className={`btn btn-xs border-0 px-3 ${chartMode === 'line' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setChartMode('line')}
-          >
-            line
-          </button>
-          <button
-            type="button"
-            className={`btn btn-xs border-0 px-3 ${chartMode === 'candle' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setChartMode('candle')}
-          >
-            candle
-          </button>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-2">
+            {KLINE_PERIOD_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`btn btn-xs border-0 px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => void switchKlinePeriod(option.value)}
+                disabled={pendingKlinePeriod != null}
+              >
+                {pendingKlinePeriod === option.value ? (
+                  <span className="loading loading-spinner loading-xs" />
+                ) : (
+                  t(option.labelKey)
+                )}
+              </button>
+            ))}
+          </div>
+          <ChartModeToggleButton chartMode={chartMode} setChartMode={setChartMode} />
         </div>
         {isChartLoading ? (
           <div className="mt-3">

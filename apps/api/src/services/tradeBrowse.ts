@@ -30,9 +30,12 @@ export type TradeBrowsePredictionItem = {
   instrument_id?: string;
   title: string;
   image: string | null;
+  description: string | null;
   probability: number | null;
   volume24h: number | null;
   url: string | null;
+  startDate: string | null;
+  endDate: string | null;
   layout: 'binary' | 'winner';
   eventId: string | null;
   outcomeRows: TradeBrowsePredictionOutcomeRow[];
@@ -51,6 +54,7 @@ export type TradeBrowsePredictionOutcomeRow = {
   id: string;
   marketId: string;
   label: string;
+  volume: number | null;
   yesTokenId: string | null;
   noTokenId: string | null;
   yesProbability: number | null;
@@ -59,6 +63,35 @@ export type TradeBrowsePredictionOutcomeRow = {
 
 export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
 
+export type PredictionEventOutcome = {
+  id: string;
+  eventId: string | null;
+  marketId: string;
+  label: string;
+  probability: number | null;
+  noProbability: number | null;
+  volume24h: number | null;
+  yesTokenId: string | null;
+  noTokenId: string | null;
+};
+
+export type PredictionEventDetail = {
+  kind: 'prediction_event';
+  id: string;
+  eventId: string | null;
+  title: string;
+  image: string | null;
+  description: string | null;
+  probability: number | null;
+  volume24h: number | null;
+  url: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  layout: 'binary' | 'winner';
+  source: 'polymarket';
+  outcomes: PredictionEventOutcome[];
+};
+
 export type TradeMarketKlineCandle = {
   time: number;
   open: number;
@@ -66,6 +99,14 @@ export type TradeMarketKlineCandle = {
   low: number;
   close: number;
   turnover: number | null;
+};
+
+export type PredictionEventSeries = {
+  outcomeId: string;
+  label: string;
+  tokenId: string | null;
+  latestValue: number | null;
+  candles: TradeMarketKlineCandle[];
 };
 
 export type TradeBrowseResponse = {
@@ -135,6 +176,8 @@ let perpSearchCache: { expiresAt: number; value: TradeBrowseMarketItem[] } | nul
 let perpSearchInFlight: Promise<TradeBrowseMarketItem[]> | null = null;
 let predictionSearchCache: { expiresAt: number; value: TradeBrowsePredictionItem[] } | null = null;
 let predictionSearchInFlight: Promise<TradeBrowsePredictionItem[]> | null = null;
+let predictionSchemaReady = false;
+const PREDICTION_PROJECTION_TTL_MS = 2 * 60 * 1000;
 
 const HYPERLIQUID_INTERVAL_BY_KLINE_PERIOD: Record<string, string> = {
   '15m': '15m',
@@ -152,16 +195,20 @@ const HYPERLIQUID_PERIOD_MS_BY_INTERVAL: Record<string, number> = {
 
 const POLYMARKET_INTERVAL_BY_KLINE_PERIOD: Record<string, string> = {
   '15m': '1h',
-  '1h': '1h',
-  '4h': '6h',
-  '1d': '1d',
+  '1h': '6h',
+  '4h': '1d',
+  '1d': '1w',
+  '1w': '1m',
+  all: 'max',
 };
 
 const POLYMARKET_FIDELITY_BY_KLINE_PERIOD: Record<string, number> = {
-  '15m': 30,
-  '1h': 60,
-  '4h': 120,
+  '15m': 5,
+  '1h': 15,
+  '4h': 60,
   '1d': 240,
+  '1w': 1440,
+  all: 1440,
 };
 
 function normalizeText(raw: unknown): string | null {
@@ -224,6 +271,141 @@ function parseStringArray(raw: unknown): string[] {
   }
 }
 
+type StoredPredictionEventRow = {
+  prediction_event_id: string;
+  source: string;
+  source_event_id: string | null;
+  primary_market_id: string;
+  title: string;
+  description: string | null;
+  image: string | null;
+  url: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  layout: 'binary' | 'winner';
+  probability: number | null;
+  volume24h: number | null;
+  synced_at: string | null;
+  expires_at: string | null;
+};
+
+type StoredPredictionOutcomeRow = {
+  source_outcome_id: string;
+  source_market_id: string;
+  label: string;
+  yes_token_id: string | null;
+  no_token_id: string | null;
+  yes_probability: number | null;
+  no_probability: number | null;
+  volume24h: number | null;
+};
+
+function stripPolymarketPrefix(value: string | null | undefined): string | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+  return normalized.startsWith('polymarket:') ? normalized.slice('polymarket:'.length) : normalized;
+}
+
+function buildPredictionEventStorageId(sourceEventId: string | null, primaryMarketId: string): string {
+  return sourceEventId
+    ? `pred:event:polymarket:${sourceEventId}`
+    : `pred:event:polymarket:market:${primaryMarketId}`;
+}
+
+function buildPredictionMarketStorageId(sourceMarketId: string): string {
+  return `pred:market:polymarket:${sourceMarketId}`;
+}
+
+function buildPredictionOutcomeStorageId(sourceOutcomeId: string): string {
+  return `pred:outcome:polymarket:${sourceOutcomeId}`;
+}
+
+async function ensurePredictionSchema(db: D1Database): Promise<void> {
+  if (predictionSchemaReady) return;
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS prediction_events (
+        prediction_event_id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        source_event_id TEXT,
+        primary_market_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        image TEXT,
+        url TEXT,
+        start_date TEXT,
+        end_date TEXT,
+        layout TEXT NOT NULL,
+        probability REAL,
+        volume24h REAL,
+        raw_json TEXT,
+        synced_at TEXT,
+        expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run();
+  try {
+    await db.prepare('ALTER TABLE prediction_events ADD COLUMN synced_at TEXT').run();
+  } catch { /* column already exists */ }
+  try {
+    await db.prepare('ALTER TABLE prediction_events ADD COLUMN expires_at TEXT').run();
+  } catch { /* column already exists */ }
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_events_source_event_id ON prediction_events(source_event_id)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_events_primary_market_id ON prediction_events(primary_market_id)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_events_expires_at ON prediction_events(expires_at)').run();
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS prediction_markets (
+        prediction_market_id TEXT PRIMARY KEY,
+        prediction_event_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        source_market_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        url TEXT,
+        volume24h REAL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        raw_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (prediction_event_id) REFERENCES prediction_events(prediction_event_id)
+      )`,
+    )
+    .run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_markets_event_id ON prediction_markets(prediction_event_id)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_markets_source_market_id ON prediction_markets(source_market_id)').run();
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS prediction_outcomes (
+        prediction_outcome_id TEXT PRIMARY KEY,
+        prediction_event_id TEXT NOT NULL,
+        prediction_market_id TEXT NOT NULL,
+        source_outcome_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        yes_token_id TEXT,
+        no_token_id TEXT,
+        yes_probability REAL,
+        no_probability REAL,
+        volume24h REAL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (prediction_event_id) REFERENCES prediction_events(prediction_event_id),
+        FOREIGN KEY (prediction_market_id) REFERENCES prediction_markets(prediction_market_id)
+      )`,
+    )
+    .run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_event_id ON prediction_outcomes(prediction_event_id)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_market_id ON prediction_outcomes(prediction_market_id)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_yes_token_id ON prediction_outcomes(yes_token_id)').run();
+
+  predictionSchemaReady = true;
+}
+
 function clampProbabilityPercent(value: number | null): number | null {
   if (value == null || !Number.isFinite(value)) return null;
   if (value < 0) return 0;
@@ -237,6 +419,14 @@ function normalizeProbabilityPercent(raw: unknown): number | null {
   if (value <= 1) return clampProbabilityPercent(value * 100);
   if (value <= 100) return clampProbabilityPercent(value);
   return clampProbabilityPercent(value / 100);
+}
+
+function isProjectionExpired(expiresAt: string | null | undefined): boolean {
+  const value = normalizeText(expiresAt);
+  if (!value) return true;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return true;
+  return timestamp <= Date.now();
 }
 
 function normalizeTimestampSeconds(raw: unknown): number | null {
@@ -528,11 +718,14 @@ function parsePredictionItemFromRow(row: Record<string, unknown>): TradeBrowsePr
   if (!rawId || !title) return null;
 
   const image = normalizeText(row.icon) ?? normalizeText(row.image);
+  const description = normalizeText(row.description);
   const volume24h =
     toFiniteNumber(row.volume24hr)
     ?? toFiniteNumber(row.volume24h)
     ?? toFiniteNumber(row.oneDayVolume)
     ?? toFiniteNumber(row.volume);
+  const startDate = normalizeText(row.startDate) ?? normalizeText(row.startDateIso);
+  const endDate = normalizeText(row.endDate) ?? normalizeText(row.endDateIso);
 
   const outcomes = parseStringArray(row.outcomes);
   const outcomePrices = parseNumberArray(row.outcomePrices).map((item) => normalizeProbabilityPercent(item)).filter((item): item is number => item != null);
@@ -568,9 +761,12 @@ function parsePredictionItemFromRow(row: Record<string, unknown>): TradeBrowsePr
     id: `polymarket:${rawId}`,
     title,
     image,
+    description,
     probability,
     volume24h,
     url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : null),
+    startDate,
+    endDate,
     layout: 'binary',
     eventId: eventId ?? null,
     outcomeRows: [],
@@ -615,6 +811,10 @@ function buildWinnerOutcomeFromMarket(
     ?? normalizeProbabilityPercent(market.probability)
     ?? normalizeProbabilityPercent(market.lastTradePrice);
   const noProbability = outcomePrices[noIndex] ?? (yesProbability == null ? null : clampProbabilityPercent(100 - yesProbability));
+  const volume =
+    toFiniteNumber(market.volume24hr)
+    ?? toFiniteNumber(market.volume24h)
+    ?? toFiniteNumber(market.volume);
   const optionId = `${eventId}:${marketId}`;
   const yesTokenId = clobTokenIds[yesIndex] ?? null;
   const noTokenId = clobTokenIds[noIndex] ?? null;
@@ -630,6 +830,7 @@ function buildWinnerOutcomeFromMarket(
       id: optionId,
       marketId,
       label,
+      volume,
       yesTokenId,
       noTokenId,
       yesProbability,
@@ -699,12 +900,15 @@ function buildWinnerPredictionItemFromEvent(
     .sort((a, b) => b - a)[0]
     ?? fallbackItem.probability;
   const image = normalizeText(eventRow.icon) ?? normalizeText(eventRow.image) ?? fallbackItem.image;
+  const description = normalizeText(eventRow.description) ?? fallbackItem.description;
   const volume24h =
     toFiniteNumber(eventRow.volume24hr)
     ?? toFiniteNumber(eventRow.volume24h)
     ?? toFiniteNumber(eventRow.oneDayVolume)
     ?? toFiniteNumber(eventRow.volume)
     ?? fallbackItem.volume24h;
+  const startDate = normalizeText(eventRow.startDate) ?? normalizeText(eventRow.startDateIso) ?? fallbackItem.startDate;
+  const endDate = normalizeText(eventRow.endDate) ?? normalizeText(eventRow.endDateIso) ?? fallbackItem.endDate;
   const directUrl = normalizeText(eventRow.url);
   const slug = normalizeText(eventRow.slug);
 
@@ -712,9 +916,12 @@ function buildWinnerPredictionItemFromEvent(
     ...fallbackItem,
     title,
     image,
+    description,
     probability,
     volume24h,
     url: directUrl ?? (slug ? `https://polymarket.com/event/${slug}` : fallbackItem.url),
+    startDate,
+    endDate,
     layout: 'winner',
     eventId,
     outcomeRows,
@@ -925,27 +1132,9 @@ export async function searchPredictionMarkets(
     : [];
   if (!rawEvents.length) return [];
 
-  const detailLookup = new Map<string, Record<string, unknown>>();
-  const detailTargetIds = rawEvents
-    .map((entry) => normalizeText(entry.id))
-    .filter((entry): entry is string => entry != null)
-    .slice(0, Math.min(limit, 12));
-  if (detailTargetIds.length > 0) {
-    const detailRows = await Promise.all(detailTargetIds.map((eventId) => fetchPolymarketEventById(eventId)));
-    for (let index = 0; index < detailTargetIds.length; index += 1) {
-      const eventId = detailTargetIds[index];
-      const detailRow = detailRows[index];
-      if (eventId && detailRow) {
-        detailLookup.set(eventId, detailRow);
-      }
-    }
-  }
-
   const output: TradeBrowsePredictionItem[] = [];
   for (const eventRow of rawEvents) {
-    const eventId = normalizeText(eventRow.id);
-    const enrichedRow = (eventId ? detailLookup.get(eventId) : null) ?? eventRow;
-    const parsed = buildPredictionFallbackFromEvent(enrichedRow);
+    const parsed = buildPredictionFallbackFromEvent(eventRow);
     if (!parsed) continue;
     output.push(parsed);
     if (output.length >= limit) break;
@@ -986,6 +1175,12 @@ async function fetchPredictionById(id: string): Promise<TradeBrowsePredictionIte
     }
   } catch {
     // Fallback to list lookup.
+  }
+
+  const eventRow = await fetchPolymarketEventById(rawId);
+  if (eventRow) {
+    const eventItem = buildPredictionFallbackFromEvent(eventRow);
+    if (eventItem) return eventItem;
   }
 
   const list = await fetchPredictions(240);
@@ -1052,12 +1247,16 @@ export async function fetchTradeMarketDetail(
     return perps.find((item) => item.id === id) ?? null;
   }
 
-  return fetchPredictionById(id);
+  const prediction = await fetchPredictionById(id);
+  if (prediction) {
+    await upsertPredictionEventProjection(env, prediction);
+  }
+  return prediction;
 }
 
 function normalizeTradeKlinePeriod(value: unknown): string {
   const normalized = normalizeText(value)?.toLowerCase();
-  if (normalized === '15m' || normalized === '1h' || normalized === '4h' || normalized === '1d') {
+  if (normalized === '15m' || normalized === '1h' || normalized === '4h' || normalized === '1d' || normalized === '1w' || normalized === 'all') {
     return normalized;
   }
   return '1h';
@@ -1080,13 +1279,30 @@ function parsePerpSymbolFromId(id: string): string | null {
   return normalized.toUpperCase();
 }
 
+function isPredictionEventDetail(
+  item: TradeBrowsePredictionItem | PredictionEventDetail | null | undefined,
+): item is PredictionEventDetail {
+  return Boolean(item && 'outcomes' in item);
+}
+
 function selectPredictionTokenId(
-  item: TradeBrowsePredictionItem | null | undefined,
+  item: TradeBrowsePredictionItem | PredictionEventDetail | null | undefined,
   preferredTokenId?: string | null,
 ): string | null {
   const preferred = normalizeText(preferredTokenId);
-  if (preferred && item?.options.some((option) => option.tokenId === preferred)) {
+  const candidates = isPredictionEventDetail(item)
+    ? item.outcomes.map((outcome) => outcome.yesTokenId).filter((tokenId): tokenId is string => Boolean(tokenId))
+    : (item?.options ?? []).map((option) => option.tokenId).filter((tokenId): tokenId is string => Boolean(tokenId));
+  if (preferred && candidates.includes(preferred)) {
     return preferred;
+  }
+
+  if (isPredictionEventDetail(item)) {
+    const sorted = item.outcomes
+      .filter((outcome) => Boolean(outcome.yesTokenId))
+      .slice()
+      .sort((a, b) => (b.probability ?? Number.NEGATIVE_INFINITY) - (a.probability ?? Number.NEGATIVE_INFINITY));
+    return sorted[0]?.yesTokenId ?? null;
   }
 
   const sorted = (item?.options ?? [])
@@ -1094,6 +1310,277 @@ function selectPredictionTokenId(
     .slice()
     .sort((a, b) => (b.probability ?? Number.NEGATIVE_INFINITY) - (a.probability ?? Number.NEGATIVE_INFINITY));
   return sorted[0]?.tokenId ?? null;
+}
+
+function toPredictionEventOutcomes(item: TradeBrowsePredictionItem): PredictionEventOutcome[] {
+  if (item.layout === 'winner' && item.outcomeRows.length > 0) {
+    return item.outcomeRows.map((row) => ({
+      id: row.id,
+      eventId: item.eventId,
+      marketId: row.marketId,
+      label: row.label,
+      probability: row.yesProbability,
+      noProbability: row.noProbability,
+      volume24h: row.volume,
+      yesTokenId: row.yesTokenId,
+      noTokenId: row.noTokenId,
+    }));
+  }
+
+  const yesOption = item.options.find((option) => option.label.trim().toLowerCase() === 'yes');
+  const noOption = item.options.find((option) => option.label.trim().toLowerCase() === 'no');
+  return [{
+    id: item.id,
+    eventId: item.eventId,
+    marketId: item.id.replace(/^polymarket:/i, ''),
+    label: item.title,
+    probability: yesOption?.probability ?? item.probability ?? null,
+    noProbability: noOption?.probability ?? null,
+    volume24h: item.volume24h,
+    yesTokenId: yesOption?.tokenId ?? item.options[0]?.tokenId ?? null,
+    noTokenId: noOption?.tokenId ?? item.options[1]?.tokenId ?? null,
+  }];
+}
+
+export function toPredictionEventDetail(item: TradeBrowsePredictionItem): PredictionEventDetail {
+  return {
+    kind: 'prediction_event',
+    id: item.id,
+    eventId: item.eventId,
+    title: item.title,
+    image: item.image,
+    description: item.description,
+    probability: item.probability,
+    volume24h: item.volume24h,
+    url: item.url,
+    startDate: item.startDate,
+    endDate: item.endDate,
+    layout: item.layout,
+    source: item.source,
+    outcomes: toPredictionEventOutcomes(item),
+  };
+}
+
+async function upsertPredictionEventProjection(env: Bindings, item: TradeBrowsePredictionItem): Promise<string | null> {
+  const primaryMarketId = stripPolymarketPrefix(item.id);
+  if (!primaryMarketId) return null;
+
+  await ensurePredictionSchema(env.DB);
+
+  const detail = toPredictionEventDetail(item);
+  const sourceEventId = normalizeText(detail.eventId);
+  const predictionEventId = buildPredictionEventStorageId(sourceEventId, primaryMarketId);
+  const timestamp = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + PREDICTION_PROJECTION_TTL_MS).toISOString();
+  const outcomes = detail.outcomes;
+  const marketRows = detail.layout === 'winner'
+    ? outcomes.map((outcome, index) => ({
+        predictionMarketId: buildPredictionMarketStorageId(outcome.marketId),
+        sourceMarketId: outcome.marketId,
+        title: outcome.label,
+        url: detail.url,
+        volume24h: outcome.volume24h,
+        sortOrder: index,
+      }))
+    : [{
+        predictionMarketId: buildPredictionMarketStorageId(primaryMarketId),
+        sourceMarketId: primaryMarketId,
+        title: detail.title,
+        url: detail.url,
+        volume24h: detail.volume24h,
+        sortOrder: 0,
+      }];
+
+  const statements = [
+    env.DB.prepare(
+      `INSERT INTO prediction_events (
+        prediction_event_id, source, source_event_id, primary_market_id, title, description, image, url,
+        start_date, end_date, layout, probability, volume24h, raw_json, synced_at, expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(prediction_event_id) DO UPDATE SET
+        source = excluded.source,
+        source_event_id = excluded.source_event_id,
+        primary_market_id = excluded.primary_market_id,
+        title = excluded.title,
+        description = excluded.description,
+        image = excluded.image,
+        url = excluded.url,
+        start_date = excluded.start_date,
+        end_date = excluded.end_date,
+        layout = excluded.layout,
+        probability = excluded.probability,
+        volume24h = excluded.volume24h,
+        raw_json = excluded.raw_json,
+        synced_at = excluded.synced_at,
+        expires_at = excluded.expires_at,
+        updated_at = excluded.updated_at`,
+    ).bind(
+      predictionEventId,
+      detail.source,
+      sourceEventId,
+      primaryMarketId,
+      detail.title,
+      detail.description,
+      detail.image,
+      detail.url,
+      detail.startDate,
+      detail.endDate,
+      detail.layout,
+      detail.probability,
+      detail.volume24h,
+      JSON.stringify(detail),
+      timestamp,
+      expiresAt,
+      timestamp,
+      timestamp,
+    ),
+    env.DB.prepare('DELETE FROM prediction_outcomes WHERE prediction_event_id = ?').bind(predictionEventId),
+    env.DB.prepare('DELETE FROM prediction_markets WHERE prediction_event_id = ?').bind(predictionEventId),
+  ];
+
+  for (const market of marketRows) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO prediction_markets (
+          prediction_market_id, prediction_event_id, source, source_market_id, title, url, volume24h,
+          sort_order, raw_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        market.predictionMarketId,
+        predictionEventId,
+        detail.source,
+        market.sourceMarketId,
+        market.title,
+        market.url,
+        market.volume24h,
+        market.sortOrder,
+        JSON.stringify(market),
+        timestamp,
+        timestamp,
+      ),
+    );
+  }
+
+  for (const [index, outcome] of outcomes.entries()) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO prediction_outcomes (
+          prediction_outcome_id, prediction_event_id, prediction_market_id, source_outcome_id, label,
+          yes_token_id, no_token_id, yes_probability, no_probability, volume24h, sort_order, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        buildPredictionOutcomeStorageId(outcome.id),
+        predictionEventId,
+        buildPredictionMarketStorageId(outcome.marketId),
+        outcome.id,
+        outcome.label,
+        outcome.yesTokenId,
+        outcome.noTokenId,
+        outcome.probability,
+        outcome.noProbability,
+        outcome.volume24h,
+        index,
+        timestamp,
+        timestamp,
+      ),
+    );
+  }
+
+  await env.DB.batch(statements);
+  return predictionEventId;
+}
+
+async function readCachedPredictionEventProjection(
+  env: Bindings,
+  id: string,
+): Promise<{ detail: PredictionEventDetail; isExpired: boolean } | null> {
+  const normalizedId = normalizeText(id);
+  if (!normalizedId) return null;
+
+  await ensurePredictionSchema(env.DB);
+
+  const rawId = stripPolymarketPrefix(normalizedId) ?? normalizedId;
+  let eventRow = await env.DB
+    .prepare(
+      `SELECT prediction_event_id, source, source_event_id, primary_market_id, title, description, image, url,
+              start_date, end_date, layout, probability, volume24h, synced_at, expires_at
+       FROM prediction_events
+       WHERE prediction_event_id = ? OR source_event_id = ? OR primary_market_id = ?
+       LIMIT 1`,
+    )
+    .bind(normalizedId, rawId, rawId)
+    .first<StoredPredictionEventRow>();
+
+  if (!eventRow) {
+    eventRow = await env.DB
+      .prepare(
+        `SELECT e.prediction_event_id, e.source, e.source_event_id, e.primary_market_id, e.title, e.description, e.image, e.url,
+                e.start_date, e.end_date, e.layout, e.probability, e.volume24h, e.synced_at, e.expires_at
+         FROM prediction_events e
+         JOIN prediction_markets m ON m.prediction_event_id = e.prediction_event_id
+         WHERE m.source_market_id = ?
+         LIMIT 1`,
+      )
+      .bind(rawId)
+      .first<StoredPredictionEventRow>();
+  }
+
+  if (!eventRow) return null;
+
+  const outcomeRows = await env.DB
+    .prepare(
+      `SELECT o.source_outcome_id, m.source_market_id, o.label, o.yes_token_id, o.no_token_id,
+              o.yes_probability, o.no_probability, o.volume24h
+       FROM prediction_outcomes o
+       JOIN prediction_markets m ON m.prediction_market_id = o.prediction_market_id
+       WHERE o.prediction_event_id = ?
+       ORDER BY o.sort_order ASC, m.sort_order ASC`,
+    )
+    .bind(eventRow.prediction_event_id)
+    .all<StoredPredictionOutcomeRow>();
+
+  return {
+    isExpired: isProjectionExpired(eventRow.expires_at),
+    detail: {
+    kind: 'prediction_event',
+    id: eventRow.prediction_event_id,
+    eventId: eventRow.source_event_id,
+    title: eventRow.title,
+    image: eventRow.image,
+    description: eventRow.description,
+    probability: eventRow.probability,
+    volume24h: eventRow.volume24h,
+    url: eventRow.url,
+    startDate: eventRow.start_date,
+    endDate: eventRow.end_date,
+    layout: eventRow.layout,
+    source: 'polymarket',
+    outcomes: (outcomeRows.results ?? []).map((row) => ({
+      id: row.source_outcome_id,
+      eventId: eventRow.source_event_id,
+      marketId: row.source_market_id,
+      label: row.label,
+      probability: row.yes_probability,
+      noProbability: row.no_probability,
+      volume24h: row.volume24h,
+      yesTokenId: row.yes_token_id,
+      noTokenId: row.no_token_id,
+    })),
+    },
+  };
+}
+
+async function readThroughPredictionEventProjection(env: Bindings, id: string): Promise<PredictionEventDetail | null> {
+  const cached = await readCachedPredictionEventProjection(env, id);
+  if (cached && !cached.isExpired) return cached.detail;
+
+  const item = await fetchPredictionById(id);
+  if (!item) return cached?.detail ?? null;
+
+  const predictionEventId = await upsertPredictionEventProjection(env, item);
+  if (!predictionEventId) return toPredictionEventDetail(item);
+  const refreshed = await readCachedPredictionEventProjection(env, predictionEventId);
+  return refreshed?.detail ?? cached?.detail ?? toPredictionEventDetail(item);
 }
 
 async function fetchHyperliquidPerpKlines(
@@ -1248,6 +1735,46 @@ async function fetchPolymarketPredictionKlines(
   return output;
 }
 
+export async function fetchPredictionEventDetail(env: Bindings, id: string): Promise<PredictionEventDetail | null> {
+  return readThroughPredictionEventProjection(env, id);
+}
+
+export async function fetchPredictionEventSeries(
+  env: Bindings,
+  id: string,
+  period?: string,
+  size?: number,
+): Promise<PredictionEventSeries[]> {
+  const detail = await readThroughPredictionEventProjection(env, id);
+  if (!detail) return [];
+  const normalizedPeriod = normalizeTradeKlinePeriod(period);
+  const normalizedSize = sanitizeKlineSize(size);
+
+  const series = await Promise.all(detail.outcomes.map(async (outcome) => {
+    const tokenId = outcome.yesTokenId;
+    if (!tokenId) {
+      return {
+        outcomeId: outcome.id,
+        label: outcome.label,
+        tokenId: null,
+        latestValue: outcome.probability,
+        candles: [],
+      } satisfies PredictionEventSeries;
+    }
+
+    const candles = await fetchPolymarketPredictionKlines(tokenId, normalizedPeriod, normalizedSize);
+    return {
+      outcomeId: outcome.id,
+      label: outcome.label,
+      tokenId,
+      latestValue: candles[candles.length - 1]?.close ?? outcome.probability,
+      candles,
+    } satisfies PredictionEventSeries;
+  }));
+
+  return series;
+}
+
 export async function fetchTradeMarketKline(
   env: Bindings,
   options: {
@@ -1282,12 +1809,12 @@ export async function fetchTradeMarketKline(
   }
 
   if (options.type === 'prediction') {
-    const item = await fetchPredictionById(options.id);
+    const item = await readThroughPredictionEventProjection(env, options.id);
     const preferred = selectPredictionTokenId(item, options.optionTokenId);
     const candidates = [
       preferred,
-      ...(item?.options ?? [])
-        .map((option) => option.tokenId)
+      ...(item?.outcomes ?? [])
+        .map((outcome) => outcome.yesTokenId)
         .filter((tokenId): tokenId is string => Boolean(tokenId)),
     ].filter((tokenId, index, array): tokenId is string => Boolean(tokenId) && array.indexOf(tokenId) === index);
     for (const tokenId of candidates) {
@@ -1329,9 +1856,9 @@ export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseRespon
     const [topMovers, trendings, stocks, perps, predictions] = await Promise.all([
       safeFetch(() => fetchTopMovers(env), []),
       safeFetch(() => fetchTrendings(env), []),
-      safeFetch(() => fetchStocks(env), []),
-      safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 10)), []),
-      safeFetch(() => fetchPredictions(10), []),
+      safeFetch(() => fetchStocks(env).then((items) => items.slice(0, 5)), []),
+      safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 5)), []),
+      safeFetch(() => fetchPredictions(5), []),
     ]);
 
     const value: TradeBrowseResponse = {

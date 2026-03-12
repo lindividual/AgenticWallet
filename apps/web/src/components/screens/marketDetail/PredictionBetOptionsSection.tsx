@@ -1,21 +1,29 @@
 import { useTranslation } from 'react-i18next';
-import type { TradeBrowsePredictionOption, TradeBrowsePredictionOutcomeRow } from '../../../api';
+import type { PredictionEventOutcome } from '../../../api';
 
 function formatProbability(probability: number | null | undefined): string {
   if (!Number.isFinite(Number(probability))) return '--';
   return `${Number(probability).toFixed(1)}%`;
 }
 
+function formatCompactUsd(value: number | null | undefined, locale: string): string {
+  if (!Number.isFinite(Number(value))) return '--';
+  return `$${new Intl.NumberFormat(locale, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(Number(value))}`;
+}
+
 type PredictionBetOptionsSectionProps = {
   layout: 'binary' | 'winner';
-  options: TradeBrowsePredictionOption[];
-  outcomeRows: TradeBrowsePredictionOutcomeRow[];
+  outcomes: PredictionEventOutcome[];
   selectedOptionId: string | null;
   onSelectOption: (id: string) => void;
   betAmount: string;
   onBetAmountChange: (next: string) => void;
   onBet: (option: PredictionBetTarget) => void;
   pendingOptionId: string | null;
+  locale: string;
 };
 
 export type PredictionBetTarget = {
@@ -23,27 +31,28 @@ export type PredictionBetTarget = {
   label: string;
   tokenId: string | null;
   probability: number | null;
+  side: 'yes' | 'no';
 };
 
 export function PredictionBetOptionsSection({
   layout,
-  options,
-  outcomeRows,
+  outcomes,
   selectedOptionId,
   onSelectOption,
   betAmount,
   onBetAmountChange,
   onBet,
   pendingOptionId,
+  locale,
 }: PredictionBetOptionsSectionProps) {
   const { t } = useTranslation();
 
   return (
     <section className="p-0">
       <h2 className="m-0 text-lg font-bold">{t('trade.betOptions')}</h2>
-      {layout === 'winner' && outcomeRows.length > 0 ? (
+      {layout === 'winner' && outcomes.length > 0 ? (
         <div className="mt-3 flex flex-col gap-2">
-          <label className="flex flex-col gap-1 rounded-lg border border-base-content/10 bg-base-200/30 px-3 py-2">
+          <label className="flex flex-col gap-1 rounded-2xl border border-base-content/10 bg-base-100/70 px-4 py-3">
             <span className="text-xs text-base-content/60">{t('trade.betAmount')}</span>
             <input
               type="number"
@@ -56,7 +65,7 @@ export function PredictionBetOptionsSection({
               placeholder={t('trade.betAmountPlaceholder')}
             />
           </label>
-          {outcomeRows.map((row) => {
+          {outcomes.map((row) => {
             const selected = selectedOptionId === row.id;
             const yesPending = pendingOptionId === `${row.id}:yes`;
             const noPending = pendingOptionId === `${row.id}:no`;
@@ -64,59 +73,68 @@ export function PredictionBetOptionsSection({
             return (
               <div
                 key={row.id}
-                className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
-                  selected ? 'border-primary/60 bg-primary/10' : 'border-base-content/10 bg-base-200/30'
+                className={`rounded-2xl border p-4 transition ${
+                  selected ? 'border-primary/60 bg-primary/10' : 'border-base-content/10 bg-base-100/70'
                 }`}
               >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 text-left"
-                  onClick={() => onSelectOption(row.id)}
-                >
-                  <p className="m-0 text-sm font-semibold">{row.label}</p>
-                  <p className="m-0 mt-0.5 text-xs text-base-content/60">
-                    {t('trade.buyYes')}: {formatProbability(row.yesProbability)}
-                    {' · '}
-                    {t('trade.buyNo')}: {formatProbability(row.noProbability)}
-                  </p>
+                <button type="button" className="w-full text-left" onClick={() => onSelectOption(row.id)}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="m-0 truncate text-base font-semibold">{row.label}</p>
+                      <p className="m-0 mt-1 text-xs text-base-content/55">
+                        {formatCompactUsd(row.volume24h, locale)}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="m-0 text-3xl font-black text-base-content">{formatProbability(row.probability)}</p>
+                      <p className="m-0 text-xs text-base-content/55">{t('trade.probability')}</p>
+                    </div>
+                  </div>
                 </button>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="mt-4 grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    className="btn btn-xs btn-success border-0"
+                    className="btn btn-sm btn-success border-0"
                     disabled={!row.yesTokenId || hasPending}
                     onClick={() => onBet({
                       id: `${row.id}:yes`,
                       label: `${row.label} - Yes`,
                       tokenId: row.yesTokenId,
-                      probability: row.yesProbability,
+                      probability: row.probability,
+                      side: 'yes',
                     })}
                   >
-                    {yesPending ? <span className="loading loading-spinner loading-xs" /> : t('trade.buyYes')}
+                    {yesPending ? <span className="loading loading-spinner loading-xs" /> : `${t('trade.buyYes')} ${formatProbability(row.probability)}`}
                   </button>
                   <button
                     type="button"
-                    className="btn btn-xs btn-error border-0"
+                    className="btn btn-sm btn-outline border-base-content/15"
                     disabled={!row.noTokenId || hasPending}
                     onClick={() => onBet({
                       id: `${row.id}:no`,
                       label: `${row.label} - No`,
                       tokenId: row.noTokenId,
                       probability: row.noProbability,
+                      side: 'no',
                     })}
                   >
-                    {noPending ? <span className="loading loading-spinner loading-xs" /> : t('trade.buyNo')}
+                    {noPending ? <span className="loading loading-spinner loading-xs" /> : `${t('trade.buyNo')} ${formatProbability(row.noProbability)}`}
                   </button>
                 </div>
+                <p className="m-0 mt-3 text-xs text-base-content/50">
+                  {t('trade.buyYes')}: {formatProbability(row.probability)}
+                  {' · '}
+                  {t('trade.buyNo')}: {formatProbability(row.noProbability)}
+                </p>
               </div>
             );
           })}
         </div>
-      ) : !options.length ? (
+      ) : !outcomes.length ? (
         <p className="m-0 mt-3 text-sm text-base-content/60">{t('trade.noPredictionOptions')}</p>
       ) : (
         <div className="mt-3 flex flex-col gap-2">
-          <label className="flex flex-col gap-1 rounded-lg border border-base-content/10 bg-base-200/30 px-3 py-2">
+          <label className="flex flex-col gap-1 rounded-2xl border border-base-content/10 bg-base-100/70 px-4 py-3">
             <span className="text-xs text-base-content/60">{t('trade.betAmount')}</span>
             <input
               type="number"
@@ -129,31 +147,32 @@ export function PredictionBetOptionsSection({
               placeholder={t('trade.betAmountPlaceholder')}
             />
           </label>
-          {options.map((option) => {
+          {outcomes.map((option) => {
             const selected = selectedOptionId === option.id;
             const isPending = pendingOptionId === option.id;
-            const disableBet = !option.tokenId || pendingOptionId != null;
+            const disableBet = !option.yesTokenId || pendingOptionId != null;
             return (
               <div
                 key={option.id}
-                className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
-                  selected ? 'border-primary/60 bg-primary/10' : 'border-base-content/10 bg-base-200/30'
+                className={`rounded-2xl border p-4 ${
+                  selected ? 'border-primary/60 bg-primary/10' : 'border-base-content/10 bg-base-100/70'
                 }`}
               >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 text-left"
-                  onClick={() => onSelectOption(option.id)}
-                >
-                  <p className="m-0 text-sm font-semibold">{option.label}</p>
-                  <p className="m-0 mt-0.5 text-xs text-base-content/60">
-                    {t('trade.probability')}: {formatProbability(option.probability)}
-                  </p>
+                <button type="button" className="w-full text-left" onClick={() => onSelectOption(option.id)}>
+                  <p className="m-0 text-base font-semibold">{option.label}</p>
+                  <p className="m-0 mt-2 text-3xl font-black">{formatProbability(option.probability)}</p>
+                  <p className="m-0 mt-1 text-xs text-base-content/55">{t('trade.probability')}</p>
                 </button>
                 <button
-                  type="button"
-                  className="btn btn-xs btn-primary border-0"
-                  onClick={() => onBet(option)}
+                    type="button"
+                    className="btn btn-sm btn-primary mt-4 w-full border-0"
+                  onClick={() => onBet({
+                    id: option.id,
+                    label: option.label,
+                    tokenId: option.yesTokenId,
+                    probability: option.probability,
+                    side: 'yes',
+                  })}
                   disabled={disableBet}
                 >
                   {isPending ? (

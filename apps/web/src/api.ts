@@ -382,7 +382,7 @@ export type CoinDetailBatchItem = {
   detail: CoinDetail | null;
 };
 
-export type KlinePeriod = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
+export type KlinePeriod = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w' | 'all';
 
 export type KlineCandle = {
   time: number;
@@ -417,9 +417,12 @@ export type TradeBrowsePredictionItem = {
   instrument_id?: string;
   title: string;
   image: string | null;
+  description: string | null;
   probability: number | null;
   volume24h: number | null;
   url: string | null;
+  startDate: string | null;
+  endDate: string | null;
   layout?: 'binary' | 'winner';
   eventId?: string | null;
   outcomeRows?: TradeBrowsePredictionOutcomeRow[];
@@ -438,10 +441,48 @@ export type TradeBrowsePredictionOutcomeRow = {
   id: string;
   marketId: string;
   label: string;
+  volume: number | null;
   yesTokenId: string | null;
   noTokenId: string | null;
   yesProbability: number | null;
   noProbability: number | null;
+};
+
+export type PredictionEventOutcome = {
+  id: string;
+  eventId: string | null;
+  marketId: string;
+  label: string;
+  probability: number | null;
+  noProbability: number | null;
+  volume24h: number | null;
+  yesTokenId: string | null;
+  noTokenId: string | null;
+};
+
+export type PredictionEventDetail = {
+  kind: 'prediction_event';
+  id: string;
+  eventId: string | null;
+  title: string;
+  image: string | null;
+  description: string | null;
+  probability: number | null;
+  volume24h: number | null;
+  url: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  layout: 'binary' | 'winner';
+  source: 'polymarket';
+  outcomes: PredictionEventOutcome[];
+};
+
+export type PredictionEventSeries = {
+  outcomeId: string;
+  label: string;
+  tokenId: string | null;
+  latestValue: number | null;
+  candles: KlineCandle[];
 };
 
 export type TradeBrowseResponse = {
@@ -846,6 +887,32 @@ export async function getTradeMarketDetail(
     true,
   );
   return response.detail;
+}
+
+export async function getPredictionEventDetail(id: string): Promise<PredictionEventDetail> {
+  const query = new URLSearchParams();
+  query.set('id', id.trim());
+  const response = await getJson<{ detail: PredictionEventDetail }>(
+    `/v1/market/prediction-detail?${query.toString()}`,
+    true,
+  );
+  return response.detail;
+}
+
+export async function getPredictionEventKline(
+  id: string,
+  period: KlinePeriod = 'all',
+  size = 240,
+): Promise<PredictionEventSeries[]> {
+  const query = new URLSearchParams();
+  query.set('id', id.trim());
+  query.set('period', period);
+  query.set('size', String(size));
+  const response = await getJson<{ series: PredictionEventSeries[] }>(
+    `/v1/market/prediction-kline?${query.toString()}`,
+    true,
+  );
+  return response.series;
 }
 
 export async function getTradeBrowse(): Promise<TradeBrowseResponse> {

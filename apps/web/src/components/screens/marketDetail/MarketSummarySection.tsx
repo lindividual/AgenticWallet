@@ -20,6 +20,21 @@ function formatProbability(probability: number | null | undefined): string {
   return `${Number(probability).toFixed(1)}%`;
 }
 
+function ChangeTriangle({ direction }: { direction: 'up' | 'down' | 'flat' }) {
+  const rotationClass = direction === 'up' ? '' : direction === 'down' ? 'rotate-180' : 'rotate-90';
+
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 10 10"
+      className={`h-2.5 w-2.5 ${rotationClass}`}
+      fill="currentColor"
+    >
+      <path d="M5 1.5 8.5 7.5h-7Z" />
+    </svg>
+  );
+}
+
 type MarketSummarySectionProps = {
   isLoading: boolean;
   displayImage: string | null;
@@ -111,20 +126,11 @@ export function MarketSummarySection({
               <p className={`m-0 mt-1 flex items-center gap-1 text-base font-medium ${changeTone}`}>
                 <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
                   {hasChangeValue && numericChange > 0 ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 19V5" />
-                      <path d="M6 11l6-6 6 6" />
-                    </svg>
+                    <ChangeTriangle direction="up" />
                   ) : hasChangeValue && numericChange < 0 ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 5v14" />
-                      <path d="M18 13l-6 6-6-6" />
-                    </svg>
+                    <ChangeTriangle direction="down" />
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 12h14" />
-                      <path d="M15 8l4 4-4 4" />
-                    </svg>
+                    <ChangeTriangle direction="flat" />
                   )}
                 </span>
                 <span>{formatPct(displayChange24h)}</span>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react';
-import { ArrowLeft, ArrowUpDown, CheckCircle2, LoaderCircle, X } from 'lucide-react';
+import { ArrowUpDown, CheckCircle2, LoaderCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   ingestAgentEvent,
@@ -11,6 +11,7 @@ import {
 import { useToast } from '../../contexts/ToastContext';
 import { emitAgentInterventionSignal } from '../../utils/agentInterventionBus';
 import type { TradeTokenPreset } from '../../utils/tradeTokens';
+import { ModalContentScaffold } from './ModalContentScaffold';
 
 export type TradePreset = {
   mode: 'buy' | 'sell' | 'stableSwap';
@@ -32,6 +33,8 @@ type TradeContentProps = {
   onClose: () => void;
   onBack: () => void;
   onSubmitted?: (payload: TradeSubmitResponse) => void;
+  footerVisible?: boolean;
+  stageClassName?: string;
 };
 
 function formatRawAmount(rawAmount: string | null | undefined, decimals: number | null | undefined): string {
@@ -64,6 +67,8 @@ export function TradeContent({
   onClose,
   onBack,
   onSubmitted,
+  footerVisible = true,
+  stageClassName,
 }: TradeContentProps) {
   const { t } = useTranslation();
   const { showError, showSuccess } = useToast();
@@ -235,122 +240,107 @@ export function TradeContent({
   }
 
   return (
-    <div className="flex min-h-full flex-col">
-      <div className="flex flex-1 flex-col justify-start pt-8">
-        <header>
-          <h2 className="m-0 text-4xl font-bold tracking-tight">{getTitle()}</h2>
-        </header>
+    <ModalContentScaffold
+      title={getTitle()}
+      bodyClassName="justify-start pt-8"
+      stageClassName={stageClassName}
+      showBack
+      onBack={handleButtonClick(onBack)}
+      backAriaLabel={t('wallet.back')}
+      onClose={handleButtonClick(onClose)}
+      closeAriaLabel={t('common.close')}
+      footerVisible={footerVisible}
+    >
+      <div className="mt-8 flex flex-col gap-4">
+        <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
+          <p className="m-0 text-base-content/70">{t('wallet.transferChain')}</p>
+          <p className="m-0 mt-1 font-semibold">{selectedChain?.name ?? chainId}</p>
+        </div>
 
-        <div className="mt-8 flex flex-col gap-4">
-          <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
-            <p className="m-0 text-base-content/70">{t('wallet.transferChain')}</p>
-            <p className="m-0 mt-1 font-semibold">{selectedChain?.name ?? chainId}</p>
-          </div>
+        <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
+          <p className="m-0 text-base-content/70">{t('wallet.tradeFromToken')}</p>
+          <p className="m-0 mt-1 font-semibold">{sellToken?.symbol ?? '--'}</p>
+          <p className="m-0 mt-1 break-all text-base-content/60">{truncateAddress(sellToken?.address ?? '')}</p>
+        </div>
 
-          <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
-            <p className="m-0 text-base-content/70">{t('wallet.tradeFromToken')}</p>
-            <p className="m-0 mt-1 font-semibold">{sellToken?.symbol ?? '--'}</p>
-            <p className="m-0 mt-1 break-all text-base-content/60">{truncateAddress(sellToken?.address ?? '')}</p>
-          </div>
+        {preset?.mode === 'stableSwap' ? (
+          <button type="button" className="btn btn-outline" onClick={flipStablePair}>
+            <ArrowUpDown size={16} />
+            {t('wallet.tradeFlipPair')}
+          </button>
+        ) : null}
 
-          {preset?.mode === 'stableSwap' ? (
-            <button type="button" className="btn btn-outline" onClick={flipStablePair}>
-              <ArrowUpDown size={16} />
-              {t('wallet.tradeFlipPair')}
-            </button>
-          ) : null}
+        <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
+          <p className="m-0 text-base-content/70">{t('wallet.tradeToToken')}</p>
+          <p className="m-0 mt-1 font-semibold">{buyToken?.symbol ?? '--'}</p>
+          <p className="m-0 mt-1 break-all text-base-content/60">{truncateAddress(buyToken?.address ?? '')}</p>
+        </div>
 
-          <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
-            <p className="m-0 text-base-content/70">{t('wallet.tradeToToken')}</p>
-            <p className="m-0 mt-1 font-semibold">{buyToken?.symbol ?? '--'}</p>
-            <p className="m-0 mt-1 break-all text-base-content/60">{truncateAddress(buyToken?.address ?? '')}</p>
-          </div>
+        <label className="flex flex-col gap-2">
+          <span className="text-sm text-base-content/70">{t('wallet.tradeSellAmount')}</span>
+          <input
+            className="input input-bordered w-full"
+            placeholder="0.0"
+            value={sellAmount}
+            inputMode="decimal"
+            onChange={(event) => {
+              setSellAmount(event.target.value);
+              setQuote(null);
+              setEditCount((value) => value + 1);
+            }}
+            disabled={quoting || submitting}
+          />
+        </label>
 
-          <label className="flex flex-col gap-2">
-            <span className="text-sm text-base-content/70">{t('wallet.tradeSellAmount')}</span>
-            <input
-              className="input input-bordered w-full"
-              placeholder="0.0"
-              value={sellAmount}
-              inputMode="decimal"
-              onChange={(event) => {
-                setSellAmount(event.target.value);
+        <label className="flex flex-col gap-2">
+          <span className="text-sm text-base-content/70">{t('wallet.tradeSlippage')}</span>
+          <input
+            className="input input-bordered w-full"
+            placeholder="100"
+            value={String(slippageBps)}
+            inputMode="numeric"
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (!Number.isFinite(next)) {
+                setSlippageBps(100);
                 setQuote(null);
                 setEditCount((value) => value + 1);
-              }}
-              disabled={quoting || submitting}
-            />
-          </label>
+                return;
+              }
+              setSlippageBps(Math.max(5, Math.min(3000, Math.floor(next))));
+              setQuote(null);
+              setEditCount((value) => value + 1);
+            }}
+            disabled={quoting || submitting}
+          />
+        </label>
 
-          <label className="flex flex-col gap-2">
-            <span className="text-sm text-base-content/70">{t('wallet.tradeSlippage')}</span>
-            <input
-              className="input input-bordered w-full"
-              placeholder="100"
-              value={String(slippageBps)}
-              inputMode="numeric"
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (!Number.isFinite(next)) {
-                  setSlippageBps(100);
-                  setQuote(null);
-                  setEditCount((value) => value + 1);
-                  return;
-                }
-                setSlippageBps(Math.max(5, Math.min(3000, Math.floor(next))));
-                setQuote(null);
-                setEditCount((value) => value + 1);
-              }}
-              disabled={quoting || submitting}
-            />
-          </label>
-
-          {quote ? (
-            <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
-              <p className="m-0 text-base-content/70">{t('wallet.tradeExpectedReceive')}</p>
-              <p className="m-0 mt-1 break-all font-semibold">
-                {formatRawAmount(quote.expectedBuyAmountRaw, quote.buyTokenDecimals)} {quote.buyTokenSymbol ?? buyToken?.symbol ?? ''}
-              </p>
-              <p className="m-0 mt-2 text-base-content/60">
-                {t('wallet.transferQuoteFee')}: {getEstimatedFeeText(quote)}
-              </p>
-              {quote.needsApproval ? (
-                <p className="m-0 mt-2 text-warning">{t('wallet.tradeApprovalRequired')}</p>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div className="mt-2 grid grid-cols-2 gap-3">
-            <button type="button" className="btn btn-outline" disabled={quoting || submitting} onClick={() => void handleQuote()}>
-              {quoting ? <LoaderCircle size={16} className="animate-spin" /> : null}
-              {t('wallet.tradeReview')}
-            </button>
-            <button type="button" className="btn btn-primary" disabled={quoting || submitting} onClick={() => void handleSubmit()}>
-              {submitting ? <LoaderCircle size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-              {submitting ? t('wallet.tradeSubmitting') : t('wallet.tradeSubmit')}
-            </button>
+        {quote ? (
+          <div className="rounded-2xl border border-base-300 bg-base-100 p-4 text-sm">
+            <p className="m-0 text-base-content/70">{t('wallet.tradeExpectedReceive')}</p>
+            <p className="m-0 mt-1 break-all font-semibold">
+              {formatRawAmount(quote.expectedBuyAmountRaw, quote.buyTokenDecimals)} {quote.buyTokenSymbol ?? buyToken?.symbol ?? ''}
+            </p>
+            <p className="m-0 mt-2 text-base-content/60">
+              {t('wallet.transferQuoteFee')}: {getEstimatedFeeText(quote)}
+            </p>
+            {quote.needsApproval ? (
+              <p className="m-0 mt-2 text-warning">{t('wallet.tradeApprovalRequired')}</p>
+            ) : null}
           </div>
+        ) : null}
+
+        <div className="mt-2 grid grid-cols-2 gap-3">
+          <button type="button" className="btn btn-outline" disabled={quoting || submitting} onClick={() => void handleQuote()}>
+            {quoting ? <LoaderCircle size={16} className="animate-spin" /> : null}
+            {t('wallet.tradeReview')}
+          </button>
+          <button type="button" className="btn btn-primary" disabled={quoting || submitting} onClick={() => void handleSubmit()}>
+            {submitting ? <LoaderCircle size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+            {submitting ? t('wallet.tradeSubmitting') : t('wallet.tradeSubmit')}
+          </button>
         </div>
       </div>
-
-      <div className="mt-auto flex items-center justify-between pt-6">
-        <button
-          type="button"
-          className="btn btn-ghost h-12 w-12 p-0"
-          onClick={handleButtonClick(onBack)}
-          aria-label={t('wallet.back')}
-        >
-          <ArrowLeft size={32} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost h-12 w-12 p-0"
-          aria-label={t('common.close')}
-          onClick={handleButtonClick(onClose)}
-        >
-          <X size={26} aria-hidden />
-        </button>
-      </div>
-    </div>
+    </ModalContentScaffold>
   );
 }

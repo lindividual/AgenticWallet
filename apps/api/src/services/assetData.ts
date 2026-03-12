@@ -71,6 +71,23 @@ export type InstrumentRecord = {
   updated_at: string;
 };
 
+export type StoredMarketSearchRecord = {
+  instrument_id: string;
+  asset_id: string;
+  market_type: MarketType;
+  venue: string | null;
+  instrument_symbol: string | null;
+  chain: string | null;
+  contract_key: string | null;
+  source_item_id: string | null;
+  metadata_json: string | null;
+  asset_class: AssetClass;
+  asset_symbol: string | null;
+  asset_name: string | null;
+  logo_uri: string | null;
+  updated_at: string;
+};
+
 const NATIVE_SYMBOL_BY_CHAIN: Record<string, string> = {
   eth: 'ETH',
   base: 'ETH',
@@ -782,6 +799,62 @@ export async function listAssetsBySymbols(db: D1Database, symbols: string[]): Pr
     )
     .bind(...normalizedSymbols)
     .all<AssetRecord>();
+  return result.results ?? [];
+}
+
+export async function searchStoredMarketRecords(
+  db: D1Database,
+  query: string,
+  limit = 20,
+): Promise<StoredMarketSearchRecord[]> {
+  const normalized = normalizeText(query)?.toLowerCase();
+  if (!normalized) return [];
+  await ensureAssetSchema(db);
+  const like = `%${normalized}%`;
+  const exact = normalized.toUpperCase();
+  const clampedLimit = Math.max(1, Math.min(Math.trunc(limit || 20), 100));
+  const result = await db
+    .prepare(
+      `SELECT i.instrument_id, i.asset_id, i.market_type, i.venue, i.symbol AS instrument_symbol, i.chain,
+              i.contract_key, i.source_item_id, i.metadata_json, i.updated_at,
+              a.asset_class, a.symbol AS asset_symbol, a.name AS asset_name, a.logo_uri
+       FROM instruments i
+       INNER JOIN assets a ON a.asset_id = i.asset_id
+       WHERE i.status = 'active'
+         AND a.status = 'active'
+         AND (
+           lower(COALESCE(i.symbol, '')) LIKE ?
+           OR lower(COALESCE(a.symbol, '')) LIKE ?
+           OR lower(COALESCE(a.name, '')) LIKE ?
+           OR lower(COALESCE(i.source_item_id, '')) LIKE ?
+           OR lower(COALESCE(i.venue, '')) LIKE ?
+         )
+       ORDER BY
+         CASE
+           WHEN upper(COALESCE(i.symbol, '')) = ? THEN 0
+           WHEN upper(COALESCE(a.symbol, '')) = ? THEN 1
+           WHEN lower(COALESCE(a.name, '')) = ? THEN 2
+           WHEN lower(COALESCE(i.symbol, '')) LIKE ? THEN 3
+           WHEN lower(COALESCE(a.symbol, '')) LIKE ? THEN 4
+           ELSE 5
+         END,
+         i.updated_at DESC
+       LIMIT ?`,
+    )
+    .bind(
+      like,
+      like,
+      like,
+      like,
+      like,
+      exact,
+      exact,
+      normalized,
+      `${normalized}%`,
+      `${normalized}%`,
+      clampedLimit,
+    )
+    .all<StoredMarketSearchRecord>();
   return result.results ?? [];
 }
 

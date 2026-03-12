@@ -7,6 +7,8 @@ import {
   getMarketByInstrumentId,
   getMarketCandlesByInstrumentId,
   getMarketWatchlist,
+  getPredictionEventDetail,
+  getPredictionEventKline,
   resolveAssetIdentity,
   getTradeMarketDetail,
   getTradeMarketKline,
@@ -16,9 +18,9 @@ import {
   removeMarketWatchlistAsset,
   submitPredictionBet,
   type KlinePeriod,
+  type PredictionEventOutcome,
+  type PredictionEventSeries,
   type TradeBrowseMarketItem,
-  type TradeBrowsePredictionOption,
-  type TradeBrowsePredictionItem,
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -31,8 +33,9 @@ import {
   type TradeMarketDetailType,
 } from '../../utils/tradeMarketDetail';
 import { MarketInfoSection } from './marketDetail/MarketInfoSection';
-import { MarketKlineSection } from './marketDetail/MarketKlineSection';
+import { MarketKlineSection, type PredictionKlineSeries } from './marketDetail/MarketKlineSection';
 import { MarketSummarySection } from './marketDetail/MarketSummarySection';
+import { PredictionOverviewSection } from './marketDetail/PredictionOverviewSection';
 import { PredictionBetOptionsSection, type PredictionBetTarget } from './marketDetail/PredictionBetOptionsSection';
 
 type MarketDetailScreenProps = {
@@ -51,6 +54,17 @@ const KLINE_PERIOD_OPTIONS: Array<{
   { value: '1d', labelKey: 'trade.klinePeriod1d' },
 ];
 
+const PREDICTION_KLINE_PERIOD_OPTIONS: Array<{
+  value: KlinePeriod;
+  label: string;
+}> = [
+  { value: '15m', label: '1H' },
+  { value: '1h', label: '6H' },
+  { value: '4h', label: '1D' },
+  { value: '1d', label: '1W' },
+  { value: 'all', label: 'ALL' },
+];
+
 const KLINE_CANDLE_WIDTH_SECONDS: Record<KlinePeriod, number> = {
   '1m': 60,
   '5m': 300,
@@ -60,6 +74,7 @@ const KLINE_CANDLE_WIDTH_SECONDS: Record<KlinePeriod, number> = {
   '4h': 14_400,
   '1d': 86_400,
   '1w': 604_800,
+  all: 86_400,
 };
 
 function resolveThemeColor(variable: string, fallback: string): string {
@@ -117,10 +132,11 @@ function toTradeBrowseMarketItemLike(value: unknown): TradeBrowseMarketItem | nu
   };
 }
 
-function isTradeBrowsePredictionItem(value: unknown): value is TradeBrowsePredictionItem {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+function toPredictionSourceItemId(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  return typeof row.title === 'string' && row.source === 'polymarket';
+  const id = typeof row.id === 'string' ? row.id.trim() : '';
+  return id || null;
 }
 
 export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailScreenProps) {
@@ -129,7 +145,9 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const { showError, showSuccess } = useToast();
   const queryClient = useQueryClient();
   const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
-  const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>('1h');
+  const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>(() => (
+    normalizeTradeMarketDetailType(marketType) === 'prediction' ? 'all' : '1h'
+  ));
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
   const [selectedPredictionOptionId, setSelectedPredictionOptionId] = useState<string | null>(null);
@@ -187,7 +205,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     queryFn: () => getTradeMarketDetail(normalizedType, normalizedItemId),
     staleTime: 60_000,
     refetchInterval: 90_000,
-    enabled: Boolean(normalizedItemId) && !isInstrumentRouteItem,
+    enabled: Boolean(normalizedItemId) && !isInstrumentRouteItem && normalizedType !== 'prediction',
   });
 
   const stockItem = useMemo<TradeBrowseMarketItem | null>(
@@ -218,41 +236,39 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     },
     [browseData?.perps, detailItem, instrumentMarket?.providerDetail, normalizedItemId, normalizedType],
   );
-  const predictionItem = useMemo<TradeBrowsePredictionItem | null>(
-    () => {
-      const fromInstrument = normalizedType === 'prediction' && isTradeBrowsePredictionItem(instrumentMarket?.providerDetail)
-        ? instrumentMarket.providerDetail
-        : null;
-      if (fromInstrument) return fromInstrument;
-      const fromDetail = normalizedType === 'prediction'
-        && detailItem
-        && detailItem.source === 'polymarket'
-        ? detailItem as TradeBrowsePredictionItem
-        : null;
-      if (fromDetail) return fromDetail;
-      return browseData?.predictions.find((item) => item.id === normalizedItemId) ?? null;
-    },
-    [browseData?.predictions, detailItem, instrumentMarket?.providerDetail, normalizedItemId, normalizedType],
-  );
+  const predictionDetailId = useMemo(() => {
+    if (normalizedType !== 'prediction') return null;
+    if (!isInstrumentRouteItem) return normalizedItemId || null;
+    return instrumentMarket?.instrument.source_item_id?.trim()
+      || toPredictionSourceItemId(instrumentMarket?.providerDetail)
+      || null;
+  }, [instrumentMarket?.instrument.source_item_id, instrumentMarket?.providerDetail, isInstrumentRouteItem, normalizedItemId, normalizedType]);
+
+  const { data: predictionDetail, isLoading: isPredictionDetailLoading } = useQuery({
+    queryKey: ['prediction-event-detail', predictionDetailId],
+    queryFn: () => getPredictionEventDetail(predictionDetailId ?? ''),
+    enabled: normalizedType === 'prediction' && Boolean(predictionDetailId),
+    staleTime: 60_000,
+    refetchInterval: 90_000,
+  });
 
   const activeMarketItem = normalizedType === 'stock' ? stockItem : normalizedType === 'perp' ? perpItem : null;
-  const activePredictionItem = normalizedType === 'prediction' ? predictionItem : null;
-  const isSummaryLoading = (isLoading || isDetailLoading || isInstrumentLoading) && !activeMarketItem && !activePredictionItem;
+  const activePredictionItem = normalizedType === 'prediction' ? predictionDetail : null;
+  const isSummaryLoading = (isLoading || isDetailLoading || isInstrumentLoading || isPredictionDetailLoading) && !activeMarketItem && !activePredictionItem;
   const predictionLayout = activePredictionItem?.layout === 'winner' ? 'winner' : 'binary';
-  const predictionOutcomeRows = activePredictionItem?.outcomeRows ?? [];
-  const predictionOptions = activePredictionItem?.options ?? [];
-  const selectedPredictionOption = useMemo<TradeBrowsePredictionOption | null>(() => {
-    if (!predictionOptions.length) return null;
+  const predictionOutcomes = activePredictionItem?.outcomes ?? [];
+  const selectedPredictionOption = useMemo<PredictionEventOutcome | null>(() => {
+    if (!predictionOutcomes.length) return null;
     if (selectedPredictionOptionId) {
-      const matched = predictionOptions.find((option) => option.id === selectedPredictionOptionId);
+      const matched = predictionOutcomes.find((option) => option.id === selectedPredictionOptionId);
       if (matched) return matched;
     }
-    const ranked = predictionOptions
-      .filter((option) => Boolean(option.tokenId))
+    const ranked = predictionOutcomes
+      .filter((option) => Boolean(option.yesTokenId))
       .slice()
       .sort((a, b) => (b.probability ?? Number.NEGATIVE_INFINITY) - (a.probability ?? Number.NEGATIVE_INFINITY));
-    return ranked[0] ?? predictionOptions[0] ?? null;
-  }, [predictionOptions, selectedPredictionOptionId]);
+    return ranked[0] ?? predictionOutcomes[0] ?? null;
+  }, [predictionOutcomes, selectedPredictionOptionId]);
 
   const displayName = activeMarketItem?.name ?? activePredictionItem?.title ?? normalizedItemId;
   const displaySymbol = activeMarketItem?.symbol ?? '';
@@ -267,14 +283,17 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const displayMetaValue = activeMarketItem?.metaValue ?? null;
   const displayChain = activeMarketItem?.chain ?? null;
   const displayContract = activeMarketItem?.contract ?? null;
-  const selectedPredictionTokenId = selectedPredictionOption?.tokenId ?? null;
+  const predictionDescription = activePredictionItem?.description ?? null;
+  const predictionEndDate = activePredictionItem?.endDate ?? null;
+  const predictionKlineItemId = activePredictionItem?.id ?? predictionDetailId;
   const normalizedKlineChain = (displayChain ?? '').trim().toLowerCase();
   const normalizedKlineContract = (displayContract ?? '').trim().toLowerCase();
+  const klineSize = normalizedType === 'prediction' ? 240 : 60;
   const fallbackHasKlineSupport = normalizedType === 'stock'
     ? normalizedItemId.startsWith('binance-stock:') || (Boolean(normalizedKlineChain) && /^0x[a-f0-9]{40}$/.test(normalizedKlineContract))
     : normalizedType === 'perp'
       ? normalizedItemId.startsWith('hyperliquid:')
-      : Boolean(activePredictionItem) && Boolean(selectedPredictionTokenId);
+      : Boolean(activePredictionItem) && predictionOutcomes.some((outcome) => Boolean(outcome.yesTokenId));
   const hasKlineSupport = Boolean(activeInstrumentId) || fallbackHasKlineSupport;
 
   const {
@@ -288,35 +307,42 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       activeInstrumentId,
       normalizedKlineChain,
       normalizedKlineContract,
-      selectedPredictionTokenId,
       klinePeriod,
+      klineSize,
     ],
     queryFn: () => {
       if (activeInstrumentId) {
         return getMarketCandlesByInstrumentId(
           activeInstrumentId,
           klinePeriod,
-          60,
-          normalizedType === 'prediction' ? selectedPredictionTokenId : null,
+          klineSize,
+          null,
         );
       }
       if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
-        return getTradeMarketKline(normalizedType, normalizedItemId, klinePeriod, 60);
+        return getTradeMarketKline(normalizedType, normalizedItemId, klinePeriod, klineSize);
       }
       if (normalizedType === 'stock') {
-        return getTokenKline(normalizedKlineChain, normalizedKlineContract, klinePeriod, 60);
+        return getTokenKline(normalizedKlineChain, normalizedKlineContract, klinePeriod, klineSize);
       }
       return getTradeMarketKline(
         normalizedType,
         normalizedItemId,
         klinePeriod,
-        60,
-        normalizedType === 'prediction' ? selectedPredictionTokenId : null,
+        klineSize,
+        null,
       );
     },
     staleTime: 20_000,
     refetchInterval: 30_000,
-    enabled: hasKlineSupport,
+    enabled: hasKlineSupport && normalizedType !== 'prediction',
+  });
+  const { data: predictionKlineData, isLoading: isPredictionKlineLoading } = useQuery({
+    queryKey: ['prediction-event-kline', predictionKlineItemId, klinePeriod, klineSize],
+    queryFn: () => getPredictionEventKline(predictionKlineItemId ?? '', klinePeriod, klineSize),
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+    enabled: normalizedType === 'prediction' && Boolean(predictionKlineItemId),
   });
 
   const watchType = toWatchTypeFromTradeMarketType(normalizedType);
@@ -340,6 +366,27 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     () => toLivelinePoints(chartCandles),
     [chartCandles],
   );
+  const predictionSeries = useMemo<PredictionKlineSeries[]>(
+    () => (predictionKlineData ?? []).map((series: PredictionEventSeries) => {
+      const line = toLivelinePoints(normalizeCandlesForLiveline(series.candles));
+      return {
+        id: series.outcomeId,
+        label: series.label,
+        line,
+        latestValue: line[line.length - 1]?.value ?? series.latestValue ?? null,
+        isSelected: series.outcomeId === (selectedPredictionOption?.id ?? null),
+      };
+    }),
+    [predictionKlineData, selectedPredictionOption?.id],
+  );
+  const hasPredictionChartData = predictionSeries.some((item) => item.line.length > 0);
+  const topPredictionOptions = useMemo(
+    () => predictionOutcomes
+      .slice()
+      .sort((a, b) => (b.probability ?? Number.NEGATIVE_INFINITY) - (a.probability ?? Number.NEGATIVE_INFINITY))
+      .slice(0, 4),
+    [predictionOutcomes],
+  );
   const latestChartValue = chartLine.length > 0
     ? chartLine[chartLine.length - 1].value
     : normalizedType === 'prediction'
@@ -350,7 +397,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     () => computeAdaptiveChartWindowSeconds(chartCandles, candleWidth, 60),
     [candleWidth, chartCandles],
   );
-  const isChartLoading = hasKlineSupport && isKlineLoading && chartCandles.length === 0;
+  const isPredictionChartLoading = normalizedType === 'prediction'
+    && isPredictionKlineLoading
+    && !hasPredictionChartData;
+  const isChartLoading = normalizedType === 'prediction'
+    ? isPredictionChartLoading
+    : hasKlineSupport && isKlineLoading && chartCandles.length === 0;
   const chartColor = useMemo(
     () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
     [resolvedTheme],
@@ -370,62 +422,75 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       setSelectedPredictionOptionId(null);
       return;
     }
-    if (!predictionOptions.length) {
+    if (!predictionOutcomes.length) {
       setSelectedPredictionOptionId(null);
       return;
     }
     const hasCurrent = selectedPredictionOptionId
-      ? predictionOptions.some((option) => option.id === selectedPredictionOptionId)
+      ? predictionOutcomes.some((option) => option.id === selectedPredictionOptionId)
       : false;
     if (hasCurrent) return;
-    const ranked = predictionOptions
-      .filter((option) => Boolean(option.tokenId))
+    const ranked = predictionOutcomes
+      .filter((option) => Boolean(option.yesTokenId))
       .slice()
       .sort((a, b) => (b.probability ?? Number.NEGATIVE_INFINITY) - (a.probability ?? Number.NEGATIVE_INFINITY));
-    const fallback = ranked[0] ?? predictionOptions[0];
+    const fallback = ranked[0] ?? predictionOutcomes[0];
     setSelectedPredictionOptionId(fallback?.id ?? null);
-  }, [normalizedType, predictionOptions, selectedPredictionOptionId]);
+  }, [normalizedType, predictionOutcomes, selectedPredictionOptionId]);
 
   async function switchKlinePeriod(nextPeriod: KlinePeriod): Promise<void> {
     if (!hasKlineSupport || nextPeriod === klinePeriod || pendingKlinePeriod) return;
     setPendingKlinePeriod(nextPeriod);
     try {
-      await queryClient.fetchQuery({
-        queryKey: [
-          'trade-market-kline',
-          normalizedType,
-          normalizedItemId,
-          activeInstrumentId,
-          normalizedKlineChain,
-          normalizedKlineContract,
-          selectedPredictionTokenId,
-          nextPeriod,
-        ],
-        queryFn: () => {
-          if (activeInstrumentId) {
-            return getMarketCandlesByInstrumentId(
-              activeInstrumentId,
-              nextPeriod,
-              60,
-              normalizedType === 'prediction' ? selectedPredictionTokenId : null,
-            );
-          }
-          if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
-            return getTradeMarketKline(normalizedType, normalizedItemId, nextPeriod, 60);
-          }
-          if (normalizedType === 'stock') {
-            return getTokenKline(normalizedKlineChain, normalizedKlineContract, nextPeriod, 60);
-          }
-          return getTradeMarketKline(
+      if (normalizedType === 'prediction') {
+        await queryClient.fetchQuery({
+          queryKey: [
+            'prediction-event-kline',
+            predictionKlineItemId,
+            nextPeriod,
+            klineSize,
+          ],
+          queryFn: () => getPredictionEventKline(predictionKlineItemId ?? '', nextPeriod, klineSize),
+          staleTime: 20_000,
+        });
+      } else {
+        await queryClient.fetchQuery({
+          queryKey: [
+            'trade-market-kline',
             normalizedType,
             normalizedItemId,
+            activeInstrumentId,
+            normalizedKlineChain,
+            normalizedKlineContract,
             nextPeriod,
-            60,
-            normalizedType === 'prediction' ? selectedPredictionTokenId : null,
-          );
-        },
-        staleTime: 20_000,
-      });
+            klineSize,
+          ],
+          queryFn: () => {
+            if (activeInstrumentId) {
+              return getMarketCandlesByInstrumentId(
+                activeInstrumentId,
+                nextPeriod,
+                klineSize,
+                null,
+              );
+            }
+            if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
+              return getTradeMarketKline(normalizedType, normalizedItemId, nextPeriod, klineSize);
+            }
+            if (normalizedType === 'stock') {
+              return getTokenKline(normalizedKlineChain, normalizedKlineContract, nextPeriod, klineSize);
+            }
+            return getTradeMarketKline(
+              normalizedType,
+              normalizedItemId,
+              nextPeriod,
+              klineSize,
+              null,
+            );
+          },
+          staleTime: 20_000,
+        });
+      }
       setKlinePeriod(nextPeriod);
     } finally {
       setPendingKlinePeriod(null);
@@ -523,23 +588,35 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   }
 
   const klinePeriodButtons = (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {KLINE_PERIOD_OPTIONS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          className={`btn btn-xs border-0 px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
-          onClick={() => void switchKlinePeriod(option.value)}
-          disabled={pendingKlinePeriod != null}
-        >
-          {pendingKlinePeriod === option.value ? (
-            <span className="loading loading-spinner loading-xs" />
-          ) : (
-            t(option.labelKey)
-          )}
-        </button>
+    <>
+      {(normalizedType === 'prediction' ? PREDICTION_KLINE_PERIOD_OPTIONS : KLINE_PERIOD_OPTIONS).map((option) => (
+        'labelKey' in option ? (
+          <button
+            key={option.value}
+            type="button"
+            className={`btn btn-xs border-0 px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => void switchKlinePeriod(option.value)}
+            disabled={pendingKlinePeriod != null}
+          >
+            {pendingKlinePeriod === option.value ? (
+              <span className="loading loading-spinner loading-xs" />
+            ) : (
+              t(option.labelKey)
+            )}
+          </button>
+        ) : (
+          <button
+            key={option.value}
+            type="button"
+            className={`btn btn-xs border-0 px-3 ${klinePeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => void switchKlinePeriod(option.value)}
+            disabled={pendingKlinePeriod != null}
+          >
+            {pendingKlinePeriod === option.value ? <span className="loading loading-spinner loading-xs" /> : option.label}
+          </button>
+        )
       ))}
-    </div>
+    </>
   );
 
   return (
@@ -571,28 +648,26 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
         </button>
       </header>
 
-      <MarketSummarySection
-        isLoading={isSummaryLoading}
-        displayImage={displayImage}
-        displayName={displayName}
-        displaySymbol={displaySymbol}
-        normalizedType={normalizedType}
-        displayPrice={displayPrice}
-        displayProbability={displayProbability}
-        displayChange24h={displayChange24h}
-      />
-
-      {normalizedType === 'prediction' && (
-        <PredictionBetOptionsSection
-          layout={predictionLayout}
-          options={predictionOptions}
-          outcomeRows={predictionOutcomeRows}
-          selectedOptionId={selectedPredictionOption?.id ?? null}
-          onSelectOption={setSelectedPredictionOptionId}
-          betAmount={predictionBetAmount}
-          onBetAmountChange={setPredictionBetAmount}
-          onBet={(option) => void submitPredictionBetOrder(option)}
-          pendingOptionId={pendingPredictionOptionId}
+      {normalizedType === 'prediction' ? (
+        <PredictionOverviewSection
+          title={displayName}
+          image={displayImage}
+          description={predictionDescription}
+          volume24h={displayVolume24h}
+          endDate={predictionEndDate}
+          topOptions={topPredictionOptions}
+          locale={i18n.language}
+        />
+      ) : (
+        <MarketSummarySection
+          isLoading={isSummaryLoading}
+          displayImage={displayImage}
+          displayName={displayName}
+          displaySymbol={displaySymbol}
+          normalizedType={normalizedType}
+          displayPrice={displayPrice}
+          displayProbability={displayProbability}
+          displayChange24h={displayChange24h}
         />
       )}
 
@@ -611,7 +686,23 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
         resolvedTheme={resolvedTheme}
         chartColor={chartColor}
         locale={i18n.language}
+        predictionSeries={predictionSeries}
+        onSelectPredictionSeries={normalizedType === 'prediction' ? setSelectedPredictionOptionId : undefined}
       />
+
+      {normalizedType === 'prediction' && (
+        <PredictionBetOptionsSection
+          layout={predictionLayout}
+          outcomes={predictionOutcomes}
+          selectedOptionId={selectedPredictionOption?.id ?? null}
+          onSelectOption={setSelectedPredictionOptionId}
+          betAmount={predictionBetAmount}
+          onBetAmountChange={setPredictionBetAmount}
+          onBet={(option) => void submitPredictionBetOrder(option)}
+          pendingOptionId={pendingPredictionOptionId}
+          locale={i18n.language}
+        />
+      )}
 
       <MarketInfoSection
         isLoading={isSummaryLoading}

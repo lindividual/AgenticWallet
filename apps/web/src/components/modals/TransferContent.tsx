@@ -3,6 +3,7 @@ import { ArrowLeft, CheckCircle2, LoaderCircle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { quoteTransfer, submitTransfer, type TransferQuoteResponse, type TransferRecord } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
+import { ModalContentScaffold } from './ModalContentScaffold';
 
 type TransferContentProps = {
   active: boolean;
@@ -20,6 +21,8 @@ type TransferContentProps = {
   onClose: () => void;
   onBack: () => void;
   onSubmitted: (transfer: TransferRecord) => void;
+  footerVisible?: boolean;
+  stageClassName?: string;
 };
 
 type TransferStep = 'address' | 'amount' | 'review' | 'waiting' | 'result';
@@ -60,6 +63,8 @@ export function TransferContent({
   onClose,
   onBack,
   onSubmitted,
+  footerVisible = true,
+  stageClassName,
 }: TransferContentProps) {
   const { t } = useTranslation();
   const { showError, showSuccess } = useToast();
@@ -438,37 +443,25 @@ export function TransferContent({
   }
 
   return (
-    <div className="flex min-h-full flex-col">
-      <div className="flex flex-1 flex-col justify-start pt-8">
-        <header>
-          <h2 className="m-0 text-4xl font-bold tracking-tight">{t('wallet.transferTitle')}</h2>
-          <p className="m-0 mt-3 text-sm text-base-content/70">{getStepTitle()}</p>
+    <ModalContentScaffold
+      title={t('wallet.transferTitle')}
+      headerMeta={(
+        <>
+          <p className="m-0 text-sm text-base-content/70">{getStepTitle()}</p>
           <progress className="progress progress-primary mt-3 w-full" value={stepIndex} max={5} />
-        </header>
-
-        {renderStepContent()}
-      </div>
-
-      {step === 'waiting' || step === 'result' ? null : (
-        <div className="mt-auto flex items-center justify-between pt-6">
-          <button
-            type="button"
-            className="btn btn-ghost h-12 w-12 p-0"
-            onClick={handleButtonClick(handleFooterBack)}
-            aria-label={t('wallet.back')}
-          >
-            <ArrowLeft size={32} aria-hidden />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost h-12 w-12 p-0"
-            aria-label={t('common.close')}
-            onClick={handleButtonClick(onClose)}
-          >
-            <X size={26} aria-hidden />
-          </button>
-        </div>
+        </>
       )}
-    </div>
+      bodyClassName="justify-start pt-8"
+      stageClassName={stageClassName}
+      showBack
+      onBack={handleButtonClick(handleFooterBack)}
+      backAriaLabel={t('wallet.back')}
+      onClose={handleButtonClick(onClose)}
+      closeAriaLabel={t('common.close')}
+      hideFooter={step === 'waiting' || step === 'result'}
+      footerVisible={footerVisible}
+    >
+      {renderStepContent()}
+    </ModalContentScaffold>
   );
 }

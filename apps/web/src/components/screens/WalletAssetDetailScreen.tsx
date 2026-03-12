@@ -19,6 +19,7 @@ import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { CachedIconImage } from '../CachedIconImage';
 import { Modal } from '../modals/Modal';
 import { ReceiveCryptoContent } from '../modals/ReceiveCryptoContent';
+import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { TopUpContent } from '../modals/TopUpContent';
 import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { TransferContent } from '../modals/TransferContent';
@@ -41,6 +42,8 @@ type TransferPresetAsset = {
   tokenSymbol?: string;
   tokenDecimals?: number;
 };
+
+const MODAL_CONTENT_SWITCH_MS = 280;
 
 type WalletAssetHolding = {
   assetId: string | null;
@@ -272,12 +275,21 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   const { showError, showSuccess } = useToast();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeModalContent, setActiveModalContent] = useState<ActiveModalContent>('topUp');
+  const [exitingModalContent, setExitingModalContent] = useState<ActiveModalContent | null>(null);
+  const [modalDirection, setModalDirection] = useState<1 | -1>(1);
+  const [modalTransitionKey, setModalTransitionKey] = useState(0);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
   const [tradeBackTarget, setTradeBackTarget] = useState<'topUp' | 'close'>('close');
   const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openRafRef = useRef<number | null>(null);
+  const modalSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
+  const tradeButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const securitySectionRef = useRef<HTMLElement | null>(null);
 
@@ -536,26 +548,72 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     });
   }
 
-  function showModal(content: ActiveModalContent): void {
+  function showModal(content: ActiveModalContent, originRect: RectSnapshot | null = null): void {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    if (openRafRef.current !== null) {
+      cancelAnimationFrame(openRafRef.current);
+    }
+    if (modalSwitchTimerRef.current) {
+      clearTimeout(modalSwitchTimerRef.current);
+      modalSwitchTimerRef.current = null;
+    }
     setActiveModalContent(content);
+    setExitingModalContent(null);
     setIsModalOpen(true);
+    setModalOriginRect(originRect);
+    setModalVisible(false);
+    openRafRef.current = requestAnimationFrame(() => {
+      setModalVisible(true);
+      openRafRef.current = null;
+    });
   }
 
   function closeModal(): void {
-    setIsModalOpen(false);
+    setModalVisible(false);
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+    }
+    closeTimerRef.current = setTimeout(() => {
+      setIsModalOpen(false);
+      setExitingModalContent(null);
+      closeTimerRef.current = null;
+    }, 300);
+  }
+
+  function switchModalContent(nextContent: ActiveModalContent, direction: 1 | -1): void {
+    if (!isModalOpen || nextContent === activeModalContent) {
+      setActiveModalContent(nextContent);
+      setExitingModalContent(null);
+      setModalDirection(direction);
+      return;
+    }
+    if (modalSwitchTimerRef.current) {
+      clearTimeout(modalSwitchTimerRef.current);
+    }
+    setModalDirection(direction);
+    setExitingModalContent(activeModalContent);
+    setActiveModalContent(nextContent);
+    setModalTransitionKey((value) => value + 1);
+    modalSwitchTimerRef.current = setTimeout(() => {
+      setExitingModalContent(null);
+      modalSwitchTimerRef.current = null;
+    }, MODAL_CONTENT_SWITCH_MS);
   }
 
   function openTopUpModal(): void {
     setTradePreset(null);
-    showModal('topUp');
+    showModal('topUp', snapshotRect(topUpButtonRef.current));
   }
 
   function openReceiveModal(): void {
-    showModal('receive');
+    switchModalContent('receive', 1);
   }
 
   function backToTopUp(): void {
-    showModal('topUp');
+    switchModalContent('topUp', -1);
   }
 
   function buildDefaultTradePreset(mode: 'buy' | 'stableSwap'): TradePreset | null {
@@ -586,7 +644,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     if (!preset) return;
     setTradeBackTarget('topUp');
     setTradePreset(preset);
-    showModal('trade');
+    switchModalContent('trade', 1);
   }
 
   function openTransferModal(): void {
@@ -606,7 +664,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         : null,
     );
     setTradePreset(null);
-    showModal('transfer');
+    showModal('transfer', snapshotRect(transferButtonRef.current));
   }
 
   function openTradeModal(): void {
@@ -623,7 +681,82 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
       },
       assetSymbolForEvent: displaySymbol,
     });
-    showModal('trade');
+    showModal('trade', snapshotRect(tradeButtonRef.current));
+  }
+
+  function getStageClassName(kind: 'enter' | 'exit'): string {
+    if (modalDirection === 1) {
+      return kind === 'enter' ? 'modal-sheet-enter-forward' : 'modal-sheet-exit-forward';
+    }
+    return kind === 'enter' ? 'modal-sheet-enter-backward' : 'modal-sheet-exit-backward';
+  }
+
+  function renderModalPane(
+    content: ActiveModalContent,
+    options: {
+      footerVisible: boolean;
+      stageClassName?: string;
+    },
+  ) {
+    if (content === 'topUp') {
+      return (
+        <TopUpContent
+          active={activeModalContent === 'topUp'}
+          onOpenReceive={openReceiveModal}
+          onOpenTrade={openTradeFromTopUp}
+          onClose={closeModal}
+          footerVisible={options.footerVisible}
+          stageClassName={options.stageClassName}
+        />
+      );
+    }
+    if (content === 'receive') {
+      return (
+        <ReceiveCryptoContent
+          walletAddress={walletAddress}
+          chainAccounts={auth.wallet?.chainAccounts}
+          supportedChains={supportedChains}
+          onBack={backToTopUp}
+          onCopyAddress={async (address) => {
+            if (!address) return;
+            await navigator.clipboard.writeText(address);
+          }}
+          onClose={closeModal}
+          footerVisible={options.footerVisible}
+          stageClassName={options.stageClassName}
+        />
+      );
+    }
+    if (content === 'transfer') {
+      return (
+        <TransferContent
+          active={activeModalContent === 'transfer'}
+          presetAsset={presetTransferAsset}
+          supportedChains={supportedChains}
+          onBack={closeModal}
+          onClose={closeModal}
+          onSubmitted={() => {
+            closeModal();
+          }}
+          footerVisible={options.footerVisible}
+          stageClassName={options.stageClassName}
+        />
+      );
+    }
+    return (
+      <TradeContent
+        active={activeModalContent === 'trade'}
+        preset={tradePreset}
+        supportedChains={supportedChains}
+        onBack={tradeBackTarget === 'topUp' ? backToTopUp : closeModal}
+        onClose={closeModal}
+        onSubmitted={() => {
+          closeModal();
+        }}
+        footerVisible={options.footerVisible}
+        stageClassName={options.stageClassName}
+      />
+    );
   }
 
   const promoCards = [
@@ -638,6 +771,15 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   const tokenInfoSummary = detailContract
     ? truncateMiddle(detailContract)
     : `${normalizeText(selectedHolding?.transferAsset.chain).toUpperCase() || normalizedChain.toUpperCase()} · ${t('trade.nativeToken')}`;
+
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      if (modalSwitchTimerRef.current) clearTimeout(modalSwitchTimerRef.current);
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!isMoreMenuOpen) return undefined;
@@ -812,6 +954,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
         </button>
         <button
           type="button"
+          ref={tradeButtonRef}
           className="btn btn-primary text-base font-semibold"
           onClick={openTradeModal}
           disabled={!canTradeToken}
@@ -921,76 +1064,21 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
       </button>
 
       {isModalOpen && (
-        <Modal visible originRect={null} onClose={closeModal}>
+        <Modal visible={modalVisible} originRect={modalOriginRect} onClose={closeModal}>
           <div className="relative flex-1 overflow-hidden">
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'topUp'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none -translate-x-4 opacity-0'
-              }`}
-            >
-              <TopUpContent
-                active={activeModalContent === 'topUp'}
-                onOpenReceive={openReceiveModal}
-                onOpenTrade={openTradeFromTopUp}
-                onClose={closeModal}
-              />
-            </div>
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'receive'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none translate-x-4 opacity-0'
-              }`}
-            >
-              <ReceiveCryptoContent
-                walletAddress={walletAddress}
-                chainAccounts={auth.wallet?.chainAccounts}
-                supportedChains={supportedChains}
-                onBack={backToTopUp}
-                onCopyAddress={async (address) => {
-                  if (!address) return;
-                  await navigator.clipboard.writeText(address);
-                }}
-                onClose={closeModal}
-              />
-            </div>
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'transfer'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none translate-x-4 opacity-0'
-              }`}
-            >
-              <TransferContent
-                active={activeModalContent === 'transfer'}
-                presetAsset={presetTransferAsset}
-                supportedChains={supportedChains}
-                onBack={closeModal}
-                onClose={closeModal}
-                onSubmitted={() => {
-                  closeModal();
-                }}
-              />
-            </div>
-            <div
-              className={`absolute inset-0 transition-all duration-300 ${
-                activeModalContent === 'trade'
-                  ? 'translate-x-0 opacity-100'
-                  : 'pointer-events-none translate-x-4 opacity-0'
-              }`}
-            >
-              <TradeContent
-                active={activeModalContent === 'trade'}
-                preset={tradePreset}
-                supportedChains={supportedChains}
-                onBack={tradeBackTarget === 'topUp' ? backToTopUp : closeModal}
-                onClose={closeModal}
-                onSubmitted={() => {
-                  closeModal();
-                }}
-              />
+            {exitingModalContent ? (
+              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+                {renderModalPane(exitingModalContent, {
+                  footerVisible: false,
+                  stageClassName: getStageClassName('exit'),
+                })}
+              </div>
+            ) : null}
+            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+              {renderModalPane(activeModalContent, {
+                footerVisible: true,
+                stageClassName: exitingModalContent ? getStageClassName('enter') : undefined,
+              })}
             </div>
           </div>
         </Modal>
