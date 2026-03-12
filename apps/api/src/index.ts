@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { registerProtectedRoutes } from './routes/protected';
 import { registerPublicRoutes } from './routes/public';
+import { runD1Maintenance } from './services/dbMaintenance';
 import { enqueueTopicSpecialGeneration } from './services/topicSpecialCoordinator';
 import type { AppEnv } from './types';
 export { UserAgentDO } from './durableObjects/userAgentDO';
@@ -29,6 +30,17 @@ export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: AppEnv['Bindings'], _ctx: ExecutionContext): Promise<void> {
     const cron = event.cron ?? '';
+    if (matchesCron(cron, '0 */6 * * *')) {
+      try {
+        await runD1Maintenance(env);
+      } catch (error) {
+        console.error('d1_maintenance_failed', {
+          cron,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
     if (matchesCron(cron, '5 */4 * * *')) {
       try {
         await enqueueTopicSpecialGeneration(env, {

@@ -40,4 +40,4 @@ tag = "topic-special-do-v1"
 new_sqlite_classes = ["TopicSpecialDO"]
 
 [triggers]
-crons = ["0 0 * * *", "5 */4 * * *"]
+crons = ["0 */6 * * *", "5 */4 * * *"]
