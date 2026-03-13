@@ -7,6 +7,10 @@
   --font-sans: 'Inter', 'General Sans', 'Noto Sans SC', 'PingFang SC', 'Noto Sans Arabic', sans-serif;
 }
 
+:root {
+  --bottom-tab-bar-height: 3.5rem;
+}
+
 /* btn-primary: 黑底白字 (light), 白底黑字 (dark) */
 :where(:root), [data-theme="light"] {
   --color-primary: oklch(0% 0 0);
@@ -228,7 +232,7 @@
   position: relative;
   overflow: hidden;
   border-radius: 999px;
-  padding: 0.3rem;
+  padding: 0.25rem;
   background: var(--liquid-tab-shell-bg);
   border: 1px solid var(--liquid-tab-shell-border);
   box-shadow: var(--liquid-tab-shell-shadow);
@@ -262,7 +266,7 @@
 .liquid-tab-button {
   position: relative;
   display: flex;
-  min-height: 3.65rem;
+  min-height: calc(var(--bottom-tab-bar-height) - 0.5rem);
   width: 100%;
   align-items: center;
   justify-content: center;
@@ -344,11 +348,11 @@
 
 .liquid-agent-button {
   position: relative;
-  width: 4.25rem;
-  height: 4.25rem;
-  min-width: 4.25rem;
-  min-height: 4.25rem;
-  flex: 0 0 4.25rem;
+  width: var(--bottom-tab-bar-height);
+  height: var(--bottom-tab-bar-height);
+  min-width: var(--bottom-tab-bar-height);
+  min-height: var(--bottom-tab-bar-height);
+  flex: 0 0 var(--bottom-tab-bar-height);
   align-self: center;
   border-radius: 999px;
   border: 1px solid var(--liquid-tab-shell-border);

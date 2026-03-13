@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { Newspaper } from 'lucide-react';
 import {
   getAgentArticles,
-  getAgentRecommendations,
   getAgentTodayDaily,
   getCoinDetailsBatch,
   getMarketWatchlist,
@@ -42,17 +41,6 @@ function formatPct(value: number | null | undefined): string {
   const sign = numeric > 0 ? '+' : '';
   return `${sign}${numeric.toFixed(2)}%`;
 }
-
-type RecommendationDisplayAsset = {
-  id: string;
-  symbol: string;
-  name: string;
-  image: string | null;
-  priceChangePct: number | null;
-  chain: string | null;
-  contract: string | null;
-  tokenPreview: TopMarketAsset | null;
-};
 
 type WatchlistDisplayAsset = WatchlistAsset & {
   displaySymbol: string;
@@ -108,7 +96,6 @@ function buildTopMarketAssetPreview(input: {
   currentPrice: number | null;
   priceChange24h: number | null;
   assetId?: string | null;
-  instrumentId?: string | null;
 }): TopMarketAsset {
   const chain = input.chain.trim().toLowerCase();
   const contract = normalizeContractForChain(chain, input.contract);
@@ -116,7 +103,6 @@ function buildTopMarketAssetPreview(input: {
   return {
     id: chainAssetId,
     asset_id: (input.assetId ?? '').trim() || chainAssetId,
-    instrument_id: input.instrumentId ?? undefined,
     chain_asset_id: chainAssetId,
     chain,
     contract,
@@ -172,13 +158,6 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     });
   }, [portfolio, walletFingerprint]);
 
-  const { data: recommendationsData, isLoading: isRecommendationsLoading } = useQuery({
-    queryKey: ['home-agent-recommendations'],
-    queryFn: getAgentRecommendations,
-    staleTime: 30_000,
-    refetchOnWindowFocus: true,
-  });
-
   const { data: watchlistData, isLoading: isWatchlistLoading } = useQuery({
     queryKey: ['home-watchlist', 200],
     queryFn: () => getMarketWatchlist({ limit: 200 }),
@@ -204,12 +183,8 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
       append(asset.chain, asset.contract);
     }
 
-    for (const item of (recommendationsData?.recommendations ?? []).slice(0, 5)) {
-      append(item.asset?.chain ?? null, item.asset?.contract ?? null);
-    }
-
     return output.slice(0, 100);
-  }, [recommendationsData?.recommendations, watchlistData?.assets]);
+  }, [watchlistData?.assets]);
 
   const { data: tokenDetailBatch } = useQuery({
     queryKey: ['home-token-details', detailLookups.map((item) => buildChainAssetId(item.chain, item.contract)).join(',')],
@@ -261,52 +236,6 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     return { byChainAssetId, bySymbol };
   }, [tokenDetailBatch]);
 
-  const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
-    const recommended = (recommendationsData?.recommendations ?? []).slice(0, 5);
-    const { byChainAssetId, bySymbol } = tokenDetailLookup;
-
-    return recommended
-      .map((item) => {
-        const assetMeta = item.asset;
-        const symbol = (assetMeta?.symbol ?? item.title ?? '').trim().toUpperCase();
-        const chain = normalizeLookupChain(assetMeta?.chain ?? null);
-        const contract = (assetMeta?.contract ?? '').trim().toLowerCase();
-        const exactKey = chain ? buildChainAssetId(chain, contract) : '';
-        const matched =
-          (exactKey ? byChainAssetId.get(exactKey) : undefined)
-          ?? (symbol ? pickPreferredSymbolDetail(bySymbol.get(symbol) ?? [], chain || null) : undefined);
-
-        const displaySymbol = (matched?.symbol ?? symbol ?? '').toUpperCase();
-        const displayName = matched?.name ?? assetMeta?.name ?? item.title ?? displaySymbol;
-        const routeChain = matched?.chain ?? chain ?? null;
-        const routeContract = matched?.contract ?? (chain ? contract : null);
-        const tokenPreview =
-          routeChain && routeContract != null
-            ? buildTopMarketAssetPreview({
-                chain: routeChain,
-                contract: routeContract,
-                symbol: displaySymbol,
-                name: displayName,
-                image: matched?.image ?? assetMeta?.image ?? null,
-                currentPrice: matched?.currentPriceUsd ?? null,
-                priceChange24h: matched?.priceChange24h ?? assetMeta?.price_change_percentage_24h ?? null,
-                assetId: matched?.asset_id ?? null,
-                instrumentId: matched?.instrument_id ?? assetMeta?.instrument_id ?? null,
-              })
-            : null;
-        return {
-          id: item.id,
-          symbol: displaySymbol,
-          name: displayName,
-          image: matched?.image ?? assetMeta?.image ?? null,
-          priceChangePct: matched?.priceChange24h ?? assetMeta?.price_change_percentage_24h ?? null,
-          chain: routeChain,
-          contract: routeContract,
-          tokenPreview,
-        };
-      })
-      .filter((item) => Boolean(item.symbol || item.name));
-  }, [recommendationsData, tokenDetailLookup]);
   const watchlistItems = useMemo<WatchlistDisplayAsset[]>(() => {
     const { byChainAssetId, bySymbol } = tokenDetailLookup;
     return (watchlistData?.assets ?? [])
@@ -336,7 +265,6 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                 currentPrice: matched?.currentPriceUsd ?? null,
                 priceChange24h: asset.change_24h ?? matched?.priceChange24h ?? null,
                 assetId: matched?.asset_id ?? null,
-                instrumentId: matched?.instrument_id ?? null,
               })
             : null;
 
@@ -357,7 +285,6 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   const totalBalance = resolvedPortfolio?.totalUsd ?? 0;
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
   const shouldShowZeroBalanceCard = Boolean(resolvedPortfolio) && totalBalance <= 0;
-  const shouldShowRecommendationSkeleton = !recommendationsData && isRecommendationsLoading;
   const hasWatchlistAssets = (watchlistData?.assets?.length ?? 0) > 0;
   const shouldShowWatchlistSkeleton = watchlistItems.length === 0 && isWatchlistLoading;
   const shouldRenderWatchlistSection = isWatchlistLoading || hasWatchlistAssets;
@@ -551,71 +478,8 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         </section>
       )}
 
-      <section className="bg-base-100 mt-2">
-        <h2 className="m-0 text-lg font-bold">{t('home.assetRecommendationsTitle')}</h2>
-        <div className="mt-3 flex flex-col gap-1">
-          {shouldShowRecommendationSkeleton && (
-            <>
-              {Array.from({ length: 4 }).map((_, index) => (
-                <SkeletonAssetListItem key={`home-reco-skeleton-${index}`} className="bg-base-100 py-3" />
-              ))}
-            </>
-          )}
-          {!shouldShowRecommendationSkeleton && recommendations.length === 0 && (
-            <p className="m-0 text-base text-base-content/70">{t('home.emptyRecommendations')}</p>
-          )}
-          {recommendations.map((item) => {
-            const content = (
-              <AssetListItem
-                className="bg-base-100 py-3"
-                leftIcon={
-                  item.image ? (
-                    <CachedIconImage
-                      src={item.image}
-                      alt={item.symbol}
-                      className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                      loading="lazy"
-                      fallback={(
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                          {getRecommendationInitial(item.symbol || item.name)}
-                        </div>
-                      )}
-                    />
-                  ) : (
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-base font-semibold text-base-content/70">
-                      {getRecommendationInitial(item.symbol || item.name)}
-                    </div>
-                  )
-                }
-                leftPrimary={(item.symbol ?? '').toUpperCase()}
-                leftSecondary={item.name}
-                rightSecondary={formatPct(item.priceChangePct)}
-              />
-            );
-
-            const chain = item.chain;
-            const contract = item.contract;
-            if (!chain || contract == null) {
-              return <div key={item.id}>{content}</div>;
-            }
-
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className="w-full cursor-pointer text-start transition-colors hover:bg-base-200/60"
-                onClick={() => onOpenToken(chain, contract, item.tokenPreview ?? undefined)}
-              >
-                {content}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
       <section className="bg-base-100">
-        <h2 className="m-0 text-lg font-bold">{t('home.topicRecommendationsTitle')}</h2>
-        <div className="mt-3 flex flex-col gap-3">
+        <div className="flex flex-col gap-3">
           {isTopicLoading && topics.length === 0 && (
             <>
               <article className="border border-base-300 bg-base-200 p-3">

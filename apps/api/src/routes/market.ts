@@ -273,25 +273,20 @@ async function resolveSingleCoinDetail(
   return enrichTokenDetail(env, baseDetail);
 }
 
-function applyCoinIdentityToTradeItem(
-  item: TradeBrowseMarketItem,
-  assetIdMap: Map<string, string>,
-): TradeBrowseMarketItem {
+function applyCoinIdentityToTradeItem(item: TradeBrowseMarketItem, assetIdMap: Map<string, string>): TradeBrowseMarketItem {
   const chain = normalizeText(item.chain);
-  if (!chain) return { ...item, asset_id: undefined, instrument_id: undefined };
+  if (!chain) return { ...item, asset_id: undefined };
   const contractKey = toContractKey(item.contract ?? NATIVE_CONTRACT_KEY, chain);
   return {
     ...item,
     asset_id: assetIdMap.get(buildCoinLookupKey(chain, contractKey)),
-    instrument_id: undefined,
   };
 }
 
-function stripLegacyIds<T extends { asset_id?: string; instrument_id?: string }>(item: T): T {
+function stripLegacyIds<T extends { asset_id?: string }>(item: T): T {
   return {
     ...item,
     asset_id: undefined,
-    instrument_id: undefined,
   };
 }
 
@@ -366,7 +361,6 @@ function toTopAssetResponse(asset: MarketTopAsset, assetIdMap: Map<string, strin
   return {
     ...asset,
     asset_id: assetIdMap.get(key) ?? asset.asset_id,
-    instrument_id: undefined,
   };
 }
 
@@ -374,7 +368,6 @@ function toTokenSecurityResponse(audit: BitgetTokenSecurityAudit, assetId: strin
   return {
     ...audit,
     asset_id: assetId,
-    instrument_id: undefined,
     chain_asset_id: buildChainAssetId(audit.chain, audit.contract || NATIVE_CONTRACT_KEY),
     contract: toResponseContract(audit.chain, audit.contract || NATIVE_CONTRACT_KEY),
   };

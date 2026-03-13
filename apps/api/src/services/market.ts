@@ -1,9 +1,10 @@
 import type { Bindings } from '../types';
 import { nowIso } from '../utils/time';
+import { fetchWithTimeout } from '../utils/fetch';
 import { getChainConfigByChainId, getMarketChainByChainId, getMarketChainByNetworkKey } from '../config/appConfig';
-import { buildAssetId, buildChainAssetId, inferProtocolFromChain, NATIVE_CONTRACT_KEY } from './assetIdentity';
+import { buildAssetId, buildChainAssetId, inferProtocolFromChain, NATIVE_CONTRACT_KEY, toContractKey } from './assetIdentity';
 import { resolveCoinGeckoAssetIdForContract } from './coingecko';
-import { fetchSolanaPortfolio } from './solana';
+import { fetchSolanaPortfolio as fetchSolanaPortfolioViaRpc } from './solana';
 import type { WalletSummary } from '../types';
 import { BITCOIN_NETWORK_KEY, SOLANA_NETWORK_KEY } from './wallet';
 
@@ -54,6 +55,26 @@ type SimBalancesResponse = {
   message?: string;
 };
 
+type SimSvmBalanceRow = {
+  chain?: string;
+  address?: string;
+  amount?: string;
+  value_usd?: number | string | null;
+  decimals?: number | string;
+  name?: string;
+  symbol?: string;
+  price_usd?: number | string | null;
+  uri?: string | null;
+};
+
+type SimSvmBalancesResponse = {
+  wallet_address?: string;
+  balances?: SimSvmBalanceRow[];
+  next_offset?: string | null;
+  error?: string;
+  message?: string;
+};
+
 type BitcoinAddressStats = {
   funded_txo_sum?: number;
   spent_txo_sum?: number;
@@ -79,6 +100,7 @@ const FALLBACK_ASSET_NAME_BY_SYMBOL: Record<string, string> = {
   USDT: 'Tether',
   USDC: 'USD Coin',
 };
+const PORTFOLIO_FETCH_TIMEOUT_MS = 15_000;
 
 function normalizeEvmAddress(raw: string | undefined): string | null {
   if (!raw) return null;
@@ -96,6 +118,11 @@ function normalizeText(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   return value ? value : null;
+}
+
+function normalizeFiniteNumber(raw: unknown): number | null {
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
 }
 
 function normalizeAssetId(raw: unknown): string | null {
@@ -189,7 +216,7 @@ async function fetchEvmPortfolio(
   }
 
   const chainIds = [1, 8453, 56].join(',');
-  const simResponse = await fetch(
+  const simResponse = await fetchWithTimeout(
     `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=${encodeURIComponent(chainIds)}`,
     {
       method: 'GET',
@@ -197,6 +224,7 @@ async function fetchEvmPortfolio(
         'X-Sim-Api-Key': simApiKey,
       },
     },
+    PORTFOLIO_FETCH_TIMEOUT_MS,
   );
 
   const simData = (await simResponse.json()) as SimBalancesResponse;
@@ -214,6 +242,89 @@ async function fetchEvmPortfolio(
     .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
 }
 
+async function fetchSolanaPortfolioViaSim(
+  env: Bindings,
+  walletAddress: string,
+): Promise<PortfolioBalanceRow[]> {
+  const simApiKey = env.SIM_API_KEY?.trim();
+  if (!simApiKey) {
+    throw new Error('missing_sim_api_key');
+  }
+
+  const balances: PortfolioBalanceRow[] = [];
+  let nextOffset: string | null = null;
+
+  do {
+    const url = new URL(`https://api.sim.dune.com/beta/svm/balances/${encodeURIComponent(walletAddress)}`);
+    url.searchParams.set('chains', 'solana');
+    url.searchParams.set('limit', '1000');
+    if (nextOffset) {
+      url.searchParams.set('offset', nextOffset);
+    }
+
+    const response = await fetchWithTimeout(
+      url.toString(),
+      {
+        method: 'GET',
+        headers: {
+          'X-Sim-Api-Key': simApiKey,
+        },
+      },
+      PORTFOLIO_FETCH_TIMEOUT_MS,
+    );
+
+    const payload = (await response.json()) as SimSvmBalancesResponse;
+    if (!response.ok) {
+      throw new Error(payload.message ?? payload.error ?? 'failed_to_fetch_solana_portfolio');
+    }
+
+    balances.push(
+      ...(payload.balances ?? [])
+        .map((row) => {
+          const contractKey = toContractKey(row.address, 'sol');
+          return {
+            protocol: 'svm' as const,
+            network_key: SOLANA_NETWORK_KEY,
+            chain: 'sol',
+            chain_id: null,
+            address: contractKey,
+            asset_id: buildAssetId('sol', contractKey),
+            chain_asset_id: buildChainAssetId('sol', contractKey),
+            amount: normalizeText(row.amount) ?? '0',
+            symbol: normalizeText(row.symbol) ?? undefined,
+            name: normalizeText(row.name) ?? undefined,
+            decimals: normalizeFiniteNumber(row.decimals) ?? undefined,
+            price_usd: normalizeFiniteNumber(row.price_usd),
+            value_usd: normalizeFiniteNumber(row.value_usd),
+            logo: null,
+            logo_uri: null,
+            url: null,
+          } satisfies PortfolioBalanceRow;
+        })
+        .filter((row) => Number(row.value_usd ?? 0) > 0 || hasPositiveAmount(row.amount)),
+    );
+
+    nextOffset = normalizeText(payload.next_offset);
+  } while (nextOffset);
+
+  return balances.sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+}
+
+async function fetchSolanaPortfolio(
+  env: Bindings,
+  walletAddress: string,
+): Promise<PortfolioBalanceRow[]> {
+  try {
+    return await fetchSolanaPortfolioViaSim(env, walletAddress);
+  } catch (error) {
+    console.warn('[wallet/portfolio][solana] sim_failed_fallback_rpc', {
+      walletAddress,
+      message: error instanceof Error ? error.message : 'unknown_error',
+    });
+    return fetchSolanaPortfolioViaRpc(env, walletAddress);
+  }
+}
+
 function getBitcoinBalanceSats(response: BitcoinAddressResponse): bigint {
   const chainFunded = BigInt(response.chain_stats?.funded_txo_sum ?? 0);
   const chainSpent = BigInt(response.chain_stats?.spent_txo_sum ?? 0);
@@ -224,7 +335,11 @@ function getBitcoinBalanceSats(response: BitcoinAddressResponse): bigint {
 
 async function fetchBitcoinPriceUsd(env: Bindings): Promise<number | null> {
   const baseUrl = (env.COINGECKO_API_BASE_URL?.trim() || 'https://api.coingecko.com/api/v3').replace(/\/+$/, '');
-  const response = await fetch(`${baseUrl}/simple/price?ids=bitcoin&vs_currencies=usd`);
+  const response = await fetchWithTimeout(
+    `${baseUrl}/simple/price?ids=bitcoin&vs_currencies=usd`,
+    {},
+    PORTFOLIO_FETCH_TIMEOUT_MS,
+  );
   if (!response.ok) return null;
   const data = (await response.json()) as {
     bitcoin?: {
@@ -240,7 +355,11 @@ async function fetchBitcoinPortfolio(
   walletAddress: string,
 ): Promise<PortfolioBalanceRow[]> {
   const [balanceResponse, priceUsd] = await Promise.all([
-    fetch(`https://mempool.space/api/address/${encodeURIComponent(walletAddress)}`),
+    fetchWithTimeout(
+      `https://mempool.space/api/address/${encodeURIComponent(walletAddress)}`,
+      {},
+      PORTFOLIO_FETCH_TIMEOUT_MS,
+    ),
     fetchBitcoinPriceUsd(env).catch(() => null),
   ]);
   if (!balanceResponse.ok) {

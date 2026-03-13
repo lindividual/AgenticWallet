@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cacheStores, clearExpired, pruneCacheStore, readCache, writeCache } from '../utils/indexedDbCache';
+import { buildProxiedImageUrl, isAppControlledImageUrl } from '../utils/imageProxy';
 
 type CachedIconImageProps = {
   src: string;
@@ -23,13 +24,8 @@ function isRemoteIcon(src: string): boolean {
 }
 
 function canWarmRemoteIcon(src: string): boolean {
-  if (!isRemoteIcon(src) || typeof window === 'undefined') return false;
-  try {
-    const url = new URL(src, window.location.href);
-    return url.origin === window.location.origin;
-  } catch {
-    return false;
-  }
+  if (!isRemoteIcon(src)) return false;
+  return isAppControlledImageUrl(src);
 }
 
 async function getCachedIcon(src: string): Promise<string | null> {
@@ -93,7 +89,7 @@ export function CachedIconImage({
   fallback,
   onError,
 }: CachedIconImageProps) {
-  const normalizedSrc = useMemo(() => src.trim(), [src]);
+  const normalizedSrc = useMemo(() => buildProxiedImageUrl(src), [src]);
   const [resolvedSrc, setResolvedSrc] = useState<string>(() => normalizedSrc);
   const [loadFailed, setLoadFailed] = useState(false);
 

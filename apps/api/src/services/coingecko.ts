@@ -716,12 +716,10 @@ function toMarketTopAsset(
 
   const chainAssetId = buildChainAssetId(chainMatch.chain, chainMatch.contract);
   const assetId = buildAssetId(chainMatch.chain, chainMatch.contract, `coingecko:${coinId}`);
-  const instrumentId = `ins:spot:${chainMatch.chain}:${toContractKey(chainMatch.contract)}`;
 
   return {
     id: chainAssetId,
     asset_id: assetId,
-    instrument_id: instrumentId,
     chain_asset_id: chainAssetId,
     chain: chainMatch.chain,
     contract: chainMatch.contract,

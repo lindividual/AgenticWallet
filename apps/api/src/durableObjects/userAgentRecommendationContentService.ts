@@ -3,14 +3,11 @@ import type { MarketTopAsset } from '../services/bitgetWallet';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { getSupportedMarketChains } from '../config/appConfig';
 import {
-  buildFallbackRecommendations,
   EXCLUDED_RECOMMENDATION_SYMBOLS,
-  isoDate,
   isExcludedRecommendationAsset,
   mergePreferredAssets,
   parseLlmRecommendations,
   summarizeEvents,
-  tomorrowDate,
 } from './userAgentHelpers';
 import {
   buildPortfolioContext,
@@ -23,23 +20,6 @@ import type { ContentDeps } from './userAgentContentTypes';
 
 export async function refreshRecommendationsContent(_payload: Record<string, unknown>, deps: ContentDeps): Promise<void> {
   const now = new Date();
-  const dateKey = isoDate(now);
-  const dayStart = `${dateKey}T00:00:00.000Z`;
-  const dayEnd = `${tomorrowDate(dateKey)}T00:00:00.000Z`;
-
-  const existingToday = deps.sql
-    .exec(
-      `SELECT id
-       FROM recommendations
-       WHERE generated_at >= ?
-         AND generated_at < ?
-       LIMIT 1`,
-      dayStart,
-      dayEnd,
-    )
-    .toArray()[0];
-  if (existingToday) return;
-
   const events = deps.getLatestEvents(120);
   const eventSummary = summarizeEvents(events);
   const watchlistSymbols = (deps.getWatchlistAssets?.(30) ?? [])
@@ -47,8 +27,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
     .filter(Boolean);
   const generatedAt = now.toISOString();
   const validUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-
-  deps.sql.exec('DELETE FROM recommendations WHERE generated_at < ?', dayStart);
+  deps.sql.exec('DELETE FROM recommendations');
 
   const supportedChains = getSupportedMarketChains();
   const [topGainersResult, marketCapResult, trendingResult] = await Promise.allSettled([
@@ -81,7 +60,8 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
   const userTopAssets = mergePreferredAssets(eventSummary.topAssets, watchlistSymbols, 10).slice(0, 5);
   const portfolioHoldings = getPortfolioHoldings(deps.sql, supportedChains);
 
-  let rows = buildFallbackRecommendations(userTopAssets, portfolioHoldings, marketAssets);
+  // Product decision: if the LLM does not produce usable recommendations, keep this list empty.
+  let rows: Array<{ category: string; asset: string; reason: string; score: number }> = [];
   const marketAssetLookup = buildRecommendationAssetLookup(metadataAssets);
 
   const preferredLocale = deps.getPreferredLocale?.() ?? null;
@@ -115,9 +95,7 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
       });
       const parsed = parseLlmRecommendations(llmResult.text);
       if (parsed.length > 0) {
-        const usedAssets = new Set(parsed.map((r) => r.asset));
-        const fillers = rows.filter((r) => !usedAssets.has(r.asset));
-        rows = [...parsed, ...fillers].slice(0, 5);
+        rows = parsed.slice(0, 5);
       }
     } catch (error) {
       const llmError = getLlmErrorInfo(error);
@@ -139,17 +117,6 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
   );
   if (allowedSymbols.size > 0) {
     rows = rows.filter((row) => allowedSymbols.has(row.asset.trim().toUpperCase()));
-    if (rows.length < 5) {
-      const fallbackRows = buildFallbackRecommendations(userTopAssets, portfolioHoldings, marketAssets);
-      const used = new Set(rows.map((row) => row.asset.trim().toUpperCase()));
-      for (const fallbackRow of fallbackRows) {
-        const symbol = fallbackRow.asset.trim().toUpperCase();
-        if (!allowedSymbols.has(symbol) || used.has(symbol)) continue;
-        rows.push(fallbackRow);
-        used.add(symbol);
-        if (rows.length >= 5) break;
-      }
-    }
   }
 
   for (const row of rows) {
@@ -163,7 +130,6 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
         asset_symbol,
         asset_chain,
         asset_contract,
-        asset_instrument_id,
         asset_display_name,
         asset_image,
         asset_price_change_24h,
@@ -171,14 +137,13 @@ export async function refreshRecommendationsContent(_payload: Record<string, unk
         score,
         generated_at,
         valid_until
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       crypto.randomUUID(),
       row.category,
       row.asset,
       symbol || null,
       snapshot?.chain ?? null,
       snapshot?.contract ?? null,
-      snapshot?.instrumentId ?? null,
       snapshot?.name ?? symbol ?? null,
       snapshot?.image ?? null,
       snapshot?.priceChange24h ?? null,

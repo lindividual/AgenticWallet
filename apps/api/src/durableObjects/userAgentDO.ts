@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { Keypair } from '@solana/web3.js';
 import type { AgentEventRecord } from '../agent/events';
 import {
   buildMissingArticleMarkdownFallback,
@@ -7,7 +8,7 @@ import {
   refreshRecommendationsContent,
 } from './userAgentContentService';
 import { generateWithLlm } from '../services/llm';
-import type { Bindings } from '../types';
+import type { Bindings, WalletProtocol, WalletSummary } from '../types';
 import {
   enqueueJob,
   JOB_STATUS_FAILED,
@@ -39,16 +40,37 @@ import type {
 } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
 import type { ArticleRelatedAssetRef } from '../services/articleRelatedAssets';
+import { encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
+import { fetchWalletPortfolio } from '../services/market';
+import { privateKeyToBitcoinSegwitAddress } from '../utils/bitcoin';
 import { ensureTopicSpecialSchema } from '../services/topicSpecials';
+import {
+  BNB_NETWORK_KEY,
+  BASE_NETWORK_KEY,
+  BITCOIN_NETWORK_KEY,
+  BTC_PROTOCOL,
+  ETHEREUM_NETWORK_KEY,
+  EVM_PROTOCOL,
+  EVM_WALLET_PROVIDER,
+  SOLANA_NETWORK_KEY,
+  SVM_PROTOCOL,
+  type WalletWithPrivateKey,
+} from '../services/wallet';
+import { privateKeyToAccount } from 'viem/accounts';
+import { base, bsc, mainnet } from 'viem/chains';
 
 const OWNER_KEY = 'owner_user_id';
 const USER_LOCALE_KEY = 'user_locale';
 const REQUEST_LOCALE_KEY = 'request_locale';
+const ACTIVE_UNTIL_KEY = 'active_until';
+const RECOMMENDATION_STATE_KEY = 'recommendation_state';
 const HOURLY_SNAPSHOT_RETENTION_HOURS = 72;
 const DAILY_SNAPSHOT_RETENTION_DAYS = 180;
 const TOPIC_SPECIAL_FETCH_MULTIPLIER = 3;
 const TOPIC_SPECIAL_MIN_FETCH = 24;
 const MAX_WATCHLIST_SIZE = 500;
+const ACTIVE_USER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const RECOMMENDATION_REFRESH_COOLDOWN_MS = 30 * 60 * 1000;
 
 type WatchlistType = 'crypto' | 'perps' | 'prediction';
 
@@ -75,6 +97,18 @@ type TopicSpecialArticleIndexRow = {
   status: string;
 };
 
+type WalletChainAccountRow = {
+  network_key: string;
+  chain_id: number | null;
+  protocol: WalletProtocol;
+  address: string;
+};
+
+type RecommendationState = {
+  dirty?: boolean;
+  lastRefreshedAt?: string | null;
+};
+
 export class UserAgentDO extends DurableObject<Bindings> {
   private topicSpecialSchemaReady = false;
 
@@ -92,6 +126,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     sequence: number;
   }> {
     await this.ensureDailyDigestJobs();
+    await this.ensurePortfolioSnapshotSchedule();
     return this.ingestEvent(event);
   }
 
@@ -107,6 +142,53 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return { ok: true };
   }
 
+  async getWalletRpc(userId: string): Promise<{ wallet: WalletSummary | null }> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    const wallet = this.getWalletSummary();
+    if (wallet) {
+      await this.ensurePortfolioSnapshotSchedule();
+    }
+    return { wallet };
+  }
+
+  async ensureWalletRpc(userId: string): Promise<{ wallet: WalletSummary }> {
+    this.ensureOwner(userId);
+    const wallet = await this.ensureWallet();
+    await this.ensureDailyDigestJobs();
+    await this.ensurePortfolioSnapshotSchedule();
+    return { wallet };
+  }
+
+  async upsertWalletRpc(
+    userId: string,
+    input: {
+      wallet: WalletSummary;
+      encryptedPrivateKey: string;
+      encryptedProtocolKeys: Partial<Record<WalletProtocol, string>>;
+    },
+  ): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    this.saveWallet(input.wallet, input.encryptedPrivateKey, input.encryptedProtocolKeys);
+    await this.ensureDailyDigestJobs();
+    await this.ensurePortfolioSnapshotSchedule();
+    return { ok: true };
+  }
+
+  async ensureWalletWithPrivateKeyRpc(userId: string): Promise<{ wallet: WalletWithPrivateKey }> {
+    this.ensureOwner(userId);
+    const wallet = await this.ensureWalletWithPrivateKey();
+    await this.ensureDailyDigestJobs();
+    await this.ensurePortfolioSnapshotSchedule();
+    return { wallet };
+  }
+
+  async deleteWalletRpc(userId: string): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    this.deleteWallet();
+    return { ok: true };
+  }
+
   async listRecommendationsRpc(
     userId: string,
     limit = 10,
@@ -114,6 +196,15 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
     return { recommendations: this.getRecommendations(limit) };
+  }
+
+  async refreshRecommendationsRpc(
+    userId: string,
+    options?: { force?: boolean },
+  ): Promise<{ ok: true; refreshed: boolean }> {
+    this.ensureOwner(userId);
+    const refreshed = await this.refreshRecommendationsIfNeeded(options?.force === true);
+    return { ok: true, refreshed };
   }
 
   async listArticlesRpc(
@@ -228,6 +319,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ensureOwner(userId);
     const asOf = normalizeOccurredAt(input.asOf);
     this.savePortfolioSnapshot(asOf, input.totalUsd, input.holdings ?? []);
+    this.markRecommendationsDirty();
+    await this.ensurePortfolioSnapshotSchedule(asOf);
     return { ok: true };
   }
 
@@ -530,12 +623,10 @@ export class UserAgentDO extends DurableObject<Bindings> {
     }
 
     if (isRecommendationTriggerEvent(event.type)) {
-      const today = isoDate(new Date());
-      const jobKey = `recommendation_refresh:${today}`;
-      await this.enqueueJob('recommendation_refresh', new Date(Date.now() + 5000).toISOString(), {}, jobKey);
+      this.markRecommendationsDirty();
     }
-
     await this.ensureDailyDigestJobs();
+    await this.ensurePortfolioSnapshotSchedule();
 
     return {
       ok: true,
@@ -546,6 +637,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private ensureOwner(userId: string): void {
+    const nowIso = new Date().toISOString();
     const row = this.ctx.storage.sql
       .exec('SELECT value_json FROM agent_state WHERE key = ? LIMIT 1', OWNER_KEY)
       .toArray()[0] as Record<string, unknown> | undefined;
@@ -555,8 +647,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
         'INSERT INTO agent_state (key, value_json, updated_at) VALUES (?, ?, ?)',
         OWNER_KEY,
         JSON.stringify({ userId }),
-        new Date().toISOString(),
+        nowIso,
       );
+      this.markUserActive(nowIso);
       return;
     }
 
@@ -564,6 +657,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (parsed.userId !== userId) {
       throw new Error('user_id_mismatch_for_agent');
     }
+    this.markUserActive(nowIso);
   }
 
   private getOwnerUserId(): string | null {
@@ -617,6 +711,285 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (typeof locale !== 'string') return null;
     const normalized = locale.trim().toLowerCase();
     return normalized || null;
+  }
+
+  private normalizeWalletProtocol(raw: string | null | undefined): WalletProtocol | null {
+    if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
+    return null;
+  }
+
+  private getWalletChainAccounts(): WalletChainAccountRow[] {
+    return (this.ctx.storage.sql
+      .exec(
+        `SELECT network_key, chain_id, protocol, address
+         FROM wallet_chain_accounts
+         ORDER BY network_key ASC`,
+      )
+      .toArray() as Array<{
+        network_key?: string;
+        chain_id?: number | null;
+        protocol?: string | null;
+        address?: string;
+      }>)
+      .map((row) => ({
+        network_key: normalizeSqlString(row.network_key) ?? '',
+        chain_id: row.chain_id == null ? null : Number(row.chain_id),
+        protocol: this.normalizeWalletProtocol(normalizeSqlString(row.protocol)) ?? EVM_PROTOCOL,
+        address: normalizeSqlString(row.address) ?? '',
+      }))
+      .filter((row) => Boolean(row.network_key) && Boolean(row.address));
+  }
+
+  private getWalletProtocolKeyMap(): Partial<Record<WalletProtocol, string>> {
+    const output: Partial<Record<WalletProtocol, string>> = {};
+    const rows = this.ctx.storage.sql
+      .exec(
+        `SELECT protocol, encrypted_key_material
+         FROM wallet_protocol_keys`,
+      )
+      .toArray() as Array<{ protocol?: string | null; encrypted_key_material?: string | null }>;
+
+    for (const row of rows) {
+      const protocol = this.normalizeWalletProtocol(normalizeSqlString(row.protocol));
+      const encryptedKeyMaterial = normalizeSqlString(row.encrypted_key_material);
+      if (!protocol || !encryptedKeyMaterial) continue;
+      output[protocol] = encryptedKeyMaterial;
+    }
+    return output;
+  }
+
+  private getWalletSummary(): WalletSummary | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT address, provider
+         FROM wallet
+         LIMIT 1`,
+      )
+      .toArray()[0] as { address?: string | null; provider?: string | null } | undefined;
+
+    const address = normalizeSqlString(row?.address);
+    const provider = normalizeSqlString(row?.provider);
+    if (!address || !provider) return null;
+
+    return {
+      address,
+      provider,
+      chainAccounts: this.getWalletChainAccounts().map((account) => ({
+        networkKey: account.network_key,
+        chainId: account.chain_id,
+        protocol: account.protocol,
+        address: account.address,
+      })),
+    };
+  }
+
+  private getWalletWithPrivateKey(): WalletWithPrivateKey | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT address, provider, encrypted_private_key
+         FROM wallet
+         LIMIT 1`,
+      )
+      .toArray()[0] as {
+        address?: string | null;
+        provider?: string | null;
+        encrypted_private_key?: string | null;
+      } | undefined;
+
+    const address = normalizeSqlString(row?.address);
+    const provider = normalizeSqlString(row?.provider);
+    const encryptedPrivateKey = normalizeSqlString(row?.encrypted_private_key);
+    if (!address || !provider || !encryptedPrivateKey) return null;
+
+    const protocolKeys = this.getWalletProtocolKeyMap();
+    return {
+      address,
+      provider,
+      encryptedPrivateKey: protocolKeys[EVM_PROTOCOL] ?? encryptedPrivateKey,
+      encryptedProtocolKeys: protocolKeys,
+      chainAccounts: this.getWalletChainAccounts().map((account) => ({
+        networkKey: account.network_key,
+        chainId: account.chain_id,
+        protocol: account.protocol,
+        address: account.address,
+      })),
+    };
+  }
+
+  private saveWallet(
+    wallet: WalletSummary,
+    encryptedPrivateKey: string,
+    encryptedProtocolKeys: Partial<Record<WalletProtocol, string>>,
+  ): void {
+    const now = new Date().toISOString();
+    this.ctx.storage.sql.exec('DELETE FROM wallet');
+    this.ctx.storage.sql.exec('DELETE FROM wallet_chain_accounts');
+    this.ctx.storage.sql.exec('DELETE FROM wallet_protocol_keys');
+    this.ctx.storage.sql.exec(
+      `INSERT INTO wallet (
+         address, provider, encrypted_private_key, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+      wallet.address,
+      wallet.provider,
+      encryptedPrivateKey,
+      now,
+      now,
+    );
+
+    for (const chain of wallet.chainAccounts) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO wallet_chain_accounts (
+           network_key, chain_id, protocol, address, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+        chain.networkKey,
+        chain.chainId,
+        chain.protocol,
+        chain.address,
+        now,
+        now,
+      );
+    }
+
+    const protocolKeyEntries = Object.entries(encryptedProtocolKeys) as Array<[WalletProtocol, string]>;
+    for (const [protocol, encryptedKeyMaterial] of protocolKeyEntries) {
+      if (!encryptedKeyMaterial) continue;
+      const keyFormat = protocol === SVM_PROTOCOL ? 'solana_secret_key_base64' : 'hex_private_key';
+      this.ctx.storage.sql.exec(
+        `INSERT INTO wallet_protocol_keys (
+           protocol, encrypted_key_material, key_format, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+        protocol,
+        encryptedKeyMaterial,
+        keyFormat,
+        now,
+        now,
+      );
+    }
+  }
+
+  private deleteWallet(): void {
+    this.ctx.storage.sql.exec('DELETE FROM wallet');
+    this.ctx.storage.sql.exec('DELETE FROM wallet_chain_accounts');
+    this.ctx.storage.sql.exec('DELETE FROM wallet_protocol_keys');
+  }
+
+  private async createWallet(): Promise<WalletWithPrivateKey> {
+    const privateKey = generatePrivateKeyHex();
+    const evmAccount = privateKeyToAccount(privateKey);
+    const bitcoinAddress = privateKeyToBitcoinSegwitAddress(privateKey);
+    const solanaKeypair = Keypair.generate();
+    const solanaSecretKey = encodeBase64(solanaKeypair.secretKey);
+    const encryptedPrivateKey = await encryptString(privateKey, this.env.APP_SECRET);
+    const encryptedSolanaKey = await encryptString(solanaSecretKey, this.env.APP_SECRET);
+
+    const chainAccounts: WalletSummary['chainAccounts'] = [
+      { networkKey: ETHEREUM_NETWORK_KEY, chainId: mainnet.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+      { networkKey: BASE_NETWORK_KEY, chainId: base.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+      { networkKey: BNB_NETWORK_KEY, chainId: bsc.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+      { networkKey: SOLANA_NETWORK_KEY, chainId: null, protocol: SVM_PROTOCOL, address: solanaKeypair.publicKey.toBase58() },
+      { networkKey: BITCOIN_NETWORK_KEY, chainId: null, protocol: BTC_PROTOCOL, address: bitcoinAddress },
+    ];
+    const primaryAddress =
+      chainAccounts.find((chain) => chain.networkKey === ETHEREUM_NETWORK_KEY)?.address ?? chainAccounts[0]?.address ?? evmAccount.address;
+
+    const wallet: WalletWithPrivateKey = {
+      address: primaryAddress,
+      provider: EVM_WALLET_PROVIDER,
+      encryptedPrivateKey,
+      encryptedProtocolKeys: {
+        [EVM_PROTOCOL]: encryptedPrivateKey,
+        [BTC_PROTOCOL]: encryptedPrivateKey,
+        [SVM_PROTOCOL]: encryptedSolanaKey,
+      },
+      chainAccounts,
+    };
+    this.saveWallet(wallet, encryptedPrivateKey, wallet.encryptedProtocolKeys);
+    return wallet;
+  }
+
+  private async ensureWallet(): Promise<WalletSummary> {
+    const wallet = this.getWalletSummary();
+    if (wallet) return wallet;
+    return this.createWallet();
+  }
+
+  private async ensureWalletWithPrivateKey(): Promise<WalletWithPrivateKey> {
+    const wallet = this.getWalletWithPrivateKey();
+    if (wallet) return wallet;
+    return this.createWallet();
+  }
+
+  private getAgentState<T>(key: string): T | null {
+    const row = this.ctx.storage.sql
+      .exec('SELECT value_json FROM agent_state WHERE key = ? LIMIT 1', key)
+      .toArray()[0] as Record<string, unknown> | undefined;
+    const valueJson = normalizeSqlString(row?.value_json);
+    if (!valueJson) return null;
+    return safeJsonParse<T>(valueJson) ?? null;
+  }
+
+  private setAgentState(key: string, value: unknown): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO agent_state (key, value_json, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+      key,
+      JSON.stringify(value),
+      new Date().toISOString(),
+    );
+  }
+
+  private markUserActive(referenceIso?: string): void {
+    const referenceDate = referenceIso ? new Date(referenceIso) : new Date();
+    if (!Number.isFinite(referenceDate.getTime())) return;
+    const activeUntil = new Date(referenceDate.getTime() + ACTIVE_USER_WINDOW_MS).toISOString();
+    this.setAgentState(ACTIVE_UNTIL_KEY, { activeUntil });
+  }
+
+  private isUserActive(referenceIso?: string): boolean {
+    const state = this.getAgentState<{ activeUntil?: string | null }>(ACTIVE_UNTIL_KEY);
+    const activeUntil = normalizeSqlString(state?.activeUntil);
+    if (!activeUntil) return false;
+    const activeUntilMs = Date.parse(activeUntil);
+    if (!Number.isFinite(activeUntilMs)) return false;
+    const referenceMs = referenceIso ? Date.parse(referenceIso) : Date.now();
+    if (!Number.isFinite(referenceMs)) return false;
+    return activeUntilMs > referenceMs;
+  }
+
+  private getRecommendationState(): RecommendationState {
+    return this.getAgentState<RecommendationState>(RECOMMENDATION_STATE_KEY) ?? { dirty: true, lastRefreshedAt: null };
+  }
+
+  private setRecommendationState(next: RecommendationState): void {
+    this.setAgentState(RECOMMENDATION_STATE_KEY, next);
+  }
+
+  private markRecommendationsDirty(): void {
+    const state = this.getRecommendationState();
+    this.setRecommendationState({
+      ...state,
+      dirty: true,
+    });
+  }
+
+  private async refreshRecommendationsIfNeeded(force: boolean): Promise<boolean> {
+    const state = this.getRecommendationState();
+    const hasRecommendations = this.getRecommendations(1).length > 0;
+    const lastRefreshedAtMs = state.lastRefreshedAt ? Date.parse(state.lastRefreshedAt) : Number.NaN;
+    const withinCooldown =
+      Number.isFinite(lastRefreshedAtMs) && Date.now() - lastRefreshedAtMs < RECOMMENDATION_REFRESH_COOLDOWN_MS;
+    if (!force && hasRecommendations && !state.dirty) return false;
+    if (!force && hasRecommendations && withinCooldown) return false;
+
+    await this.refreshRecommendations({ trigger: force ? 'manual' : 'direct' });
+    this.setRecommendationState({
+      dirty: false,
+      lastRefreshedAt: new Date().toISOString(),
+    });
+    return true;
   }
 
   private getEffectiveLocale(): string | null {
@@ -903,7 +1276,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
           asset_symbol,
           asset_chain,
           asset_contract,
-          asset_instrument_id,
           asset_display_name,
           asset_image,
           asset_price_change_24h,
@@ -912,8 +1284,11 @@ export class UserAgentDO extends DurableObject<Bindings> {
           generated_at,
           valid_until
          FROM recommendations
+         WHERE valid_until IS NULL
+            OR valid_until > ?
          ORDER BY generated_at DESC
          LIMIT ?`,
+        new Date().toISOString(),
         sanitizeLimit(limit, 1, 100),
       )
       .toArray() as RecommendationRow[];
@@ -1254,7 +1629,6 @@ export class UserAgentDO extends DurableObject<Bindings> {
           : null,
       market_item_id: typeof row.market_item_id === 'string' ? row.market_item_id.trim() || null : null,
       asset_id: typeof row.asset_id === 'string' ? row.asset_id.trim() || null : null,
-      instrument_id: typeof row.instrument_id === 'string' ? row.instrument_id.trim() || null : null,
       chain,
       contract,
       name: typeof row.name === 'string' ? row.name.trim() || null : null,
@@ -1421,6 +1795,21 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const nextRun = nextUtcHour(now, 8);
     const nextDate = isoDate(nextRun);
     await this.enqueueJob('daily_digest', nextRun.toISOString(), {}, `daily_digest:${nextDate}`);
+  }
+
+  private async ensurePortfolioSnapshotSchedule(referenceIso?: string): Promise<void> {
+    if (!this.getOwnerUserId()) return;
+    if (!this.getWalletSummary()) return;
+    if (!this.isUserActive(referenceIso)) return;
+
+    const referenceDate = referenceIso ? new Date(referenceIso) : new Date();
+    if (!Number.isFinite(referenceDate.getTime())) return;
+
+    const nextRun = new Date(referenceDate);
+    nextRun.setUTCMinutes(0, 0, 0);
+    nextRun.setUTCHours(nextRun.getUTCHours() + 1);
+    const jobKey = `portfolio_snapshot:${nextRun.toISOString().slice(0, 13)}`;
+    await this.enqueueJob('portfolio_snapshot', nextRun.toISOString(), {}, jobKey);
   }
 
   private hasTodayDailyArticle(now: Date): boolean {
@@ -1611,8 +2000,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
       case 'daily_digest':
         await this.generateDailyDigest(payload);
         return;
-      case 'recommendation_refresh':
-        await this.refreshRecommendations(payload);
+      case 'portfolio_snapshot':
+        await this.capturePortfolioSnapshot();
         return;
       default:
         throw new Error(`unsupported_job_type_${jobType}`);
@@ -1639,6 +2028,16 @@ export class UserAgentDO extends DurableObject<Bindings> {
       getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
       getWatchlistAssets: (limit = 20) => this.getWatchlistAssets(limit),
     });
+  }
+
+  private async capturePortfolioSnapshot(): Promise<void> {
+    const wallet = this.getWalletSummary();
+    if (!wallet) return;
+    if (!this.isUserActive()) return;
+    const result = await fetchWalletPortfolio(this.env, wallet);
+    this.savePortfolioSnapshot(result.asOf, result.totalUsd, result.holdings);
+    this.markRecommendationsDirty();
+    await this.ensurePortfolioSnapshotSchedule(result.asOf);
   }
 
   private async getArticleMarkdown(articleId: string, r2Key: string): Promise<string> {

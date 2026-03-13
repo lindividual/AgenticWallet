@@ -1,14 +1,11 @@
-import { Keypair } from '@solana/web3.js';
 import { getMEEVersion, toMultichainNexusAccount } from '@biconomy/abstractjs';
 import type { Address } from 'viem';
 import { http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base, bsc, mainnet } from 'viem/chains';
 import type { Bindings, WalletNetworkKey, WalletProtocol, WalletSummary } from '../types';
-import { decryptString, encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
-import { privateKeyToBitcoinSegwitAddress } from '../utils/bitcoin';
+import { decryptString } from '../utils/crypto';
 import { resolveMeeVersion } from '../utils/env';
-import { nowIso } from '../utils/time';
 
 export const ETHEREUM_NETWORK_KEY: WalletNetworkKey = 'ethereum-mainnet';
 export const BASE_NETWORK_KEY: WalletNetworkKey = 'base-mainnet';
@@ -39,12 +36,32 @@ type WalletChainAccountRow = {
   address: string;
 };
 
+type WalletRpcStub = DurableObjectStub & {
+  getWalletRpc(userId: string): Promise<{ wallet: WalletSummary | null }>;
+  ensureWalletRpc(userId: string): Promise<{ wallet: WalletSummary }>;
+  upsertWalletRpc(
+    userId: string,
+    input: {
+      wallet: WalletSummary;
+      encryptedPrivateKey: string;
+      encryptedProtocolKeys: Partial<Record<WalletProtocol, string>>;
+    },
+  ): Promise<{ ok: true }>;
+  ensureWalletWithPrivateKeyRpc(userId: string): Promise<{ wallet: WalletWithPrivateKey }>;
+  deleteWalletRpc(userId: string): Promise<{ ok: true }>;
+};
+
 function normalizeWalletProtocol(raw: string | null | undefined): WalletProtocol | null {
   if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
   return null;
 }
 
-async function getWalletChainAccounts(db: D1Database, userId: string): Promise<WalletChainAccountRow[]> {
+function getWalletStub(env: Bindings, userId: string): WalletRpcStub {
+  const id = env.USER_AGENT.idFromName(userId);
+  return env.USER_AGENT.get(id) as WalletRpcStub;
+}
+
+async function getLegacyWalletChainAccounts(db: D1Database, userId: string): Promise<WalletChainAccountRow[]> {
   const chains = await db
     .prepare(
       `SELECT network_key, chain_id, COALESCE(protocol, 'evm') AS protocol, address
@@ -63,7 +80,7 @@ async function getWalletChainAccounts(db: D1Database, userId: string): Promise<W
   }));
 }
 
-async function getProtocolKeyMap(db: D1Database, userId: string): Promise<Partial<Record<WalletProtocol, string>>> {
+async function getLegacyProtocolKeyMap(db: D1Database, userId: string): Promise<Partial<Record<WalletProtocol, string>>> {
   const result = await db
     .prepare(
       `SELECT protocol, encrypted_key_material
@@ -82,7 +99,7 @@ async function getProtocolKeyMap(db: D1Database, userId: string): Promise<Partia
   return output;
 }
 
-export async function getWallet(db: D1Database, userId: string): Promise<WalletSummary | null> {
+async function getLegacyWallet(db: D1Database, userId: string): Promise<WalletSummary | null> {
   const wallet = await db
     .prepare('SELECT address, provider FROM wallets WHERE user_id = ? LIMIT 1')
     .bind(userId)
@@ -90,7 +107,7 @@ export async function getWallet(db: D1Database, userId: string): Promise<WalletS
 
   if (!wallet) return null;
 
-  const chains = await getWalletChainAccounts(db, userId);
+  const chains = await getLegacyWalletChainAccounts(db, userId);
 
   return {
     address: wallet.address,
@@ -104,7 +121,7 @@ export async function getWallet(db: D1Database, userId: string): Promise<WalletS
   };
 }
 
-async function readWalletWithPrivateKey(
+async function readLegacyWalletWithPrivateKey(
   db: D1Database,
   userId: string,
 ): Promise<WalletWithPrivateKey | null> {
@@ -116,8 +133,8 @@ async function readWalletWithPrivateKey(
   if (!wallet) return null;
 
   const [chains, protocolKeys] = await Promise.all([
-    getWalletChainAccounts(db, userId),
-    getProtocolKeyMap(db, userId),
+    getLegacyWalletChainAccounts(db, userId),
+    getLegacyProtocolKeyMap(db, userId),
   ]);
 
   return {
@@ -134,60 +151,60 @@ async function readWalletWithPrivateKey(
   };
 }
 
+async function migrateLegacyWalletToDo(env: Bindings, userId: string): Promise<WalletWithPrivateKey | null> {
+  const legacyWallet = await readLegacyWalletWithPrivateKey(env.DB, userId);
+  if (!legacyWallet) return null;
+  const stub = getWalletStub(env, userId);
+  await stub.upsertWalletRpc(userId, {
+    wallet: {
+      address: legacyWallet.address,
+      provider: legacyWallet.provider,
+      chainAccounts: legacyWallet.chainAccounts,
+    },
+    encryptedPrivateKey: legacyWallet.encryptedPrivateKey,
+    encryptedProtocolKeys: legacyWallet.encryptedProtocolKeys,
+  });
+  await clearLegacyWallet(env.DB, userId);
+  return legacyWallet;
+}
+
+async function clearLegacyWallet(db: D1Database, userId: string): Promise<void> {
+  await db.batch([
+    db.prepare('DELETE FROM wallet_chain_accounts WHERE user_id = ?').bind(userId),
+    db.prepare('DELETE FROM wallet_protocol_keys WHERE user_id = ?').bind(userId),
+    db.prepare('DELETE FROM wallets WHERE user_id = ?').bind(userId),
+  ]);
+}
+
+export async function getWallet(env: Bindings, userId: string): Promise<WalletSummary | null> {
+  const stub = getWalletStub(env, userId);
+  const current = await stub.getWalletRpc(userId);
+  if (current.wallet) {
+    await clearLegacyWallet(env.DB, userId);
+    return current.wallet;
+  }
+
+  const migrated = await migrateLegacyWalletToDo(env, userId);
+  if (migrated) {
+    return {
+      address: migrated.address,
+      provider: migrated.provider,
+      chainAccounts: migrated.chainAccounts,
+    };
+  }
+  return null;
+}
+
 export async function bootstrapWalletForUser(env: Bindings, userId: string): Promise<WalletSummary> {
-  const existing = await getWallet(env.DB, userId);
-  if (existing) return existing;
-
-  const privateKey = generatePrivateKeyHex();
-  const evmAccount = privateKeyToAccount(privateKey);
-  const bitcoinAddress = privateKeyToBitcoinSegwitAddress(privateKey);
-  const solanaKeypair = Keypair.generate();
-  const solanaSecretKey = encodeBase64(solanaKeypair.secretKey);
-  const chainAccounts: WalletSummary['chainAccounts'] = [
-    { networkKey: ETHEREUM_NETWORK_KEY, chainId: mainnet.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
-    { networkKey: BASE_NETWORK_KEY, chainId: base.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
-    { networkKey: BNB_NETWORK_KEY, chainId: bsc.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
-    { networkKey: SOLANA_NETWORK_KEY, chainId: null, protocol: SVM_PROTOCOL, address: solanaKeypair.publicKey.toBase58() },
-    { networkKey: BITCOIN_NETWORK_KEY, chainId: null, protocol: BTC_PROTOCOL, address: bitcoinAddress },
-  ];
-  const primaryAddress =
-    chainAccounts.find((x) => x.networkKey === ETHEREUM_NETWORK_KEY)?.address ?? chainAccounts[0].address;
-  const encryptedPrivateKey = await encryptString(privateKey, env.APP_SECRET);
-  const encryptedSolanaKey = await encryptString(solanaSecretKey, env.APP_SECRET);
-
-  const now = nowIso();
-  const statements = [
-    env.DB.prepare(
-      'INSERT INTO wallets (user_id, address, encrypted_private_key, provider, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).bind(userId, primaryAddress, encryptedPrivateKey, EVM_WALLET_PROVIDER, now),
-    ...chainAccounts.map((chain) =>
-      env.DB.prepare(
-        'INSERT INTO wallet_chain_accounts (user_id, network_key, chain_id, protocol, address, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).bind(userId, chain.networkKey, chain.chainId, chain.protocol, chain.address, now),
-    ),
-    env.DB.prepare(
-      'INSERT INTO wallet_protocol_keys (user_id, protocol, encrypted_key_material, key_format, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).bind(userId, EVM_PROTOCOL, encryptedPrivateKey, 'hex_private_key', now),
-    env.DB.prepare(
-      'INSERT INTO wallet_protocol_keys (user_id, protocol, encrypted_key_material, key_format, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).bind(userId, BTC_PROTOCOL, encryptedPrivateKey, 'hex_private_key', now),
-    env.DB.prepare(
-      'INSERT INTO wallet_protocol_keys (user_id, protocol, encrypted_key_material, key_format, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).bind(userId, SVM_PROTOCOL, encryptedSolanaKey, 'solana_secret_key_base64', now),
-  ];
-  await env.DB.batch(statements);
-
-  return {
-    address: primaryAddress,
-    provider: EVM_WALLET_PROVIDER,
-    chainAccounts,
-  };
+  return ensureWalletForUser(env, userId);
 }
 
 export async function ensureWalletForUser(env: Bindings, userId: string): Promise<WalletSummary> {
-  const existing = await getWallet(env.DB, userId);
+  const existing = await getWallet(env, userId);
   if (existing) return existing;
-  return bootstrapWalletForUser(env, userId);
+  const stub = getWalletStub(env, userId);
+  const data = await stub.ensureWalletRpc(userId);
+  return data.wallet;
 }
 
 export async function tryEnsureWalletForUser(
@@ -207,23 +224,31 @@ export async function tryEnsureWalletForUser(
 }
 
 export async function getWalletWithPrivateKey(
-  db: D1Database,
+  env: Bindings,
   userId: string,
 ): Promise<WalletWithPrivateKey | null> {
-  return readWalletWithPrivateKey(db, userId);
+  const stub = getWalletStub(env, userId);
+  const current = await stub.getWalletRpc(userId);
+  if (current.wallet) {
+    await clearLegacyWallet(env.DB, userId);
+    const withKeys = await stub.ensureWalletWithPrivateKeyRpc(userId);
+    return withKeys.wallet;
+  }
+  return migrateLegacyWalletToDo(env, userId);
 }
 
 export async function ensureWalletWithPrivateKey(env: Bindings, userId: string): Promise<WalletWithPrivateKey> {
-  const existing = await readWalletWithPrivateKey(env.DB, userId);
+  const existing = await getWalletWithPrivateKey(env, userId);
   if (existing) return existing;
+  const stub = getWalletStub(env, userId);
+  const data = await stub.ensureWalletWithPrivateKeyRpc(userId);
+  return data.wallet;
+}
 
-  await ensureWalletForUser(env, userId);
-
-  const wallet = await readWalletWithPrivateKey(env.DB, userId);
-  if (!wallet) {
-    throw new Error('wallet_not_found');
-  }
-  return wallet;
+export async function deleteWalletForUser(env: Bindings, userId: string): Promise<void> {
+  const stub = getWalletStub(env, userId);
+  await stub.deleteWalletRpc(userId).catch(() => undefined);
+  await clearLegacyWallet(env.DB, userId);
 }
 
 export async function buildEvmWalletExecutionContext(

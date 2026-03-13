@@ -9,7 +9,7 @@ type AgentEventIngestResult = {
   sequence: number;
 };
 
-type AgentJobType = 'daily_digest' | 'recommendation_refresh';
+type AgentJobType = 'daily_digest' | 'portfolio_snapshot';
 
 export type AgentRecommendation = {
   id: string;
@@ -18,7 +18,6 @@ export type AgentRecommendation = {
   asset_symbol: string | null;
   asset_chain: string | null;
   asset_contract: string | null;
-  asset_instrument_id: string | null;
   asset_display_name: string | null;
   asset_image: string | null;
   asset_price_change_24h: number | null;
@@ -127,6 +126,10 @@ type UserAgentRpcStub = DurableObjectStub & {
   setUserLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
   setRequestLocaleRpc(userId: string, locale: string | null): Promise<{ ok: true }>;
   listRecommendationsRpc(userId: string, limit?: number): Promise<AgentRecommendationsResponse>;
+  refreshRecommendationsRpc(
+    userId: string,
+    options?: { force?: boolean },
+  ): Promise<{ ok: true; refreshed: boolean }>;
   listArticlesRpc(
     userId: string,
     options?: {
@@ -274,6 +277,16 @@ export async function listUserAgentRecommendations(
   } catch {
     return [];
   }
+}
+
+export async function refreshUserAgentRecommendations(
+  env: Bindings,
+  userId: string,
+  options?: { force?: boolean },
+): Promise<boolean> {
+  const stub = getUserAgentStub(env, userId);
+  const data = await stub.refreshRecommendationsRpc(userId, options);
+  return data.refreshed === true;
 }
 
 export async function listUserAgentArticles(

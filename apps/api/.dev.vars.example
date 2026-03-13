@@ -36,7 +36,7 @@ CF_AI_GATEWAY_ACCOUNT_ID=
 CF_AI_GATEWAY_GATEWAY_ID=
 # Optional for authenticated gateways; omit for unauthenticated gateways
 CF_AI_GATEWAY_TOKEN=
-# Alias for compat mode examples where the gateway token is passed as OpenAI apiKey
+# Alias for AI Gateway examples where the gateway token is passed directly. For Responses API, prefer the /openai provider path over /compat.
 CF_AIG_TOKEN=
 
 # Optional Bitget Wallet ToB API override (defaults to built-in public demo key/secret)

@@ -438,7 +438,6 @@ export async function prepareTransfer(
         tokenDecimals,
         amountInput: input.amount.trim(),
         amountRaw: amountRaw.toString(),
-        // Keep legacy field for backward compatibility in web UI.
         estimatedFeeWei: meeQuote.paymentInfo.tokenWeiAmount ?? null,
         estimatedFeeTokenAmount: meeQuote.paymentInfo.tokenAmount ?? null,
         estimatedFeeTokenWei: meeQuote.paymentInfo.tokenWeiAmount ?? null,

@@ -311,7 +311,6 @@ export type TradeSubmitResponse = {
 export type TopMarketAsset = {
   id: string;
   asset_id: string;
-  instrument_id?: string;
   chain_asset_id: string;
   chain: string;
   contract: string;
@@ -331,7 +330,6 @@ export type TopAssetSource = 'auto' | 'coingecko' | 'bitget';
 
 export type CoinDetail = {
   asset_id: string;
-  instrument_id?: string;
   chain_asset_id: string;
   chain: string;
   contract: string;
@@ -361,7 +359,6 @@ export type TokenSecurityCheck = {
 
 export type TokenSecurityAudit = {
   asset_id: string;
-  instrument_id?: string;
   chain_asset_id: string;
   chain: string;
   contract: string;
@@ -407,7 +404,6 @@ export type KlineCandle = {
 export type TradeBrowseMarketItem = {
   id: string;
   asset_id?: string;
-  instrument_id?: string;
   symbol: string;
   name: string;
   image: string | null;
@@ -425,7 +421,6 @@ export type TradeBrowseMarketItem = {
 export type TradeBrowsePredictionItem = {
   id: string;
   asset_id?: string;
-  instrument_id?: string;
   title: string;
   image: string | null;
   description: string | null;
@@ -532,7 +527,6 @@ export type AgentRecommendation = {
     symbol: string;
     chain: string | null;
     contract: string | null;
-    instrument_id?: string | null;
     name: string;
     image: string | null;
     price_change_percentage_24h: number | null;
@@ -559,7 +553,6 @@ export type AgentArticleRelatedAsset = {
   market_type: 'spot' | 'perp' | 'prediction' | null;
   market_item_id: string | null;
   asset_id: string | null;
-  instrument_id: string | null;
   chain: string | null;
   contract: string | null;
   name: string;
@@ -919,7 +912,6 @@ export type MarketSearchResult = {
   chain: string | null;
   contract: string | null;
   asset_id?: string;
-  instrument_id?: string;
 };
 
 export async function searchMarketTokens(q: string, limit = 20): Promise<MarketSearchResult[]> {
@@ -935,6 +927,18 @@ export async function searchMarketTokens(q: string, limit = 20): Promise<MarketS
 
 export async function getAgentRecommendations(): Promise<{ recommendations: AgentRecommendation[] }> {
   return getJson<{ recommendations: AgentRecommendation[] }>('/v1/agent/recommendations', true);
+}
+
+export async function runAgentRecommendations(): Promise<{
+  ok: boolean;
+  refreshed: boolean;
+  recommendations: AgentRecommendation[];
+}> {
+  return postJson<{
+    ok: boolean;
+    refreshed: boolean;
+    recommendations: AgentRecommendation[];
+  }>('/v1/agent/jobs/recommendations/run', {}, true);
 }
 
 export async function getAgentArticles(params?: {

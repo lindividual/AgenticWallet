@@ -45,12 +45,6 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
     console.log(
       `[wallet/portfolio] sim_ok filtered=${holdings.length} totalUsd=${totalUsd} sample=${sample || 'none'}`,
     );
-    await saveUserPortfolioSnapshot(c.env, userId, {
-      totalUsd,
-      holdings,
-      asOf: result.asOf,
-    });
-
     return c.json({
       walletAddress,
       totalUsd,

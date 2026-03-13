@@ -11,7 +11,7 @@ import { getWebAuthnConfig, sanitizeDisplayName } from '../config/webauthn';
 import { saveChallenge, getChallenge } from '../services/challenge';
 import { createSession } from '../services/session';
 import { getUserSummary } from '../services/user';
-import { tryEnsureWalletForUser } from '../services/wallet';
+import { deleteWalletForUser, tryEnsureWalletForUser } from '../services/wallet';
 import type {
   AppEnv,
   LoginVerifyRequest,
@@ -21,23 +21,105 @@ import type {
 import { safeJsonParse } from '../utils/json';
 import { nowIso } from '../utils/time';
 
+const IMAGE_PROXY_CACHE_CONTROL = 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000';
+const BLOCKED_PROXY_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
+
 function isUniqueConstraintError(error: unknown, field: string): boolean {
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
   return message.includes('unique') && message.includes(field.toLowerCase());
 }
 
-async function cleanupPartialRegistration(db: D1Database, userId: string): Promise<void> {
-  await db.batch([
-    db.prepare('DELETE FROM wallet_chain_accounts WHERE user_id = ?').bind(userId),
-    db.prepare('DELETE FROM wallet_protocol_keys WHERE user_id = ?').bind(userId),
-    db.prepare('DELETE FROM wallets WHERE user_id = ?').bind(userId),
-    db.prepare('DELETE FROM users WHERE id = ?').bind(userId),
+function normalizeOptionalText(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  return value || null;
+}
+
+function isSupportedProxyProtocol(protocol: string): boolean {
+  return protocol === 'http:' || protocol === 'https:';
+}
+
+async function cleanupPartialRegistration(env: AppEnv['Bindings'], userId: string): Promise<void> {
+  await deleteWalletForUser(env, userId);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM wallet_chain_accounts WHERE user_id = ?').bind(userId),
+    env.DB.prepare('DELETE FROM wallet_protocol_keys WHERE user_id = ?').bind(userId),
+    env.DB.prepare('DELETE FROM wallets WHERE user_id = ?').bind(userId),
+    env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId),
   ]);
 }
 
 export function registerPublicRoutes(app: Hono<AppEnv>): void {
   app.get('/', (c) => c.json({ ok: true, service: 'agentic-wallet-api', version: 'mvp-passkey' }));
+
+  app.get('/v1/image', async (c) => {
+    const rawUrl = normalizeOptionalText(c.req.query('url'));
+    if (!rawUrl) {
+      return c.json({ error: 'invalid_image_url' }, 400);
+    }
+
+    let targetUrl: URL;
+    try {
+      targetUrl = new URL(rawUrl);
+    } catch {
+      return c.json({ error: 'invalid_image_url' }, 400);
+    }
+
+    if (!isSupportedProxyProtocol(targetUrl.protocol) || BLOCKED_PROXY_HOSTS.has(targetUrl.hostname.toLowerCase())) {
+      return c.json({ error: 'invalid_image_url' }, 400);
+    }
+
+    const workerUrl = new URL(c.req.url);
+    if (targetUrl.origin === workerUrl.origin && targetUrl.pathname === '/v1/image') {
+      return c.json({ error: 'invalid_image_url' }, 400);
+    }
+
+    const cacheKey = new Request(c.req.url, { method: 'GET' });
+    const cache = await caches.open('image-proxy-v1');
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(targetUrl.toString(), {
+        method: 'GET',
+        headers: {
+          Accept: 'image/*,*/*;q=0.8',
+        },
+      });
+    } catch {
+      return c.json({ error: 'image_fetch_failed' }, 502);
+    }
+
+    if (!upstream.ok) {
+      return c.json({ error: 'image_fetch_failed' }, 502);
+    }
+
+    const contentType = normalizeOptionalText(upstream.headers.get('content-type'));
+    if (!contentType?.toLowerCase().startsWith('image/')) {
+      return c.json({ error: 'invalid_image_content_type' }, 415);
+    }
+
+    const headers = new Headers();
+    headers.set('Content-Type', contentType);
+    headers.set('Cache-Control', IMAGE_PROXY_CACHE_CONTROL);
+    const etag = normalizeOptionalText(upstream.headers.get('etag'));
+    if (etag) headers.set('ETag', etag);
+    const lastModified = normalizeOptionalText(upstream.headers.get('last-modified'));
+    if (lastModified) headers.set('Last-Modified', lastModified);
+    const contentLength = normalizeOptionalText(upstream.headers.get('content-length'));
+    if (contentLength) headers.set('Content-Length', contentLength);
+
+    const response = new Response(upstream.body, {
+      status: 200,
+      headers,
+    });
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  });
 
   app.post('/v1/auth/register/options', async (c) => {
     const webauthn = getWebAuthnConfig(c.env, c.req.url);
@@ -166,7 +248,7 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
         c.env.DB.prepare('DELETE FROM auth_challenges WHERE id = ?').bind(body.challengeId),
       ]);
     } catch (error) {
-      await cleanupPartialRegistration(c.env.DB, body.userId);
+      await cleanupPartialRegistration(c.env, body.userId);
       if (isUniqueConstraintError(error, 'passkeys.credential_id')) {
         return c.json({ error: 'passkey_already_registered' }, 409);
       }

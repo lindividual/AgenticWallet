@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
@@ -192,7 +192,6 @@ function toWatchlistKey(chain: string, contract: string): string {
 function findBrowseFallbackItem(
   payload: TradeBrowseResponse | undefined,
   options: {
-    instrumentId: string | null;
     chain: string;
     contract: string;
   },
@@ -203,12 +202,6 @@ function findBrowseFallbackItem(
     ...payload.topMovers,
     ...payload.trendings,
   ];
-
-  const normalizedInstrumentId = options.instrumentId?.trim() || null;
-  if (normalizedInstrumentId) {
-    const byInstrumentId = items.find((item) => (item.instrument_id?.trim() || null) === normalizedInstrumentId);
-    if (byInstrumentId) return byInstrumentId;
-  }
 
   const targetKey = toWatchlistKey(options.chain, options.contract);
   return items.find((item) => {
@@ -257,6 +250,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
+  const [isAboutExpanded, setIsAboutExpanded] = useState(false);
+  const [shouldShowAboutToggle, setShouldShowAboutToggle] = useState(false);
+  const aboutRef = useRef<HTMLParagraphElement | null>(null);
 
   const normalizedChain = chain.trim().toLowerCase();
   const normalizedContract = normalizeContractForChain(normalizedChain, contract);
@@ -278,7 +274,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const activeChartRequest = KLINE_RANGE_REQUESTS[chartRange];
 
   const { data: detail, isLoading: isLegacyDetailLoading } = useQuery({
-    queryKey: ['trade-token-detail-legacy', normalizedChain, normalizedContract],
+    queryKey: ['trade-token-detail', normalizedChain, normalizedContract],
     queryFn: () => getCoinDetail(normalizedChain, normalizedContract),
     staleTime: 15_000,
     refetchInterval: 20_000,
@@ -362,7 +358,6 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const tradeBrowseFallbackItem = useMemo(
     () =>
       findBrowseFallbackItem(tradeBrowseFallback, {
-        instrumentId: null,
         chain: normalizedChain,
         contract: normalizedContract,
       }),
@@ -442,6 +437,36 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       && tradeTokenConfig
       && (tradeMarketChain === 'sol' ? tradeContract && tradeContract !== 'native' : /^0x[a-fA-F0-9]{40}$/.test(tradeContract)),
   );
+
+  useEffect(() => {
+    setIsAboutExpanded(false);
+  }, [displayAbout]);
+
+  useEffect(() => {
+    if (!displayAbout) {
+      setShouldShowAboutToggle(false);
+      return;
+    }
+
+    if (isAboutExpanded) return;
+
+    const measureOverflow = () => {
+      const node = aboutRef.current;
+      if (!node) {
+        setShouldShowAboutToggle(false);
+        return;
+      }
+      setShouldShowAboutToggle(node.scrollHeight > node.clientHeight + 1);
+    };
+
+    const frameId = window.requestAnimationFrame(measureOverflow);
+    window.addEventListener('resize', measureOverflow);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', measureOverflow);
+    };
+  }, [displayAbout, isAboutExpanded]);
 
   const fallbackPriceChangePct = useMemo(
     () => compute24hChangePctFromHourlyCandles(fallbackChangeKlineData),
@@ -739,9 +764,28 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
 
       <section className="p-0">
         <h2 className="m-0 text-lg font-bold">{t('trade.about')}</h2>
-        <p className="m-0 mt-3 whitespace-pre-wrap text-sm leading-7 text-base-content/75">
-          {displayAbout || t('trade.noDescription')}
-        </p>
+        {displayAbout ? (
+          <>
+            <p
+              ref={aboutRef}
+              className={[
+                'm-0 mt-3 whitespace-pre-wrap text-sm leading-7 text-base-content/75',
+                !isAboutExpanded ? 'overflow-hidden [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]' : '',
+              ].join(' ')}
+            >
+              {displayAbout}
+            </p>
+            {shouldShowAboutToggle ? (
+              <button
+                type="button"
+                className="mt-2 text-sm font-semibold text-base-content/72"
+                onClick={() => setIsAboutExpanded((value) => !value)}
+              >
+                {isAboutExpanded ? t('common.less') : t('common.more')}
+              </button>
+            ) : null}
+          </>
+        ) : null}
         {isLegacyDetailLoading && !resolvedTokenDetail?.name ? (
           <div className="mt-3 grid grid-cols-2 gap-3">
             {Array.from({ length: 8 }).map((_, index) => (

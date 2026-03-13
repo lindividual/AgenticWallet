@@ -14,6 +14,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import type { Bindings } from '../types';
+import { fetchWithTimeout } from '../utils/fetch';
 import { buildAssetId, buildChainAssetId, contractKeyToUpstreamContract } from './assetIdentity';
 import { ensureWalletWithPrivateKey, SOLANA_NETWORK_KEY, SVM_PROTOCOL } from './wallet';
 import { decodeBase64, encodeBase64 } from '../utils/crypto';
@@ -23,6 +24,7 @@ const SOLANA_RPC_DEFAULT = 'https://api.mainnet-beta.solana.com';
 const JUPITER_API_DEFAULT = 'https://lite-api.jup.ag';
 const JUPITER_SWAP_API_DEFAULT = 'https://api.jup.ag';
 const TOKEN_PROGRAM_IDS = [TOKEN_PROGRAM_ID.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58()];
+const SOLANA_FETCH_TIMEOUT_MS = 15_000;
 
 export const SOLANA_MARKET_CHAIN = 'sol';
 export const SOLANA_NATIVE_SYMBOL = 'SOL';
@@ -172,7 +174,7 @@ function bigintToDecimalString(value: bigint, decimals: number): string {
 }
 
 async function solanaRpc<T>(env: Bindings, method: string, params: unknown[]): Promise<T> {
-  const response = await fetch(getSolanaRpcUrl(env), {
+  const response = await fetchWithTimeout(getSolanaRpcUrl(env), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -183,7 +185,7 @@ async function solanaRpc<T>(env: Bindings, method: string, params: unknown[]): P
       method,
       params,
     }),
-  });
+  }, SOLANA_FETCH_TIMEOUT_MS);
 
   if (!response.ok) {
     throw new Error(`solana_rpc_http_${response.status}`);
@@ -398,12 +400,12 @@ async function fetchJupiterTokenMetadata(env: Bindings, contract: string): Promi
   const url = new URL('/tokens/v2/search', getJupiterTokenApiBaseUrl(env));
   url.searchParams.set('query', contract);
   url.searchParams.set('limit', '10');
-  const response = await fetch(url.toString(), {
+  const response = await fetchWithTimeout(url.toString(), {
     method: 'GET',
     headers: {
       Accept: 'application/json',
     },
-  });
+  }, SOLANA_FETCH_TIMEOUT_MS);
   if (!response.ok) {
     return null;
   }
@@ -428,12 +430,12 @@ async function fetchJupiterPrices(
 
   const url = new URL('/price/v3', getJupiterTokenApiBaseUrl(env));
   url.searchParams.set('ids', normalizedContracts.join(','));
-  const response = await fetch(url.toString(), {
+  const response = await fetchWithTimeout(url.toString(), {
     method: 'GET',
     headers: {
       Accept: 'application/json',
     },
-  });
+  }, SOLANA_FETCH_TIMEOUT_MS);
   if (!response.ok) {
     return new Map();
   }

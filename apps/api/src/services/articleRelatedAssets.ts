@@ -10,7 +10,6 @@ export type ArticleRelatedAssetRef = {
   market_type?: 'spot' | 'perp' | 'prediction' | null;
   market_item_id?: string | null;
   asset_id?: string | null;
-  instrument_id?: string | null;
   chain?: string | null;
   contract?: string | null;
   name?: string | null;
@@ -23,7 +22,6 @@ export type ArticleRelatedAsset = {
   market_type: 'spot' | 'perp' | 'prediction' | null;
   market_item_id: string | null;
   asset_id: string | null;
-  instrument_id: null;
   chain: string | null;
   contract: string | null;
   name: string;
@@ -36,7 +34,6 @@ type NormalizedRelatedAssetRef = {
   market_type: 'spot' | 'perp' | 'prediction' | null;
   market_item_id: string | null;
   asset_id: string | null;
-  instrument_id: string | null;
   chain: string | null;
   contract: string | null;
   name: string | null;
@@ -122,7 +119,6 @@ function normalizeRef(input: ArticleRelatedAssetRef): NormalizedRelatedAssetRef 
     market_type: normalizeMarketType(input.market_type),
     market_item_id: normalizeText(input.market_item_id),
     asset_id: normalizeText(input.asset_id),
-    instrument_id: null,
     chain,
     contract: normalizeContract(chain, input.contract),
     name: normalizeText(input.name),
@@ -200,7 +196,6 @@ export async function hydrateArticleRelatedAssets(
       market_type: marketType,
       market_item_id: ref.market_item_id ?? null,
       asset_id: ref.asset_id ?? null,
-      instrument_id: null,
       chain,
       contract,
       name: ref.name ?? fallbackRoute?.name ?? ref.symbol,

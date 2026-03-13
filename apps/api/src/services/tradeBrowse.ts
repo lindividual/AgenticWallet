@@ -9,7 +9,6 @@ import { safeJsonParse } from '../utils/json';
 export type TradeBrowseMarketItem = {
   id: string;
   asset_id?: string;
-  instrument_id?: string;
   symbol: string;
   name: string;
   image: string | null;
@@ -27,7 +26,6 @@ export type TradeBrowseMarketItem = {
 export type TradeBrowsePredictionItem = {
   id: string;
   asset_id?: string;
-  instrument_id?: string;
   title: string;
   image: string | null;
   description: string | null;
@@ -117,13 +115,19 @@ export type TradeBrowseResponse = {
   predictions: TradeBrowsePredictionItem[];
 };
 
-const TRADE_BROWSE_CACHE_TTL_MS = 20_000;
 type TradeBrowseShelfKey = keyof Omit<TradeBrowseResponse, 'generatedAt'>;
 type TradeBrowseShelfValueByKey = {
   topMovers: TradeBrowseMarketItem[];
   trendings: TradeBrowseMarketItem[];
   perps: TradeBrowseMarketItem[];
   predictions: TradeBrowsePredictionItem[];
+};
+const DEFAULT_TRADE_BROWSE_SHELF_TTL_MS = 20_000;
+const TRADE_BROWSE_SHELF_TTL_MS: Record<TradeBrowseShelfKey, number> = {
+  topMovers: DEFAULT_TRADE_BROWSE_SHELF_TTL_MS,
+  trendings: 12 * 60 * 60 * 1000,
+  perps: DEFAULT_TRADE_BROWSE_SHELF_TTL_MS,
+  predictions: DEFAULT_TRADE_BROWSE_SHELF_TTL_MS,
 };
 type TradeBrowseShelfCacheRow = {
   shelf_key: string;
@@ -309,6 +313,7 @@ async function writeTradeBrowseShelfToD1<K extends TradeBrowseShelfKey>(
 async function getCachedTradeBrowseShelf<K extends TradeBrowseShelfKey>(
   env: Bindings,
   shelfKey: K,
+  ttlMs: number,
   fetcher: () => Promise<TradeBrowseShelfValueByKey[K]>,
 ): Promise<{ generatedAt: string; value: TradeBrowseShelfValueByKey[K] }> {
   const now = Date.now();
@@ -337,7 +342,7 @@ async function getCachedTradeBrowseShelf<K extends TradeBrowseShelfKey>(
         value: d1Cached.value,
       };
       tradeBrowseShelfValueCache.set(shelfKey, {
-        expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+        expiresAt: Date.now() + ttlMs,
         entry,
       });
       return entry;
@@ -351,10 +356,10 @@ async function getCachedTradeBrowseShelf<K extends TradeBrowseShelfKey>(
     };
 
     tradeBrowseShelfValueCache.set(shelfKey, {
-      expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+      expiresAt: Date.now() + ttlMs,
       entry,
     });
-    await writeTradeBrowseShelfToD1(env, shelfKey, value, generatedAt, TRADE_BROWSE_CACHE_TTL_MS).catch(() => undefined);
+    await writeTradeBrowseShelfToD1(env, shelfKey, value, generatedAt, ttlMs).catch(() => undefined);
     return entry;
   })().finally(() => {
     tradeBrowseShelfInFlight.delete(shelfKey);
@@ -498,12 +503,6 @@ async function ensurePredictionSchema(db: D1Database): Promise<void> {
       )`,
     )
     .run();
-  try {
-    await db.prepare('ALTER TABLE prediction_events ADD COLUMN synced_at TEXT').run();
-  } catch { /* column already exists */ }
-  try {
-    await db.prepare('ALTER TABLE prediction_events ADD COLUMN expires_at TEXT').run();
-  } catch { /* column already exists */ }
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_events_source_event_id ON prediction_events(source_event_id)').run();
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_events_primary_market_id ON prediction_events(primary_market_id)').run();
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_prediction_events_expires_at ON prediction_events(expires_at)').run();
@@ -672,7 +671,6 @@ function mapTopAssetToBrowseItem(
   return {
     id: asset.id,
     asset_id: asset.asset_id,
-    instrument_id: asset.instrument_id,
     symbol: asset.symbol,
     name: asset.name,
     image: asset.image,
@@ -806,7 +804,7 @@ async function getCachedPerps(env: Bindings): Promise<TradeBrowseMarketItem[]> {
   const task = fetchPerps(env)
     .then((value) => {
       perpSearchCache = {
-        expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+        expiresAt: Date.now() + DEFAULT_TRADE_BROWSE_SHELF_TTL_MS,
         value,
       };
       return value;
@@ -1135,7 +1133,7 @@ async function getCachedPredictions(limit = 250): Promise<TradeBrowsePredictionI
   const task = fetchPredictions(Math.max(limit, 80))
     .then((value) => {
       predictionSearchCache = {
-        expiresAt: Date.now() + TRADE_BROWSE_CACHE_TTL_MS,
+        expiresAt: Date.now() + DEFAULT_TRADE_BROWSE_SHELF_TTL_MS,
         value,
       };
       return value;
@@ -1891,10 +1889,30 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 
 export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseResponse> {
   const [topMovers, trendings, perps, predictions] = await Promise.all([
-    getCachedTradeBrowseShelf(env, 'topMovers', () => safeFetch(() => fetchTopMovers(env), [])),
-    getCachedTradeBrowseShelf(env, 'trendings', () => safeFetch(() => fetchTrendings(env), [])),
-    getCachedTradeBrowseShelf(env, 'perps', () => safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 5)), [])),
-    getCachedTradeBrowseShelf(env, 'predictions', () => safeFetch(() => fetchPredictions(5), [])),
+    getCachedTradeBrowseShelf(
+      env,
+      'topMovers',
+      TRADE_BROWSE_SHELF_TTL_MS.topMovers,
+      () => safeFetch(() => fetchTopMovers(env), []),
+    ),
+    getCachedTradeBrowseShelf(
+      env,
+      'trendings',
+      TRADE_BROWSE_SHELF_TTL_MS.trendings,
+      () => safeFetch(() => fetchTrendings(env), []),
+    ),
+    getCachedTradeBrowseShelf(
+      env,
+      'perps',
+      TRADE_BROWSE_SHELF_TTL_MS.perps,
+      () => safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 5)), []),
+    ),
+    getCachedTradeBrowseShelf(
+      env,
+      'predictions',
+      TRADE_BROWSE_SHELF_TTL_MS.predictions,
+      () => safeFetch(() => fetchPredictions(5), []),
+    ),
   ]);
 
   const generatedTimes = [

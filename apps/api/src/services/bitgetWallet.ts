@@ -285,7 +285,6 @@ async function bitgetPost<TData>(
 export type MarketTopAsset = {
   id: string;
   asset_id: string;
-  instrument_id?: string;
   chain_asset_id: string;
   chain: string;
   contract: string;
@@ -334,13 +333,11 @@ export async function fetchBitgetTopMarketAssets(
     const contractKey = toContractKey(contract, chain);
     const chainAssetId = buildChainAssetId(chain, contract);
     const assetId = buildAssetId(chain, contract);
-    const instrumentId = `ins:spot:${chain}:${contractKey}`;
     const symbol = normalizeText(row.symbol) ?? 'UNKNOWN';
     const name = normalizeText(row.name) ?? symbol;
     return {
       id: chainAssetId,
       asset_id: assetId,
-      instrument_id: instrumentId,
       chain_asset_id: chainAssetId,
       chain,
       contract,

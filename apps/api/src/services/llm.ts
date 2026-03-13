@@ -78,6 +78,7 @@ const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const CLOUDFLARE_AI_GATEWAY_HOST = 'gateway.ai.cloudflare.com';
 const CLOUDFLARE_AI_GATEWAY_BASE_URL = `https://${CLOUDFLARE_AI_GATEWAY_HOST}/v1`;
+const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16;
 const DEFAULT_MAX_RETRY_DELAY_MS = 30_000;
 const ABSOLUTE_MAX_RETRY_DELAY_MS = 120_000;
 
@@ -233,6 +234,25 @@ function isCloudflareAiGatewayCompatUrl(baseUrl: string): boolean {
   }
 }
 
+function isCloudflareAiGatewayProviderUrl(baseUrl: string, provider: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === CLOUDFLARE_AI_GATEWAY_HOST && url.pathname.replace(/\/+$/, '').endsWith(`/${provider}`);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeGatewayBaseUrlForResponses(provider: string, baseUrl: string): string {
+  if (provider !== 'openai' || !isCloudflareAiGatewayCompatUrl(baseUrl)) {
+    return baseUrl;
+  }
+
+  const url = new URL(baseUrl);
+  url.pathname = url.pathname.replace(/\/compat\/?$/, `/${provider}`);
+  return url.toString();
+}
+
 function buildCloudflareAiGatewayBaseUrl(accountId: string, gatewayId: string, provider: string): string {
   return `${CLOUDFLARE_AI_GATEWAY_BASE_URL}/${encodeURIComponent(accountId)}/${encodeURIComponent(gatewayId)}/${provider}`;
 }
@@ -248,10 +268,11 @@ function resolveLlmConfig(env: Bindings): ResolvedLlmConfig {
     gatewayAccountId && gatewayId ? buildCloudflareAiGatewayBaseUrl(gatewayAccountId, gatewayId, provider) : null;
   const explicitBaseUrlIsDefaultOpenAi =
     explicitBaseUrl !== null && normalizeBaseUrl(explicitBaseUrl) === DEFAULT_OPENAI_BASE_URL;
-  const baseUrl = normalizeBaseUrl(
+  const baseUrl = normalizeGatewayBaseUrlForResponses(
+    provider,
     gatewayBaseUrl && (explicitBaseUrl === null || explicitBaseUrlIsDefaultOpenAi)
       ? gatewayBaseUrl
-      : explicitBaseUrl ?? gatewayBaseUrl ?? DEFAULT_OPENAI_BASE_URL,
+      : normalizeBaseUrl(explicitBaseUrl ?? gatewayBaseUrl ?? DEFAULT_OPENAI_BASE_URL),
   );
   const model = resolveLlmModel(provider, baseUrl, trimEnvValue(env.LLM_MODEL) ?? DEFAULT_OPENAI_MODEL);
   const usingGateway = isCloudflareAiGatewayUrl(baseUrl);
@@ -274,10 +295,16 @@ function resolveLlmConfig(env: Bindings): ResolvedLlmConfig {
 }
 
 function resolveLlmModel(provider: string, baseUrl: string, model: string): string {
-  if (!isCloudflareAiGatewayCompatUrl(baseUrl) || model.includes('/')) {
-    return model;
+  if (isCloudflareAiGatewayCompatUrl(baseUrl)) {
+    if (model.includes('/')) return model;
+    return `${provider}/${model}`;
   }
-  return `${provider}/${model}`;
+
+  if (isCloudflareAiGatewayProviderUrl(baseUrl, provider) && model.startsWith(`${provider}/`)) {
+    return model.slice(provider.length + 1);
+  }
+
+  return model;
 }
 
 function resolveAuthorizationToken(config: Pick<ResolvedLlmConfig, 'apiKey' | 'gatewayToken' | 'usingGatewayCompat'>): string | null {
@@ -295,6 +322,11 @@ function normalizeMaxRetryDelayMs(value: number | undefined): number {
   if (!Number.isFinite(value)) return DEFAULT_MAX_RETRY_DELAY_MS;
   const rounded = Math.round(value ?? DEFAULT_MAX_RETRY_DELAY_MS);
   return Math.max(1_000, Math.min(rounded, ABSOLUTE_MAX_RETRY_DELAY_MS));
+}
+
+function normalizeMaxOutputTokens(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 1200;
+  return Math.max(Math.round(value ?? 1200), OPENAI_RESPONSES_MIN_OUTPUT_TOKENS);
 }
 
 function applyJitter(delayMs: number, minFactor: number, maxFactor: number, maxDelayMs: number): number {
@@ -477,7 +509,7 @@ async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerat
             content: message.content,
           })),
           temperature: input.temperature ?? 0.3,
-          max_output_tokens: input.maxTokens ?? 1200,
+          max_output_tokens: normalizeMaxOutputTokens(input.maxTokens),
           store: false,
         }),
       });

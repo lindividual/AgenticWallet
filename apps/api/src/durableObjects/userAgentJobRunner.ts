@@ -37,7 +37,7 @@ export async function runDueJobs(params: {
        WHERE status = ?
          AND run_at <= ?
        ORDER BY run_at ASC
-       LIMIT 10`,
+       LIMIT 1`,
       JOB_STATUS_QUEUED,
       now.toISOString(),
     )
