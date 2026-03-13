@@ -194,7 +194,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
     if (!payload) return false;
     return payload.topMovers.length > 0
       || payload.trendings.length > 0
-      || payload.stocks.length > 0
       || payload.perps.length > 0
       || payload.predictions.length > 0;
   }, [payload]);
@@ -494,46 +493,6 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
                 </div>
               </div>
             )}
-          </section>
-
-          <section className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <SectionTitle title={t('trade.stocks')} />
-            </div>
-            <div className="overflow-hidden rounded-xl bg-base-200/35">
-              {payload.stocks.length === 0 && (
-                <div className="px-4 py-4 text-sm text-base-content/65">{t('trade.noSectionData')}</div>
-              )}
-              {payload.stocks.slice(0, 5).map((item) => {
-                const changeClass = pctClassname(item.change24h);
-                return (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-3 border-b border-base-content/10 px-4 py-3 last:border-b-0"
-                  >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left transition-colors hover:bg-base-200/70"
-                      onClick={() => onOpenMarketDetail('stock', toDetailItemId(item))}
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <IconAvatar symbol={item.symbol} name={item.name} image={item.image} />
-                        <div className="min-w-0">
-                          <p className="m-0 truncate text-[15px] font-semibold">{item.symbol}</p>
-                          <p className="m-0 mt-0.5 text-xs text-base-content/55">{item.name}</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="m-0 text-sm text-base-content/65">
-                          {item.currentPrice != null ? formatUsdAdaptive(item.currentPrice, i18n.language) : '--'}
-                        </p>
-                        <p className={`m-0 mt-0.5 text-base font-semibold ${changeClass}`}>{formatPct(item.change24h)}</p>
-                      </div>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
           </section>
 
           <section className="flex flex-col gap-2">

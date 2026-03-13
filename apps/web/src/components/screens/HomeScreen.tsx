@@ -62,7 +62,7 @@ type WatchlistDisplayAsset = WatchlistAsset & {
   tokenPreview: TopMarketAsset | null;
 };
 
-type WatchlistCategory = 'crypto' | 'perps' | 'stock' | 'prediction';
+type WatchlistCategory = 'crypto' | 'perps' | 'prediction';
 
 function isOpenableCryptoWatch(asset: WatchlistAsset): boolean {
   if (asset.watch_type !== 'crypto') return false;
@@ -462,7 +462,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
         <section className="bg-base-100 mt-2">
           <h2 className="m-0 text-lg font-bold">{t('home.watchlistTitle')}</h2>
           <div className="mt-3 flex flex-wrap gap-2">
-            {(['crypto', 'perps', 'stock', 'prediction'] as WatchlistCategory[]).map((category) => (
+            {(['crypto', 'perps', 'prediction'] as WatchlistCategory[]).map((category) => (
               <button
                 key={category}
                 type="button"

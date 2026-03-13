@@ -44,6 +44,23 @@ function toSpotInstrumentId(chain: string | null | undefined, contract: string |
   return `ins:spot:${normalizeMarketChain(normalizedChain)}:${toContractKey(contract ?? 'native', normalizedChain)}`;
 }
 
+function normalizeArticleTimeBound(raw: string | undefined, bound: 'from' | 'to'): string | null {
+  const normalized = raw?.trim();
+  if (!normalized) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const startMs = Date.parse(`${normalized}T00:00:00.000Z`);
+    if (!Number.isFinite(startMs)) return null;
+    return bound === 'from'
+      ? new Date(startMs).toISOString()
+      : new Date(startMs + 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  const parsedMs = Date.parse(normalized);
+  if (!Number.isFinite(parsedMs)) return null;
+  return new Date(parsedMs).toISOString();
+}
+
 function hasTopicSpecialAdminAccess(c: {
   env: AppEnv['Bindings'];
   req: { header: (name: string) => string | undefined };
@@ -177,10 +194,25 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const articleType = c.req.query('type') ?? undefined;
     const limitRaw = c.req.query('limit');
+    const fromRaw = c.req.query('from');
+    const toRaw = c.req.query('to');
     const limit = limitRaw ? Number(limitRaw) : 20;
+    const createdAfter = normalizeArticleTimeBound(fromRaw, 'from');
+    const createdBefore = normalizeArticleTimeBound(toRaw, 'to');
+    if (fromRaw && !createdAfter) {
+      return c.json({ error: 'invalid_from' }, 400);
+    }
+    if (toRaw && !createdBefore) {
+      return c.json({ error: 'invalid_to' }, 400);
+    }
+    if (createdAfter && createdBefore && Date.parse(createdAfter) >= Date.parse(createdBefore)) {
+      return c.json({ error: 'invalid_range' }, 400);
+    }
     const articles = await listUserAgentArticles(c.env, userId, {
       articleType,
       limit: Number.isFinite(limit) ? limit : 20,
+      createdAfter,
+      createdBefore,
     });
 
     return c.json({
@@ -299,6 +331,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
         temperature: 0,
         maxTokens: 8,
         retryAttempts: 1,
+        maxRetryDelayMs: 2_000,
       });
       return c.json({
         ok: true,

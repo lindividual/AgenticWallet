@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS instrument_refs;
+DROP TABLE IF EXISTS instruments;
+DROP TABLE IF EXISTS assets;

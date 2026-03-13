@@ -1,15 +1,6 @@
-import { contractKeyToUpstreamContract } from './assetIdentity';
-import {
-  buildLegacyItemIdForInstrument,
-  getAssetById,
-  getInstrumentById,
-  listAssetsByIds,
-  listAssetsBySymbols,
-  listInstrumentsByAssetIds,
-  type AssetRecord,
-  type InstrumentRecord,
-} from './assetData';
+import { NATIVE_CONTRACT_KEY, buildAssetId, normalizeMarketChain, toContractKey } from './assetIdentity';
 import { fetchBitgetTokenDetails } from './bitgetWallet';
+import { resolveCoinGeckoAssetIdForContract } from './coingecko';
 import { fetchSolanaTokenDetails } from './solana';
 import { fetchTradeMarketDetail } from './tradeBrowse';
 import type { Bindings } from '../types';
@@ -32,7 +23,7 @@ export type ArticleRelatedAsset = {
   market_type: 'spot' | 'perp' | 'prediction' | null;
   market_item_id: string | null;
   asset_id: string | null;
-  instrument_id: string | null;
+  instrument_id: null;
   chain: string | null;
   contract: string | null;
   name: string;
@@ -117,17 +108,6 @@ function normalizeContract(chain: string | null, raw: unknown): string | null {
   return value.toLowerCase();
 }
 
-function instrumentContractToRouteContract(instrument: InstrumentRecord | null): string | null {
-  if (!instrument?.contract_key) return null;
-  if (instrument.contract_key === 'native') return 'native';
-  return contractKeyToUpstreamContract(instrument.contract_key, instrument.chain);
-}
-
-function instrumentToMarketItemId(instrument: InstrumentRecord | null): string | null {
-  if (!instrument) return null;
-  return buildLegacyItemIdForInstrument(instrument);
-}
-
 function normalizeFiniteNumber(raw: unknown): number | null {
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
@@ -142,7 +122,7 @@ function normalizeRef(input: ArticleRelatedAssetRef): NormalizedRelatedAssetRef 
     market_type: normalizeMarketType(input.market_type),
     market_item_id: normalizeText(input.market_item_id),
     asset_id: normalizeText(input.asset_id),
-    instrument_id: normalizeText(input.instrument_id),
+    instrument_id: null,
     chain,
     contract: normalizeContract(chain, input.contract),
     name: normalizeText(input.name),
@@ -151,88 +131,47 @@ function normalizeRef(input: ArticleRelatedAssetRef): NormalizedRelatedAssetRef 
   };
 }
 
-function choosePreferredInstrument(instruments: InstrumentRecord[]): InstrumentRecord | null {
-  if (!instruments.length) return null;
-  const preferredSpot = instruments.find((item) => item.market_type === 'spot' && item.chain && item.contract_key);
-  return preferredSpot ?? instruments[0] ?? null;
+const NATIVE_COIN_ASSET_ID_BY_CHAIN: Record<string, string> = {
+  eth: 'coingecko:ethereum',
+  base: 'coingecko:ethereum',
+  bnb: 'coingecko:binancecoin',
+  sol: 'coingecko:solana',
+  btc: 'coingecko:bitcoin',
+};
+
+function buildChainFallbackAssetId(chain: string, contract: string): string {
+  return `chain:${normalizeMarketChain(chain)}:${toContractKey(contract, chain)}`;
 }
 
-function choosePreferredInstrumentForType(
-  instruments: InstrumentRecord[],
-  marketType: 'spot' | 'perp' | 'prediction' | null,
-): InstrumentRecord | null {
-  if (!marketType) return choosePreferredInstrument(instruments);
-  const exact = instruments.filter((item) => item.market_type === marketType);
-  if (exact.length === 0) return choosePreferredInstrument(instruments);
-  return choosePreferredInstrument(exact);
+async function resolveSpotAssetId(
+  env: Bindings,
+  chain: string,
+  contract: string,
+): Promise<string> {
+  const normalizedChain = normalizeMarketChain(chain);
+  const contractKey = toContractKey(contract, normalizedChain);
+  if (contractKey === NATIVE_CONTRACT_KEY) {
+    return NATIVE_COIN_ASSET_ID_BY_CHAIN[normalizedChain] ?? buildAssetId(normalizedChain, contractKey);
+  }
+  const coingeckoAssetId = await resolveCoinGeckoAssetIdForContract(env, normalizedChain, contractKey).catch(() => null);
+  return coingeckoAssetId ?? buildChainFallbackAssetId(normalizedChain, contractKey);
 }
 
-function scoreInstrument(instrument: InstrumentRecord | null): number {
-  if (!instrument) return 0;
-  let score = 0;
-  if (instrument.market_type === 'spot') score += 10;
-  if (instrument.chain && instrument.contract_key) score += 5;
-  if (instrument.updated_at) score += Date.parse(instrument.updated_at) / 1e15;
-  return score;
-}
-
-function buildResolvedInstrumentMaps(
-  assets: AssetRecord[],
-  instruments: InstrumentRecord[],
-): {
-  assetById: Map<string, AssetRecord>;
-  preferredInstrumentByAssetId: Map<string, InstrumentRecord>;
-  preferredInstrumentByAssetIdAndType: Map<string, InstrumentRecord>;
-  bestAssetIdBySymbol: Map<string, string>;
-} {
-  const assetById = new Map<string, AssetRecord>();
-  for (const asset of assets) {
-    assetById.set(asset.asset_id, asset);
-  }
-
-  const byAssetId = new Map<string, InstrumentRecord[]>();
-  for (const instrument of instruments) {
-    const group = byAssetId.get(instrument.asset_id);
-    if (group) {
-      group.push(instrument);
-    } else {
-      byAssetId.set(instrument.asset_id, [instrument]);
-    }
-  }
-
-  const preferredInstrumentByAssetId = new Map<string, InstrumentRecord>();
-  const preferredInstrumentByAssetIdAndType = new Map<string, InstrumentRecord>();
-  for (const [assetId, group] of byAssetId) {
-    const preferred = choosePreferredInstrument(group);
-    if (preferred) preferredInstrumentByAssetId.set(assetId, preferred);
-    for (const marketType of ['spot', 'perp', 'prediction'] as const) {
-      const typed = choosePreferredInstrumentForType(group, marketType);
-      if (typed) preferredInstrumentByAssetIdAndType.set(`${assetId}:${marketType}`, typed);
-    }
-  }
-
-  const bestAssetIdBySymbol = new Map<string, string>();
-  for (const asset of assets) {
-    const symbol = normalizeSymbol(asset.symbol);
-    if (!symbol) continue;
-    const nextInstrument = preferredInstrumentByAssetId.get(asset.asset_id) ?? null;
-    const currentAssetId = bestAssetIdBySymbol.get(symbol);
-    if (!currentAssetId) {
-      bestAssetIdBySymbol.set(symbol, asset.asset_id);
-      continue;
-    }
-    const currentInstrument = preferredInstrumentByAssetId.get(currentAssetId) ?? null;
-    if (scoreInstrument(nextInstrument) > scoreInstrument(currentInstrument)) {
-      bestAssetIdBySymbol.set(symbol, asset.asset_id);
-    }
-  }
-
-  return {
-    assetById,
-    preferredInstrumentByAssetId,
-    preferredInstrumentByAssetIdAndType,
-    bestAssetIdBySymbol,
-  };
+async function resolveSpotAssetIdMap(
+  env: Bindings,
+  refs: Array<{ chain: string; contract: string }>,
+): Promise<Map<string, string>> {
+  const uniqueRefs = [...new Map(
+    refs.map((item) => {
+      const chain = normalizeMarketChain(item.chain);
+      const contract = toContractKey(item.contract, chain);
+      return [`${chain}:${contract}`, { chain, contract }] as const;
+    }),
+  ).values()];
+  const resolved = await Promise.all(
+    uniqueRefs.map(async (item) => [`${item.chain}:${item.contract}`, await resolveSpotAssetId(env, item.chain, item.contract)] as const),
+  );
+  return new Map(resolved);
 }
 
 export async function hydrateArticleRelatedAssets(
@@ -244,56 +183,28 @@ export async function hydrateArticleRelatedAssets(
     .filter((value): value is NormalizedRelatedAssetRef => Boolean(value));
   if (!normalizedRefs.length) return [];
 
-  const assetIds = normalizedRefs
-    .map((item) => item.asset_id)
-    .filter((value): value is string => Boolean(value));
-  const unresolvedSymbols = normalizedRefs
-    .filter((item) => !item.asset_id)
-    .map((item) => item.symbol);
-
-  const [assetsByIdRows, assetsBySymbolRows] = await Promise.all([
-    listAssetsByIds(env.DB, assetIds),
-    listAssetsBySymbols(env.DB, unresolvedSymbols),
-  ]);
-  const allAssetRows = [...new Map([...assetsByIdRows, ...assetsBySymbolRows].map((item) => [item.asset_id, item])).values()];
-  const instrumentRows = await listInstrumentsByAssetIds(env.DB, allAssetRows.map((item) => item.asset_id));
-  const { assetById, preferredInstrumentByAssetId, preferredInstrumentByAssetIdAndType, bestAssetIdBySymbol } =
-    buildResolvedInstrumentMaps(allAssetRows, instrumentRows);
-
   const enriched = normalizedRefs.map((ref) => {
-    const resolvedAssetId = ref.asset_id ?? bestAssetIdBySymbol.get(ref.symbol) ?? null;
-    const assetRow = resolvedAssetId ? assetById.get(resolvedAssetId) ?? null : null;
-    const preferredInstrument = resolvedAssetId
-      ? preferredInstrumentByAssetIdAndType.get(`${resolvedAssetId}:${ref.market_type ?? 'spot'}`)
-        ?? preferredInstrumentByAssetId.get(resolvedAssetId)
-        ?? null
-      : null;
     const fallbackRoute = DEFAULT_TOKEN_ROUTE_BY_SYMBOL[ref.symbol] ?? null;
-    const marketType = ref.market_type ?? preferredInstrument?.market_type ?? (ref.chain || ref.contract ? 'spot' : null);
-    const marketItemId = ref.market_item_id ?? instrumentToMarketItemId(preferredInstrument) ?? null;
+    const marketType = ref.market_type ?? (ref.chain || ref.contract ? 'spot' : null);
     const chain = marketType === 'spot'
-      ? ref.chain ?? preferredInstrument?.chain ?? fallbackRoute?.chain ?? null
+      ? ref.chain ?? fallbackRoute?.chain ?? null
       : null;
     const contract = marketType === 'spot'
       ? ref.contract
-        ?? instrumentContractToRouteContract(preferredInstrument)
         ?? fallbackRoute?.contract
         ?? null
       : null;
-    const name = ref.name ?? assetRow?.name ?? fallbackRoute?.name ?? ref.symbol;
-    const image = ref.image ?? assetRow?.logo_uri ?? null;
-    const instrumentId = ref.instrument_id ?? preferredInstrument?.instrument_id ?? null;
 
     return {
       symbol: ref.symbol,
       market_type: marketType,
-      market_item_id: marketItemId,
-      asset_id: resolvedAssetId,
-      instrument_id: instrumentId,
+      market_item_id: ref.market_item_id ?? null,
+      asset_id: ref.asset_id ?? null,
+      instrument_id: null,
       chain,
       contract,
-      name,
-      image,
+      name: ref.name ?? fallbackRoute?.name ?? ref.symbol,
+      image: ref.image ?? null,
       price_change_percentage_24h: ref.price_change_percentage_24h,
     };
   });
@@ -318,6 +229,12 @@ export async function hydrateArticleRelatedAssets(
     fetchBitgetTokenDetails(env, bitgetRequests).catch(() => []),
     solContracts.length > 0 ? fetchSolanaTokenDetails(env, solContracts).catch(() => new Map()) : Promise.resolve(new Map()),
   ]);
+  const spotAssetIdMap = await resolveSpotAssetIdMap(
+    env,
+    enriched
+      .filter((item): item is ArticleRelatedAsset & { chain: string; contract: string } => Boolean(item.market_type === 'spot' && item.chain && item.contract))
+      .map((item) => ({ chain: item.chain, contract: item.contract })),
+  );
 
   const bitgetDetailByKey = new Map(bitgetDetails.map((item) => [`${item.chain}:${item.contract || 'native'}`, item.detail] as const));
   const marketDetailResults = await Promise.all(
@@ -338,9 +255,10 @@ export async function hydrateArticleRelatedAssets(
   return enriched.map((item) => {
     if (item.market_type === 'spot' && item.chain === 'sol' && item.contract) {
       const detail = solanaDetails.get(item.contract) ?? null;
+      const assetId = spotAssetIdMap.get(`${item.chain}:${toContractKey(item.contract, item.chain)}`) ?? item.asset_id ?? null;
       return {
         ...item,
-        asset_id: item.asset_id ?? detail?.asset_id ?? null,
+        asset_id: assetId,
         name: detail?.name ?? item.name,
         image: detail?.image ?? item.image,
         price_change_percentage_24h: detail?.priceChange24h ?? item.price_change_percentage_24h,
@@ -349,9 +267,10 @@ export async function hydrateArticleRelatedAssets(
 
     if (item.market_type === 'spot' && item.chain && item.contract) {
       const detail = bitgetDetailByKey.get(`${item.chain}:${item.contract}`) ?? null;
+      const assetId = spotAssetIdMap.get(`${item.chain}:${toContractKey(item.contract, item.chain)}`) ?? item.asset_id ?? null;
       return {
         ...item,
-        asset_id: item.asset_id ?? detail?.asset_id ?? null,
+        asset_id: assetId,
         name: detail?.name ?? item.name,
         image: detail?.image ?? item.image,
         price_change_percentage_24h: detail?.priceChange24h ?? item.price_change_percentage_24h,
@@ -380,30 +299,4 @@ export async function hydrateArticleRelatedAssets(
 
     return item;
   });
-}
-
-export async function hydrateArticleRelatedAssetsFromInstrumentIds(
-  env: Bindings,
-  instrumentIds: string[],
-): Promise<ArticleRelatedAsset[]> {
-  const normalizedIds = [...new Set(instrumentIds.map((item) => normalizeText(item)).filter((value): value is string => Boolean(value)))];
-  if (!normalizedIds.length) return [];
-  const refs: ArticleRelatedAssetRef[] = [];
-  for (const instrumentId of normalizedIds) {
-    const instrument = await getInstrumentById(env.DB, instrumentId);
-    if (!instrument) continue;
-    const asset = await getAssetById(env.DB, instrument.asset_id);
-    refs.push({
-      symbol: asset?.symbol ?? instrument.symbol ?? '',
-      market_type: instrument.market_type,
-      market_item_id: buildLegacyItemIdForInstrument(instrument),
-      asset_id: instrument.asset_id,
-      instrument_id: instrument.instrument_id,
-      chain: instrument.market_type === 'spot' ? instrument.chain : null,
-      contract: instrument.market_type === 'spot' ? instrumentContractToRouteContract(instrument) : null,
-      name: asset?.name ?? null,
-      image: asset?.logo_uri ?? null,
-    });
-  }
-  return hydrateArticleRelatedAssets(env, refs);
 }

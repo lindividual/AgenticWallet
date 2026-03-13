@@ -10,6 +10,7 @@ export type LlmGenerateInput = {
   temperature?: number;
   maxTokens?: number;
   retryAttempts?: number;
+  maxRetryDelayMs?: number;
 };
 
 export type LlmGenerateOutput = {
@@ -54,18 +55,31 @@ export type LlmErrorInfo = {
   retryAfterMs?: number;
 };
 
-type OpenAiChatResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string;
-    };
+type OpenAiResponsesResponse = {
+  model?: string;
+  output_text?: string;
+  output?: Array<{
+    type?: string;
+    text?: string | { value?: string | null } | null;
+    content?: Array<{
+      type?: string;
+      text?: string | { value?: string | null } | null;
+    }>;
   }>;
+  error?: {
+    message?: string;
+  } | null;
+  incomplete_details?: {
+    reason?: string;
+  } | null;
 };
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const CLOUDFLARE_AI_GATEWAY_HOST = 'gateway.ai.cloudflare.com';
 const CLOUDFLARE_AI_GATEWAY_BASE_URL = `https://${CLOUDFLARE_AI_GATEWAY_HOST}/v1`;
+const DEFAULT_MAX_RETRY_DELAY_MS = 30_000;
+const ABSOLUTE_MAX_RETRY_DELAY_MS = 120_000;
 
 type ResolvedLlmConfig = {
   enabled: boolean;
@@ -277,9 +291,21 @@ function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
-function backoffMs(attempt: number): number {
+function normalizeMaxRetryDelayMs(value: number | undefined): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_RETRY_DELAY_MS;
+  const rounded = Math.round(value ?? DEFAULT_MAX_RETRY_DELAY_MS);
+  return Math.max(1_000, Math.min(rounded, ABSOLUTE_MAX_RETRY_DELAY_MS));
+}
+
+function applyJitter(delayMs: number, minFactor: number, maxFactor: number, maxDelayMs: number): number {
+  const factor = minFactor + Math.random() * Math.max(maxFactor - minFactor, 0);
+  return Math.max(250, Math.min(Math.round(delayMs * factor), maxDelayMs));
+}
+
+function backoffMs(attempt: number, maxDelayMs: number): number {
   // attempt starts from 1.
-  return Math.min(1000 * 2 ** (attempt - 1), 15_000);
+  const baseDelayMs = Math.min(1500 * 2 ** (attempt - 1), maxDelayMs);
+  return applyJitter(baseDelayMs, 0.75, 1.5, maxDelayMs);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -315,14 +341,19 @@ function parseDurationMs(value: string): number | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return null;
 
-  const durationMatch = normalized.match(/^(\d+(?:\.\d+)?)(ms|s|m)$/);
-  if (durationMatch) {
-    const amount = Number(durationMatch[1]);
-    if (!Number.isFinite(amount) || amount < 0) return null;
-    const unit = durationMatch[2];
-    if (unit === 'ms') return Math.round(amount);
-    if (unit === 's') return Math.round(amount * 1000);
-    return Math.round(amount * 60_000);
+  if (/^(\d+(?:\.\d+)?(ms|h|m|s))+$/.test(normalized)) {
+    let totalMs = 0;
+    const matches = normalized.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g);
+    for (const match of matches) {
+      const amount = Number(match[1]);
+      if (!Number.isFinite(amount) || amount < 0) return null;
+      const unit = match[2];
+      if (unit === 'ms') totalMs += amount;
+      else if (unit === 's') totalMs += amount * 1000;
+      else if (unit === 'm') totalMs += amount * 60_000;
+      else totalMs += amount * 3_600_000;
+    }
+    return Math.round(totalMs);
   }
 
   const seconds = Number(normalized);
@@ -333,12 +364,12 @@ function parseDurationMs(value: string): number | null {
   return null;
 }
 
-function readRetryAfterMs(headers: Headers): number | undefined {
+function readRetryAfterMs(headers: Headers, maxDelayMs: number): number | undefined {
   const retryAfterMs = headers.get('retry-after-ms');
   if (retryAfterMs) {
     const parsed = Number(retryAfterMs.trim());
     if (Number.isFinite(parsed) && parsed > 0) {
-      return Math.min(Math.round(parsed), 15_000);
+      return Math.min(Math.round(parsed), maxDelayMs);
     }
   }
 
@@ -346,14 +377,14 @@ function readRetryAfterMs(headers: Headers): number | undefined {
   if (retryAfter) {
     const asDelay = parseDurationMs(retryAfter);
     if (asDelay && asDelay > 0) {
-      return Math.min(asDelay, 15_000);
+      return Math.min(asDelay, maxDelayMs);
     }
 
     const dateMs = Date.parse(retryAfter);
     if (Number.isFinite(dateMs)) {
       const delay = dateMs - Date.now();
       if (delay > 0) {
-        return Math.min(delay, 15_000);
+        return Math.min(delay, maxDelayMs);
       }
     }
   }
@@ -363,11 +394,52 @@ function readRetryAfterMs(headers: Headers): number | undefined {
     if (!reset) continue;
     const parsed = parseDurationMs(reset);
     if (parsed && parsed > 0) {
-      return Math.min(parsed, 15_000);
+      return Math.min(parsed, maxDelayMs);
     }
   }
 
   return undefined;
+}
+
+function resolveRetryDelayMs(attempt: number, headers: Headers | null, maxDelayMs: number): number {
+  const hintedDelayMs = headers ? readRetryAfterMs(headers, maxDelayMs) : undefined;
+  if (hintedDelayMs && hintedDelayMs > 0) {
+    return applyJitter(hintedDelayMs, 1, 1.15, maxDelayMs);
+  }
+  return backoffMs(attempt, maxDelayMs);
+}
+
+function extractResponseTextValue(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (value && typeof value === 'object') {
+    const nested = (value as { value?: unknown }).value;
+    if (typeof nested === 'string') {
+      const trimmed = nested.trim();
+      return trimmed ? trimmed : null;
+    }
+  }
+  return null;
+}
+
+function extractResponsesText(response: OpenAiResponsesResponse): string {
+  const chunks: string[] = [];
+  const topLevelText = extractResponseTextValue(response.output_text);
+  if (topLevelText) chunks.push(topLevelText);
+
+  for (const item of response.output ?? []) {
+    const itemText = extractResponseTextValue(item.text);
+    if (itemText) chunks.push(itemText);
+    for (const content of item.content ?? []) {
+      if (content.type && content.type !== 'output_text' && content.type !== 'text') continue;
+      const contentText = extractResponseTextValue(content.text);
+      if (contentText) chunks.push(contentText);
+    }
+  }
+
+  return chunks.join('\n').trim();
 }
 
 async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerateInput): Promise<LlmGenerateOutput> {
@@ -377,10 +449,11 @@ async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerat
 
   const authorizationToken = resolveAuthorizationToken(config);
   const keyFingerprint = await fingerprintApiKey(authorizationToken ?? undefined);
+  const maxRetryDelayMs = normalizeMaxRetryDelayMs(input.maxRetryDelayMs);
   const maxAttempts = Number.isFinite(input.retryAttempts)
     ? Math.min(Math.max(Math.trunc(input.retryAttempts ?? 3), 1), 6)
     : 3;
-  const endpoint = new URL('chat/completions', `${config.baseUrl}/`).toString();
+  const endpoint = new URL('responses', `${config.baseUrl}/`).toString();
   const headers: Record<string, string> = {
     'content-type': 'application/json',
   };
@@ -399,9 +472,13 @@ async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerat
         headers,
         body: JSON.stringify({
           model: config.model,
-          messages: input.messages,
+          input: input.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
           temperature: input.temperature ?? 0.3,
-          max_tokens: input.maxTokens ?? 1200,
+          max_output_tokens: input.maxTokens ?? 1200,
+          store: false,
         }),
       });
     } catch (error) {
@@ -413,7 +490,7 @@ async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerat
       wrapped.attempt = attempt;
       wrapped.maxAttempts = maxAttempts;
       if (attempt < maxAttempts) {
-        await sleep(backoffMs(attempt));
+        await sleep(resolveRetryDelayMs(attempt, null, maxRetryDelayMs));
         continue;
       }
       throw wrapped;
@@ -422,7 +499,7 @@ async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerat
     if (!response.ok) {
       const body = await response.text();
       const requestId = response.headers.get('x-request-id') ?? response.headers.get('cf-ray');
-      const retryAfterMs = readRetryAfterMs(response.headers);
+      const retryAfterMs = readRetryAfterMs(response.headers, maxRetryDelayMs);
       const wrapped = new LlmRequestError(`llm_request_failed_${response.status}`);
       wrapped.status = response.status;
       wrapped.baseUrl = config.baseUrl;
@@ -435,21 +512,27 @@ async function callOpenAiCompatible(config: ResolvedLlmConfig, input: LlmGenerat
       applyResponseDebugHeaders(wrapped, response);
       wrapped.requestId = requestId;
       if (attempt < maxAttempts && isRetryableStatus(response.status)) {
-        await sleep(retryAfterMs ?? backoffMs(attempt));
+        await sleep(resolveRetryDelayMs(attempt, response.headers, maxRetryDelayMs));
         continue;
       }
       throw wrapped;
     }
 
-    const json = (await response.json()) as OpenAiChatResponse;
-    const text = json.choices?.[0]?.message?.content?.trim();
+    const json = (await response.json()) as OpenAiResponsesResponse;
+    const text = extractResponsesText(json);
     if (!text) {
-      throw new Error('llm_empty_response');
+      const incompleteReason = json.incomplete_details?.reason?.trim();
+      const errorMessage = json.error?.message?.trim();
+      throw new Error(
+        ['llm_empty_response', incompleteReason ? `reason=${incompleteReason}` : null, errorMessage ? `error=${errorMessage}` : null]
+          .filter((part): part is string => Boolean(part))
+          .join(':'),
+      );
     }
 
     return {
       provider: 'openai',
-      model: config.model,
+      model: typeof json.model === 'string' && json.model.trim() ? json.model : config.model,
       text,
       keyFingerprint,
       ...collectSuccessDebugFields(response),

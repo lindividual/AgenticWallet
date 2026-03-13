@@ -40,7 +40,7 @@ type MarketSummarySectionProps = {
   displayImage: string | null;
   displayName: string;
   displaySymbol: string;
-  normalizedType: 'stock' | 'perp' | 'prediction';
+  normalizedType: 'perp' | 'prediction';
   displayPrice: number | null;
   displayProbability: number | null;
   displayChange24h: number | null;

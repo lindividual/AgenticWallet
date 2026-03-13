@@ -209,7 +209,6 @@
     "watchlistCategory": {
       "crypto": "Crypto",
       "perps": "العقود",
-      "stock": "الأسهم",
       "prediction": "التوقع"
     },
     "topicRecommendationsTitle": "توصيات المواضيع",
@@ -265,11 +264,10 @@
     "topMovers": "الأكثر تحركًا",
     "trending": "الرائج",
     "tokens": "الرموز",
-    "stocks": "الأسهم",
     "search": "بحث",
-    "searchPlaceholder": "ابحث عن الرموز أو الأسهم أو العقود أو أسواق التوقع",
+    "searchPlaceholder": "ابحث عن الرموز أو العقود أو أسواق التوقع",
     "searchNoResults": "لم يتم العثور على أسواق مطابقة.",
-    "searchHint": "ابحث عبر Binance الفوري، والأسهم المرمّزة، وعقود Hyperliquid، وتوقعات Polymarket.",
+    "searchHint": "ابحث عبر Binance الفوري، وعقود Hyperliquid، وتوقعات Polymarket.",
     "perps": "العقود الدائمة",
     "prediction": "أسواق التوقع",
     "noSectionData": "لا تتوفر بيانات سوق الآن. اسحب للتحديث ثم أعد المحاولة.",

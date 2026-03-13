@@ -4,16 +4,11 @@ import { useTranslation } from 'react-i18next';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   addMarketWatchlistAsset,
-  getMarketByInstrumentId,
-  getMarketCandlesByInstrumentId,
   getMarketWatchlist,
   getPredictionEventDetail,
   getPredictionEventKline,
-  resolveAssetIdentity,
   getTradeMarketDetail,
   getTradeMarketKline,
-  getTokenKline,
-  getTradeBrowse,
   ingestAgentEvent,
   removeMarketWatchlistAsset,
   submitPredictionBet,
@@ -24,8 +19,12 @@ import {
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { formatUsdAdaptive } from '../../utils/currency';
-import { computeAdaptiveChartWindowSeconds, normalizeCandlesForLiveline, toLivelinePoints, toOpenAnchoredLivelinePoints } from '../../utils/kline';
+import {
+  computeAdaptiveChartWindowSeconds,
+  normalizeCandlesForLiveline,
+  toLivelinePoints,
+  toOpenAnchoredLivelinePoints,
+} from '../../utils/kline';
 import {
   normalizeTradeMarketDetailType,
   normalizeWatchlistItemId,
@@ -44,20 +43,14 @@ type MarketDetailScreenProps = {
   onBack: () => void;
 };
 
-const KLINE_PERIOD_OPTIONS: Array<{
-  value: KlinePeriod;
-  labelKey: string;
-}> = [
+const KLINE_PERIOD_OPTIONS: Array<{ value: KlinePeriod; labelKey: string }> = [
   { value: '15m', labelKey: 'trade.klinePeriod15m' },
   { value: '1h', labelKey: 'trade.klinePeriod1h' },
   { value: '4h', labelKey: 'trade.klinePeriod4h' },
   { value: '1d', labelKey: 'trade.klinePeriod1d' },
 ];
 
-const PREDICTION_KLINE_PERIOD_OPTIONS: Array<{
-  value: KlinePeriod;
-  label: string;
-}> = [
+const PREDICTION_KLINE_PERIOD_OPTIONS: Array<{ value: KlinePeriod; label: string }> = [
   { value: '15m', label: '1H' },
   { value: '1h', label: '6H' },
   { value: '4h', label: '1D' },
@@ -88,7 +81,10 @@ function resolveThemeColor(variable: string, fallback: string): string {
   return resolved || fallback;
 }
 
-function buildSyntheticWatchKey(watchType: 'stock' | 'perps' | 'prediction', itemId: string): { chain: string; contract: string } | null {
+function buildSyntheticWatchKey(
+  watchType: 'perps' | 'prediction',
+  itemId: string,
+): { chain: string; contract: string } | null {
   const normalized = normalizeWatchlistItemId(itemId);
   if (!normalized) return null;
   return {
@@ -97,101 +93,37 @@ function buildSyntheticWatchKey(watchType: 'stock' | 'perps' | 'prediction', ite
   };
 }
 
-function toFiniteNumber(value: unknown): number | null {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function toTradeBrowseMarketItemLike(value: unknown): TradeBrowseMarketItem | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  if (typeof row.symbol !== 'string' || typeof row.name !== 'string') return null;
-
-  const source = row.source;
-  const normalizedSource =
-    source === 'bitget' || source === 'coingecko' || source === 'hyperliquid' || source === 'binance'
-      ? source
-      : 'bitget';
-
-  return {
-    id: typeof row.id === 'string' ? row.id : '',
-    asset_id: typeof row.asset_id === 'string' ? row.asset_id : undefined,
-    instrument_id: typeof row.instrument_id === 'string' ? row.instrument_id : undefined,
-    symbol: row.symbol,
-    name: row.name,
-    image: typeof row.image === 'string' ? row.image : null,
-    chain: typeof row.chain === 'string' ? row.chain : null,
-    contract: typeof row.contract === 'string' ? row.contract : null,
-    currentPrice: toFiniteNumber(row.currentPrice) ?? toFiniteNumber(row.currentPriceUsd),
-    change24h: toFiniteNumber(row.change24h) ?? toFiniteNumber(row.priceChange24h),
-    volume24h: toFiniteNumber(row.volume24h),
-    source: normalizedSource,
-    metaLabel: typeof row.metaLabel === 'string' ? row.metaLabel : null,
-    metaValue: toFiniteNumber(row.metaValue),
-    externalUrl: typeof row.externalUrl === 'string' ? row.externalUrl : null,
-  };
-}
-
-function toPredictionSourceItemId(value: unknown): string | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  const id = typeof row.id === 'string' ? row.id.trim() : '';
-  return id || null;
-}
-
 export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
   const { showError, showSuccess } = useToast();
   const queryClient = useQueryClient();
-  const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
+  const normalizedType = normalizeTradeMarketDetailType(marketType) ?? 'perp';
+  const normalizedItemId = itemId.trim();
   const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>(() => (
-    normalizeTradeMarketDetailType(marketType) === 'prediction' ? 'all' : '1h'
+    normalizedType === 'prediction' ? 'all' : '1h'
   ));
   const [chartMode, setChartMode] = useState<'line' | 'candle'>('line');
   const [pendingKlinePeriod, setPendingKlinePeriod] = useState<KlinePeriod | null>(null);
   const [selectedPredictionOptionId, setSelectedPredictionOptionId] = useState<string | null>(null);
   const [predictionBetAmount, setPredictionBetAmount] = useState('5');
   const [pendingPredictionOptionId, setPendingPredictionOptionId] = useState<string | null>(null);
+  const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
 
-  const normalizedType = normalizeTradeMarketDetailType(marketType) ?? 'stock';
-  const normalizedItemId = itemId.trim();
-  const isInstrumentRouteItem = normalizedItemId.toLowerCase().startsWith('ins:');
-
-  const { data: resolvedIdentity, isFetched: isIdentityFetched } = useQuery({
-    queryKey: ['trade-market-identity', normalizedType, normalizedItemId],
-    queryFn: () =>
-      resolveAssetIdentity(
-        normalizedType === 'stock'
-          ? {
-              itemId: normalizedItemId,
-              marketType: 'spot',
-              assetClassHint: 'equity_exposure',
-            }
-          : {
-              itemId: normalizedItemId,
-              marketType: normalizedType,
-            },
-      ),
-    enabled: Boolean(normalizedItemId),
-    staleTime: 5 * 60_000,
-  });
-
-  const activeInstrumentId = resolvedIdentity?.instrument_id?.trim() ?? null;
-
-  const { data: instrumentMarket, isLoading: isInstrumentLoading, isFetched: isInstrumentFetched } = useQuery({
-    queryKey: ['market-by-instrument', activeInstrumentId],
-    queryFn: () => getMarketByInstrumentId(activeInstrumentId ?? ''),
-    enabled: Boolean(activeInstrumentId),
+  const { data: detailItem, isLoading: isDetailLoading } = useQuery({
+    queryKey: ['trade-market-detail', normalizedType, normalizedItemId],
+    queryFn: () => getTradeMarketDetail(normalizedType, normalizedItemId),
     staleTime: 60_000,
     refetchInterval: 90_000,
+    enabled: normalizedType !== 'prediction' && Boolean(normalizedItemId),
   });
 
-  const { data: browseData, isLoading, isFetched: isBrowseFetched } = useQuery({
-    queryKey: ['trade-browse'],
-    queryFn: () => getTradeBrowse(),
+  const { data: predictionDetail, isLoading: isPredictionDetailLoading } = useQuery({
+    queryKey: ['prediction-event-detail', normalizedItemId],
+    queryFn: () => getPredictionEventDetail(normalizedItemId),
     staleTime: 60_000,
     refetchInterval: 90_000,
+    enabled: normalizedType === 'prediction' && Boolean(normalizedItemId),
   });
 
   const { data: watchlistData } = useQuery({
@@ -200,85 +132,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     staleTime: 15_000,
   });
 
-  const { data: detailItem, isLoading: isDetailLoading, isFetched: isDetailFetched } = useQuery({
-    queryKey: ['trade-market-detail', normalizedType, normalizedItemId],
-    queryFn: () => getTradeMarketDetail(normalizedType, normalizedItemId),
-    staleTime: 60_000,
-    refetchInterval: 90_000,
-    enabled: Boolean(normalizedItemId) && !isInstrumentRouteItem && normalizedType !== 'prediction',
-  });
-
-  const stockItem = useMemo<TradeBrowseMarketItem | null>(
-    () => {
-      const fromInstrument = normalizedType === 'stock'
-        ? toTradeBrowseMarketItemLike(instrumentMarket?.providerDetail)
-        : null;
-      if (fromInstrument) return fromInstrument;
-      const fromDetail = normalizedType === 'stock'
-        ? toTradeBrowseMarketItemLike(detailItem)
-        : null;
-      if (fromDetail) return fromDetail;
-      return browseData?.stocks.find((item) => item.id === normalizedItemId) ?? null;
-    },
-    [browseData?.stocks, detailItem, instrumentMarket?.providerDetail, normalizedItemId, normalizedType],
-  );
-  const perpItem = useMemo<TradeBrowseMarketItem | null>(
-    () => {
-      const fromInstrument = normalizedType === 'perp'
-        ? toTradeBrowseMarketItemLike(instrumentMarket?.providerDetail)
-        : null;
-      if (fromInstrument) return fromInstrument;
-      const fromDetail = normalizedType === 'perp'
-        ? toTradeBrowseMarketItemLike(detailItem)
-        : null;
-      if (fromDetail) return fromDetail;
-      return browseData?.perps.find((item) => item.id === normalizedItemId) ?? null;
-    },
-    [browseData?.perps, detailItem, instrumentMarket?.providerDetail, normalizedItemId, normalizedType],
-  );
-  const predictionDetailId = useMemo(() => {
-    if (normalizedType !== 'prediction') return null;
-    if (!isInstrumentRouteItem) return normalizedItemId || null;
-    return instrumentMarket?.instrument.source_item_id?.trim()
-      || toPredictionSourceItemId(instrumentMarket?.providerDetail)
-      || null;
-  }, [instrumentMarket?.instrument.source_item_id, instrumentMarket?.providerDetail, isInstrumentRouteItem, normalizedItemId, normalizedType]);
-
-  const { data: predictionDetail, isLoading: isPredictionDetailLoading, isFetched: isPredictionDetailFetched } = useQuery({
-    queryKey: ['prediction-event-detail', predictionDetailId],
-    queryFn: () => getPredictionEventDetail(predictionDetailId ?? ''),
-    enabled: normalizedType === 'prediction' && Boolean(predictionDetailId),
-    staleTime: 60_000,
-    refetchInterval: 90_000,
-  });
-
-  const activeMarketItem = normalizedType === 'stock' ? stockItem : normalizedType === 'perp' ? perpItem : null;
+  const activeMarketItem = normalizedType === 'prediction' ? null : (detailItem as TradeBrowseMarketItem | null);
   const activePredictionItem = normalizedType === 'prediction' ? predictionDetail : null;
-  const hasResolvedSummaryIdentity = normalizedType === 'prediction'
-    ? Boolean(activePredictionItem?.title?.trim())
-    : Boolean(activeMarketItem?.name?.trim() || activeMarketItem?.symbol?.trim());
-  const isPredictionIdentityPending = normalizedType === 'prediction'
-    && !hasResolvedSummaryIdentity
-    && (
-      isPredictionDetailLoading
-      || (isInstrumentRouteItem && (!isIdentityFetched || (Boolean(activeInstrumentId) && !isInstrumentFetched)))
-      || (!isInstrumentRouteItem && !predictionDetailId && !isPredictionDetailFetched)
-    );
-  const isMarketIdentityPending = normalizedType !== 'prediction'
-    && !hasResolvedSummaryIdentity
-    && (
-      (isInstrumentRouteItem && !isIdentityFetched)
-      ||
-      isLoading
-      || isDetailLoading
-      || isInstrumentLoading
-      || !isBrowseFetched
-      || (Boolean(activeInstrumentId) && !isInstrumentFetched)
-      || (!isInstrumentRouteItem && !isDetailFetched)
-    );
-  const isSummaryLoading = isPredictionIdentityPending || isMarketIdentityPending;
+  const isSummaryLoading = normalizedType === 'prediction' ? isPredictionDetailLoading : isDetailLoading;
   const predictionLayout = activePredictionItem?.layout === 'winner' ? 'winner' : 'binary';
   const predictionOutcomes = activePredictionItem?.outcomes ?? [];
+
   const selectedPredictionOption = useMemo<PredictionEventOutcome | null>(() => {
     if (!predictionOutcomes.length) return null;
     if (selectedPredictionOptionId) {
@@ -307,69 +166,29 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const displayContract = activeMarketItem?.contract ?? null;
   const predictionDescription = activePredictionItem?.description ?? null;
   const predictionEndDate = activePredictionItem?.endDate ?? null;
-  const predictionKlineItemId = activePredictionItem?.id ?? predictionDetailId;
-  const normalizedKlineChain = (displayChain ?? '').trim().toLowerCase();
-  const normalizedKlineContract = (displayContract ?? '').trim().toLowerCase();
+  const hasKlineSupport = normalizedType === 'prediction'
+    ? predictionOutcomes.some((outcome) => Boolean(outcome.yesTokenId))
+    : Boolean(normalizedItemId);
   const klineSize = normalizedType === 'prediction' ? 240 : 60;
-  const fallbackHasKlineSupport = normalizedType === 'stock'
-    ? normalizedItemId.startsWith('binance-stock:') || (Boolean(normalizedKlineChain) && /^0x[a-f0-9]{40}$/.test(normalizedKlineContract))
-    : normalizedType === 'perp'
-      ? normalizedItemId.startsWith('hyperliquid:')
-      : Boolean(activePredictionItem) && predictionOutcomes.some((outcome) => Boolean(outcome.yesTokenId));
-  const hasKlineSupport = Boolean(activeInstrumentId) || fallbackHasKlineSupport;
 
-  const {
-    data: klineData,
-    isLoading: isKlineLoading,
-  } = useQuery({
-    queryKey: [
-      'trade-market-kline',
-      normalizedType,
-      normalizedItemId,
-      activeInstrumentId,
-      normalizedKlineChain,
-      normalizedKlineContract,
-      klinePeriod,
-      klineSize,
-    ],
-    queryFn: () => {
-      if (activeInstrumentId) {
-        return getMarketCandlesByInstrumentId(
-          activeInstrumentId,
-          klinePeriod,
-          klineSize,
-          null,
-        );
-      }
-      if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
-        return getTradeMarketKline(normalizedType, normalizedItemId, klinePeriod, klineSize);
-      }
-      if (normalizedType === 'stock') {
-        return getTokenKline(normalizedKlineChain, normalizedKlineContract, klinePeriod, klineSize);
-      }
-      return getTradeMarketKline(
-        normalizedType,
-        normalizedItemId,
-        klinePeriod,
-        klineSize,
-        null,
-      );
-    },
+  const { data: klineData, isLoading: isKlineLoading } = useQuery({
+    queryKey: ['trade-market-kline', normalizedType, normalizedItemId, klinePeriod, klineSize],
+    queryFn: () => getTradeMarketKline(normalizedType, normalizedItemId, klinePeriod, klineSize),
     staleTime: 20_000,
     refetchInterval: 30_000,
-    enabled: hasKlineSupport && normalizedType !== 'prediction',
+    enabled: normalizedType !== 'prediction' && hasKlineSupport,
   });
+
   const { data: predictionKlineData, isLoading: isPredictionKlineLoading } = useQuery({
-    queryKey: ['prediction-event-kline', predictionKlineItemId, klinePeriod, klineSize],
-    queryFn: () => getPredictionEventKline(predictionKlineItemId ?? '', klinePeriod, klineSize),
+    queryKey: ['prediction-event-kline', normalizedItemId, klinePeriod, klineSize],
+    queryFn: () => getPredictionEventKline(normalizedItemId, klinePeriod, klineSize),
     staleTime: 20_000,
     refetchInterval: 30_000,
-    enabled: normalizedType === 'prediction' && Boolean(predictionKlineItemId),
+    enabled: normalizedType === 'prediction' && hasKlineSupport,
   });
 
   const watchType = toWatchTypeFromTradeMarketType(normalizedType);
   const syntheticWatchKey = buildSyntheticWatchKey(watchType, normalizedItemId);
-
   const activeWatchAsset = useMemo(() => {
     if (!syntheticWatchKey) return null;
     return (watchlistData?.assets ?? []).find((item) => (
@@ -378,8 +197,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       && item.contract === syntheticWatchKey.contract
     )) ?? null;
   }, [syntheticWatchKey, watchType, watchlistData?.assets]);
-
   const isInWatchlist = Boolean(activeWatchAsset);
+
   const chartCandles = useMemo<CandlePoint[]>(
     () => normalizeCandlesForLiveline(klineData),
     [klineData],
@@ -466,50 +285,14 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     try {
       if (normalizedType === 'prediction') {
         await queryClient.fetchQuery({
-          queryKey: [
-            'prediction-event-kline',
-            predictionKlineItemId,
-            nextPeriod,
-            klineSize,
-          ],
-          queryFn: () => getPredictionEventKline(predictionKlineItemId ?? '', nextPeriod, klineSize),
+          queryKey: ['prediction-event-kline', normalizedItemId, nextPeriod, klineSize],
+          queryFn: () => getPredictionEventKline(normalizedItemId, nextPeriod, klineSize),
           staleTime: 20_000,
         });
       } else {
         await queryClient.fetchQuery({
-          queryKey: [
-            'trade-market-kline',
-            normalizedType,
-            normalizedItemId,
-            activeInstrumentId,
-            normalizedKlineChain,
-            normalizedKlineContract,
-            nextPeriod,
-            klineSize,
-          ],
-          queryFn: () => {
-            if (activeInstrumentId) {
-              return getMarketCandlesByInstrumentId(
-                activeInstrumentId,
-                nextPeriod,
-                klineSize,
-                null,
-              );
-            }
-            if (normalizedType === 'stock' && normalizedItemId.startsWith('binance-stock:')) {
-              return getTradeMarketKline(normalizedType, normalizedItemId, nextPeriod, klineSize);
-            }
-            if (normalizedType === 'stock') {
-              return getTokenKline(normalizedKlineChain, normalizedKlineContract, nextPeriod, klineSize);
-            }
-            return getTradeMarketKline(
-              normalizedType,
-              normalizedItemId,
-              nextPeriod,
-              klineSize,
-              null,
-            );
-          },
+          queryKey: ['trade-market-kline', normalizedType, normalizedItemId, nextPeriod, klineSize],
+          queryFn: () => getTradeMarketKline(normalizedType, normalizedItemId, nextPeriod, klineSize),
           staleTime: 20_000,
         });
       }
@@ -524,9 +307,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     setIsWatchlistToggling(true);
     try {
       if (activeWatchAsset) {
-        await removeMarketWatchlistAsset({
-          id: activeWatchAsset.id,
-        });
+        await removeMarketWatchlistAsset({ id: activeWatchAsset.id });
         showSuccess(t('trade.watchRemoved'));
       } else {
         await addMarketWatchlistAsset({
@@ -620,11 +401,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
             onClick={() => void switchKlinePeriod(option.value)}
             disabled={pendingKlinePeriod != null}
           >
-            {pendingKlinePeriod === option.value ? (
-              <span className="loading loading-spinner loading-xs" />
-            ) : (
-              t(option.labelKey)
-            )}
+            {pendingKlinePeriod === option.value ? <span className="loading loading-spinner loading-xs" /> : t(option.labelKey)}
           </button>
         ) : (
           <button

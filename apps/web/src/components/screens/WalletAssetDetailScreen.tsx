@@ -6,12 +6,11 @@ import type { KlineCandle, SimEvmBalance, WalletPortfolioResponse } from '../../
 import {
   getAppConfig,
   getCoinDetail,
-  getMarketByInstrumentId,
+  searchMarketTokens,
   getTokenSecurityAudit,
   getTokenKline,
   getTransferHistory,
   getWalletPortfolio,
-  resolveAssetIdentity,
 } from '../../api';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { encodeTokenContractParam } from '../../utils/tokenRoute';
@@ -387,31 +386,22 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
-  const perpContractHint = normalizeContractForMatch(normalizedContract) === 'native'
-    ? 'native'
-    : (normalizeText(selectedHolding?.transferAsset.address) || normalizedContract);
-  const { data: perpResolvedIdentity } = useQuery({
-    queryKey: ['wallet-asset-perp-identity', normalizedChain, perpContractHint, selectedHolding?.symbol ?? '', selectedHolding?.name ?? ''],
-    queryFn: () =>
-      resolveAssetIdentity({
-        chain: normalizedChain,
-        contract: perpContractHint,
-        marketType: 'perp',
-        symbol: selectedHolding?.symbol || undefined,
-        nameHint: selectedHolding?.name || undefined,
-      }),
-    enabled: Boolean(normalizedChain && (selectedHolding?.symbol || selectedHolding?.name)),
+  const { data: perpSearchResults } = useQuery({
+    queryKey: ['wallet-asset-perp-search', selectedHolding?.symbol ?? ''],
+    queryFn: () => searchMarketTokens(selectedHolding?.symbol ?? '', 8),
+    enabled: Boolean(selectedHolding?.symbol),
     staleTime: 5 * 60_000,
     retry: false,
   });
-  const perpInstrumentId = perpResolvedIdentity?.instrument_id?.trim() || null;
-  const { data: perpInstrumentMarket } = useQuery({
-    queryKey: ['wallet-asset-perp-market', perpInstrumentId],
-    queryFn: () => getMarketByInstrumentId(perpInstrumentId ?? ''),
-    enabled: Boolean(perpInstrumentId),
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
+  const matchedPerpMarket = useMemo(
+    () =>
+      (perpSearchResults ?? []).find((item) => (
+        item.marketType === 'perp'
+        && item.source.trim().toLowerCase() === 'hyperliquid'
+        && item.symbol.trim().toUpperCase() === (selectedHolding?.symbol ?? detail?.symbol ?? '').trim().toUpperCase()
+      )) ?? null,
+    [detail?.symbol, perpSearchResults, selectedHolding?.symbol],
+  );
 
   const supportedChains = appConfig?.supportedChains ?? [];
   const transferSupportedChains = useMemo(
@@ -447,8 +437,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   );
   const canTransferAsset = Boolean(selectedHolding);
   const hasPerpCard = Boolean(
-    perpInstrumentMarket?.instrument?.market_type === 'perp'
-      && perpInstrumentMarket.instrument.venue?.trim().toLowerCase() === 'hyperliquid',
+    matchedPerpMarket,
   );
 
   const historyRows = useMemo(() => {

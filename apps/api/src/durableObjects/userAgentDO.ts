@@ -50,7 +50,7 @@ const TOPIC_SPECIAL_FETCH_MULTIPLIER = 3;
 const TOPIC_SPECIAL_MIN_FETCH = 24;
 const MAX_WATCHLIST_SIZE = 500;
 
-type WatchlistType = 'crypto' | 'perps' | 'stock' | 'prediction';
+type WatchlistType = 'crypto' | 'perps' | 'prediction';
 
 type WatchlistAssetUpsertInput = {
   watchType?: string | null;
@@ -121,6 +121,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
     options?: {
       limit?: number;
       articleType?: string;
+      createdAfter?: string | null;
+      createdBefore?: string | null;
     },
   ): Promise<{ articles: ArticleRow[] }> {
     this.ensureOwner(userId);
@@ -128,7 +130,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
     await this.ensureTodayDailyReady();
     const limit = options?.limit ?? 20;
     const articleType = options?.articleType ?? null;
-    return { articles: await this.getArticles(limit, articleType) };
+    return {
+      articles: await this.getArticles(
+        limit,
+        articleType,
+        options?.createdAfter ?? null,
+        options?.createdBefore ?? null,
+      ),
+    };
   }
 
   async getArticleDetailRpc(
@@ -435,6 +444,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
         messages: llmMessages,
         temperature: 0.5,
         maxTokens: 500,
+        retryAttempts: 2,
+        maxRetryDelayMs: 5_000,
       });
       reply = result.text;
     } catch {
@@ -908,22 +919,27 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .toArray() as RecommendationRow[];
   }
 
-  private async getArticles(limit = 20, articleType: string | null = null): Promise<ArticleRow[]> {
+  private async getArticles(
+    limit = 20,
+    articleType: string | null = null,
+    createdAfter: string | null = null,
+    createdBefore: string | null = null,
+  ): Promise<ArticleRow[]> {
     const safeLimit = sanitizeLimit(limit, 1, 100);
     const normalizedType = articleType?.trim().toLowerCase() ?? null;
 
     if (normalizedType === 'topic') {
-      return this.getPersonalizedTopicArticles(safeLimit);
+      return this.getPersonalizedTopicArticles(safeLimit, createdAfter, createdBefore);
     }
 
     if (normalizedType) {
-      return this.getLocalArticles(safeLimit, normalizedType);
+      return this.getLocalArticles(safeLimit, normalizedType, createdAfter, createdBefore);
     }
 
     const mergeLimit = Math.min(100, Math.max(safeLimit * 2, 20));
     const [localArticles, topicArticles] = await Promise.all([
-      Promise.resolve(this.getLocalArticles(mergeLimit, null)),
-      this.getPersonalizedTopicArticles(mergeLimit),
+      Promise.resolve(this.getLocalArticles(mergeLimit, null, createdAfter, createdBefore)),
+      this.getPersonalizedTopicArticles(mergeLimit, createdAfter, createdBefore),
     ]);
 
     const deduped = new Map<string, ArticleRow>();
@@ -938,31 +954,31 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .slice(0, safeLimit);
   }
 
-  private getLocalArticles(limit = 20, articleType: string | null = null): ArticleRow[] {
+  private getLocalArticles(
+    limit = 20,
+    articleType: string | null = null,
+    createdAfter: string | null = null,
+    createdBefore: string | null = null,
+  ): ArticleRow[] {
     const safeLimit = sanitizeLimit(limit, 1, 100);
     const normalizedType = articleType?.trim();
+    const conditions: string[] = [];
+    const bindings: unknown[] = [];
+
     if (normalizedType) {
-      return this.ctx.storage.sql
-        .exec(
-          `SELECT
-            id,
-            article_type,
-            title,
-            summary,
-            r2_key,
-            tags_json,
-            created_at,
-            status
-           FROM article_index
-           WHERE article_type = ?
-           ORDER BY created_at DESC
-           LIMIT ?`,
-          normalizedType,
-          safeLimit,
-        )
-        .toArray() as ArticleRow[];
+      conditions.push('article_type = ?');
+      bindings.push(normalizedType);
+    }
+    if (createdAfter) {
+      conditions.push('created_at >= ?');
+      bindings.push(createdAfter);
+    }
+    if (createdBefore) {
+      conditions.push('created_at < ?');
+      bindings.push(createdBefore);
     }
 
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     return this.ctx.storage.sql
       .exec(
         `SELECT
@@ -975,19 +991,35 @@ export class UserAgentDO extends DurableObject<Bindings> {
           created_at,
           status
          FROM article_index
+         ${whereClause}
          ORDER BY created_at DESC
          LIMIT ?`,
+        ...bindings,
         safeLimit,
       )
       .toArray() as ArticleRow[];
   }
 
-  private async getPersonalizedTopicArticles(limit = 20): Promise<ArticleRow[]> {
+  private async getPersonalizedTopicArticles(
+    limit = 20,
+    createdAfter: string | null = null,
+    createdBefore: string | null = null,
+  ): Promise<ArticleRow[]> {
     if (!(await this.ensureTopicSpecialSchemaReady())) return [];
     const safeLimit = sanitizeLimit(limit, 1, 100);
     const fetchLimit = Math.min(100, Math.max(safeLimit * TOPIC_SPECIAL_FETCH_MULTIPLIER, TOPIC_SPECIAL_MIN_FETCH));
     let rows: { results?: TopicSpecialArticleIndexRow[] };
     try {
+      const conditions = [`status = 'ready'`];
+      const bindings: unknown[] = [];
+      if (createdAfter) {
+        conditions.push('generated_at >= ?');
+        bindings.push(createdAfter);
+      }
+      if (createdBefore) {
+        conditions.push('generated_at < ?');
+        bindings.push(createdBefore);
+      }
       rows = await this.env.DB.prepare(
         `SELECT
            id,
@@ -998,11 +1030,11 @@ export class UserAgentDO extends DurableObject<Bindings> {
            generated_at,
            status
          FROM topic_special_articles
-         WHERE status = 'ready'
+         WHERE ${conditions.join(' AND ')}
          ORDER BY generated_at DESC
          LIMIT ?`,
       )
-        .bind(fetchLimit)
+        .bind(...bindings, fetchLimit)
         .all<TopicSpecialArticleIndexRow>();
     } catch (error) {
       console.error('topic_special_query_failed', {
@@ -1115,7 +1147,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
   private normalizeWatchType(value: unknown): WatchlistType | null {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : 'crypto';
-    if (normalized === 'crypto' || normalized === 'perps' || normalized === 'stock' || normalized === 'prediction') {
+    if (normalized === 'crypto' || normalized === 'perps' || normalized === 'prediction') {
       return normalized;
     }
     return null;
@@ -1124,7 +1156,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   private resolveWatchTypeFromFavoriteEvent(value: unknown): WatchlistType {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (normalized === 'perp') return 'perps';
-    if (normalized === 'stock' || normalized === 'prediction') return normalized;
+    if (normalized === 'prediction') return normalized;
     return 'crypto';
   }
 
@@ -1716,7 +1748,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   private buildChatSystemPrompt(page: string, pageContext: Record<string, string>): string {
     const pageDescriptions: Record<string, string> = {
       home: 'the home screen showing daily digest, asset recommendations, watchlist, and topic articles',
-      trade: 'the trading screen with market overview, top movers, trending assets, stocks, perps, and predictions',
+      trade: 'the trading screen with market overview, top movers, trending assets, perps, and predictions',
       wallet: 'the wallet screen showing balance, holdings across multiple chains, and transaction tools',
       article: 'reading a content article generated by the agent',
       token: `viewing token details${pageContext.symbol ? ` for ${pageContext.symbol}` : ''}${pageContext.chain ? ` on ${pageContext.chain}` : ''}`,

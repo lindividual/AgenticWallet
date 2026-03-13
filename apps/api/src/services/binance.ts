@@ -1,8 +1,6 @@
-const BINANCE_ALPHA_BASE = 'https://www.binance.com';
 const BINANCE_WEB3_BASE = 'https://web3.binance.com';
 const BINANCE_STATIC_BASE = 'https://bin.bnbstatic.com';
 const BINANCE_DATA_API_BASE = 'https://data-api.binance.vision';
-const TOKEN_LIST_CACHE_TTL_MS = 10 * 60_000;
 const TICKER_CACHE_TTL_MS = 20_000;
 const DEFAULT_SPOT_KLINE_QUOTES = ['USDT', 'USDC', 'FDUSD', 'BUSD'];
 const BINANCE_WEB3_SEARCH_URL = `${BINANCE_WEB3_BASE}/bapi/defi/v5/public/wallet-direct/buw/wallet/market/token/search`;
@@ -34,39 +32,6 @@ const BINANCE_WEB3_WRAPPED_NATIVE_CONTRACTS: Record<string, string> = {
   sol: 'So11111111111111111111111111111111111111112',
 };
 
-type BinanceAlphaToken = {
-  tokenId: string;
-  chainId: string;
-  chainName: string;
-  contractAddress: string;
-  name: string;
-  symbol: string;
-  iconUrl: string | null;
-  price: string;
-  percentChange24h: string;
-  volume24h: string;
-  marketCap: string;
-  fdv: string;
-  totalSupply: string;
-  circulatingSupply: string;
-  decimals: number;
-  alphaId: string;
-  stockState: boolean;
-  priceHigh24h: string;
-  priceLow24h: string;
-  rwaInfo?: {
-    openState?: boolean;
-    marketStatus?: string;
-    metaInfo?: {
-      ticker?: string;
-    };
-    dynamicInfo?: {
-      priceHigh52w?: string;
-      priceLow52w?: string;
-    };
-  } | null;
-};
-
 type BinanceWeb3TokenAddress = {
   chainId?: string;
   contractAddress?: string;
@@ -86,27 +51,19 @@ type BinanceWeb3SearchToken = {
   volume24h?: string;
   marketCap?: string;
   tokenAddresses?: BinanceWeb3TokenAddress[];
-  zone?: string;
-  stockCompanyName?: string;
 };
 
-export type BinanceStockItem = {
+export type BinanceSpotSearchItem = {
   id: string;
   symbol: string;
-  stockTicker: string;
   name: string;
   image: string | null;
   chain: string;
   contract: string;
-  chainId: string;
-  alphaId: string;
   currentPrice: number | null;
   change24h: number | null;
   volume24h: number | null;
   marketCap: number | null;
-  highPrice24h: number | null;
-  lowPrice24h: number | null;
-  stockState: boolean;
   nativeAddressFlag: boolean;
 };
 
@@ -192,9 +149,6 @@ export type BinanceTokenDynamicInfo = {
   smartMoneyHolders: number | null;
   smartMoneyHoldingPercent: number | null;
 };
-
-let tokenListCache: { expiresAt: number; value: BinanceAlphaToken[] } | null = null;
-let tokenListInFlight: Promise<BinanceAlphaToken[]> | null = null;
 
 function toFiniteNumber(raw: unknown): number | null {
   const value = Number(raw);
@@ -407,14 +361,6 @@ export async function fetchBinanceTokenDynamicInfo(
   return normalizeBinanceTokenDynamicInfo(payload?.data);
 }
 
-function deriveBinanceStockTicker(token: BinanceWeb3SearchToken): string {
-  const symbol = normalizeText(token.symbol)?.toUpperCase() ?? '';
-  if (!symbol) return symbol;
-  if (/^[A-Z0-9]+ON$/.test(symbol)) return symbol.slice(0, -2) || symbol;
-  if (/^[A-Z0-9]+X$/.test(symbol) && symbol.length > 2) return symbol.slice(0, -1) || symbol;
-  return symbol;
-}
-
 function pickPrimaryBinanceAddress(token: BinanceWeb3SearchToken): {
   chain: string;
   contract: string;
@@ -439,113 +385,27 @@ function pickPrimaryBinanceAddress(token: BinanceWeb3SearchToken): {
   return null;
 }
 
-function mapWeb3SearchTokenToItem(token: BinanceWeb3SearchToken): BinanceStockItem | null {
+function mapWeb3SearchTokenToItem(token: BinanceWeb3SearchToken): BinanceSpotSearchItem | null {
   const tokenId = normalizeText(token.tokenId);
   const symbol = normalizeText(token.symbol);
   const name = normalizeText(token.name);
   if (!tokenId || !symbol || !name) return null;
   const primaryAddress = pickPrimaryBinanceAddress(token);
   if (!primaryAddress) return null;
-  const stockState = (normalizeText(token.zone)?.toLowerCase() ?? '') === 'stock';
-  const stockTicker = stockState ? deriveBinanceStockTicker(token) : symbol.toUpperCase();
   return {
-    id: `${stockState ? 'binance-stock' : 'binance-token'}:${tokenId}`,
+    id: `binance-token:${tokenId}`,
     symbol,
-    stockTicker,
     name,
     image: normalizeBinanceIconUrl(token.icon),
     chain: primaryAddress.chain,
     contract: primaryAddress.contract,
-    chainId: normalizeText(token.chainId) ?? '',
-    alphaId: tokenId,
     currentPrice: toFiniteNumber(token.price),
     change24h: toFiniteNumber(token.percentChange24h),
     volume24h: toFiniteNumber(token.volume24h),
     marketCap: toFiniteNumber(token.marketCap),
-    highPrice24h: null,
-    lowPrice24h: null,
-    stockState,
     nativeAddressFlag: primaryAddress.nativeAddressFlag,
   };
 }
-
-async function fetchAlphaTokenList(): Promise<BinanceAlphaToken[]> {
-  const now = Date.now();
-  if (tokenListCache && tokenListCache.expiresAt > now) return tokenListCache.value;
-  if (tokenListInFlight) return tokenListInFlight;
-
-  const task = (async () => {
-    const response = await fetch(
-      `${BINANCE_ALPHA_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list`,
-      { headers: { Accept: 'application/json', 'Accept-Encoding': 'gzip' } },
-    );
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(`binance_alpha_token_list_http_${response.status}:${detail.slice(0, 200)}`);
-    }
-    const payload = (await response.json()) as { data?: BinanceAlphaToken[] };
-    const tokens = Array.isArray(payload?.data) ? payload.data : [];
-    tokenListCache = { expiresAt: Date.now() + TOKEN_LIST_CACHE_TTL_MS, value: tokens };
-    return tokens;
-  })().finally(() => {
-    tokenListInFlight = null;
-  });
-
-  tokenListInFlight = task;
-  return task;
-}
-
-function mapAlphaTokenToStockItem(token: BinanceAlphaToken): BinanceStockItem {
-  const ticker = token.rwaInfo?.metaInfo?.ticker ?? token.symbol.replace(/on$/i, '');
-  return {
-    id: `binance-stock:${token.alphaId}`,
-    symbol: token.symbol,
-    stockTicker: ticker,
-    name: token.name.replace(/\s*\(Ondo\)\s*$/i, ''),
-    image: normalizeBinanceIconUrl(token.iconUrl),
-    chain: token.chainName?.toLowerCase() ?? 'bsc',
-    contract: token.contractAddress ?? '',
-    chainId: token.chainId ?? '',
-    alphaId: token.alphaId,
-    currentPrice: toFiniteNumber(token.price),
-    change24h: toFiniteNumber(token.percentChange24h),
-    volume24h: toFiniteNumber(token.volume24h),
-    marketCap: toFiniteNumber(token.marketCap),
-    highPrice24h: toFiniteNumber(token.priceHigh24h),
-    lowPrice24h: toFiniteNumber(token.priceLow24h),
-    stockState: token.stockState === true,
-    nativeAddressFlag: false,
-  };
-}
-
-export async function fetchBinanceStockTokens(limit = 20): Promise<BinanceStockItem[]> {
-  const allTokens = await fetchAlphaTokenList();
-  return allTokens
-    .filter((t) => t.stockState === true)
-    .sort((a, b) => (toFiniteNumber(b.volume24h) ?? 0) - (toFiniteNumber(a.volume24h) ?? 0))
-    .slice(0, limit)
-    .map(mapAlphaTokenToStockItem);
-}
-
-export async function fetchBinanceStockDetail(alphaId: string): Promise<BinanceStockItem | null> {
-  const normalizedId = alphaId.trim().toUpperCase();
-  const allTokens = await fetchAlphaTokenList();
-  const token = allTokens.find(
-    (t) => t.stockState === true && (
-      t.alphaId.toUpperCase() === normalizedId
-      || t.tokenId.toUpperCase() === normalizedId
-    ),
-  );
-  if (!token) return null;
-  return mapAlphaTokenToStockItem(token);
-}
-
-const ALPHA_KLINE_INTERVAL_MAP: Record<string, string> = {
-  '15m': '15m',
-  '1h': '1h',
-  '4h': '4h',
-  '1d': '1d',
-};
 
 const SPOT_KLINE_INTERVAL_MAP: Record<string, string> = {
   '1m': '1m',
@@ -732,55 +592,10 @@ export async function fetchBinanceWeb3TokenKlines(
     .sort((a, b) => a.time - b.time);
 }
 
-export async function fetchBinanceStockKlines(
-  alphaId: string,
-  period: string,
-  size: number,
-): Promise<BinanceKlineCandle[]> {
-  const interval = ALPHA_KLINE_INTERVAL_MAP[period] ?? '1h';
-  const clampedSize = Math.max(10, Math.min(size, 500));
-  const symbol = `${alphaId.toUpperCase()}USDT`;
-  const query = new URLSearchParams({ symbol, interval, limit: String(clampedSize) });
-
-  const response = await fetch(
-    `${BINANCE_ALPHA_BASE}/bapi/defi/v1/public/alpha-trade/klines?${query.toString()}`,
-    { headers: { Accept: 'application/json', 'Accept-Encoding': 'gzip' } },
-  );
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`binance_alpha_kline_http_${response.status}:${detail.slice(0, 200)}`);
-  }
-
-  const payload = (await response.json()) as { data?: unknown[] };
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
-  return parseBinanceKlineRows(rows);
-}
-
-export async function searchBinanceTokens(
-  query: string,
-  limit = 20,
-): Promise<BinanceStockItem[]> {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) return [];
-
-  const allTokens = await fetchAlphaTokenList();
-  return allTokens
-    .filter((t) => {
-      if (!t.stockState) return false;
-      const sym = t.symbol.toLowerCase();
-      const name = t.name.toLowerCase();
-      const ticker = t.rwaInfo?.metaInfo?.ticker?.toLowerCase() ?? '';
-      return sym.includes(normalizedQuery) || name.includes(normalizedQuery) || ticker.includes(normalizedQuery);
-    })
-    .sort((a, b) => (toFiniteNumber(b.volume24h) ?? 0) - (toFiniteNumber(a.volume24h) ?? 0))
-    .slice(0, limit)
-    .map(mapAlphaTokenToStockItem);
-}
-
 export async function searchBinanceSpotTokens(
   query: string,
   limit = 20,
-): Promise<BinanceStockItem[]> {
+): Promise<BinanceSpotSearchItem[]> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) return [];
 
@@ -805,6 +620,6 @@ export async function searchBinanceSpotTokens(
   const rows = Array.isArray(payload?.data) ? payload.data : [];
   return rows
     .map(mapWeb3SearchTokenToItem)
-    .filter((item): item is BinanceStockItem => item != null)
+    .filter((item): item is BinanceSpotSearchItem => item != null)
     .slice(0, limit);
 }

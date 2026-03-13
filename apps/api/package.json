@@ -9,8 +9,7 @@
     "deploy": "wrangler deploy",
     "build": "tsc --noEmit",
     "test:agent-local": "bash scripts/e2e-agent-local.sh",
-    "test:auth-local": "bash scripts/e2e-auth-local.sh",
-    "test:asset-model-local": "bash scripts/e2e-asset-model-local.sh"
+    "test:auth-local": "bash scripts/e2e-auth-local.sh"
   },
   "dependencies": {
     "@biconomy/abstractjs": "^1.1.21",

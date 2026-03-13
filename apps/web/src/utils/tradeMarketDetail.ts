@@ -1,16 +1,15 @@
-export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
+export type TradeMarketDetailType = 'perp' | 'prediction';
 
 export function normalizeTradeMarketDetailType(value: string | null | undefined): TradeMarketDetailType | null {
   const normalized = (value ?? '').trim().toLowerCase();
-  if (normalized === 'stock' || normalized === 'perp' || normalized === 'prediction') {
+  if (normalized === 'perp' || normalized === 'prediction') {
     return normalized;
   }
   return null;
 }
 
-export function toWatchTypeFromTradeMarketType(type: TradeMarketDetailType): 'stock' | 'perps' | 'prediction' {
-  if (type === 'perp') return 'perps';
-  return type;
+export function toWatchTypeFromTradeMarketType(type: TradeMarketDetailType): 'perps' | 'prediction' {
+  return type === 'perp' ? 'perps' : 'prediction';
 }
 
 export function normalizeWatchlistItemId(value: string | null | undefined): string | null {

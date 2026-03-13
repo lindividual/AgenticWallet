@@ -14,7 +14,7 @@ export type PredictionKlineSeries = {
 };
 
 type MarketKlineSectionProps = {
-  normalizedType: 'stock' | 'perp' | 'prediction';
+  normalizedType: 'perp' | 'prediction';
   hasKlineSupport: boolean;
   klinePeriodButtons: ReactNode;
   chartMode: 'line' | 'candle';

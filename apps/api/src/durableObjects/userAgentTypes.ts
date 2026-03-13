@@ -81,7 +81,7 @@ export type TransferRow = {
 
 export type WatchlistAssetRow = {
   id: string;
-  watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
+  watch_type: 'crypto' | 'perps' | 'prediction';
   item_id: string | null;
   chain: string;
   contract: string;

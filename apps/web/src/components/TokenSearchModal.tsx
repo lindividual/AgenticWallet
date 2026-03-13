@@ -27,7 +27,6 @@ function pctClassName(value: number | null | undefined): string {
 
 function getMarketTypeLabel(t: (key: string) => string, marketType: MarketSearchResult['marketType']): string {
   if (marketType === 'spot') return t('trade.tokens');
-  if (marketType === 'stock') return t('trade.stocks');
   if (marketType === 'perp') return t('trade.perps');
   return t('trade.prediction');
 }

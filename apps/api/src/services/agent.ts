@@ -96,7 +96,7 @@ export type AgentTransfer = {
 
 export type AgentWatchlistAsset = {
   id: string;
-  watch_type: 'crypto' | 'perps' | 'stock' | 'prediction';
+  watch_type: 'crypto' | 'perps' | 'prediction';
   item_id: string | null;
   chain: string;
   contract: string;
@@ -132,6 +132,8 @@ type UserAgentRpcStub = DurableObjectStub & {
     options?: {
       limit?: number;
       articleType?: string;
+      createdAfter?: string | null;
+      createdBefore?: string | null;
     },
   ): Promise<AgentArticlesResponse>;
   getArticleDetailRpc(userId: string, articleId: string): Promise<AgentArticleDetailResponse | null>;
@@ -280,6 +282,8 @@ export async function listUserAgentArticles(
   options?: {
     limit?: number;
     articleType?: string;
+    createdAfter?: string | null;
+    createdBefore?: string | null;
   },
 ): Promise<AgentArticle[]> {
   const stub = getUserAgentStub(env, userId);

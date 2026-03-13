@@ -23,7 +23,7 @@ function formatProbability(probability: number | null | undefined): string {
 
 type MarketInfoSectionProps = {
   isLoading: boolean;
-  normalizedType: 'stock' | 'perp' | 'prediction';
+  normalizedType: 'perp' | 'prediction';
   displaySource: string | null;
   normalizedItemId: string;
   displayVolume24h: number | null;
@@ -75,11 +75,7 @@ export function MarketInfoSection({
           <div className="rounded bg-base-200/40 p-2">
             <p className="m-0 text-xs text-base-content/60">{t('trade.marketType')}</p>
             <p className="m-0 mt-1 font-medium">
-              {normalizedType === 'stock'
-                ? t('trade.stocks')
-                : normalizedType === 'perp'
-                  ? t('trade.perps')
-                  : t('trade.prediction')}
+              {normalizedType === 'perp' ? t('trade.perps') : t('trade.prediction')}
             </p>
           </div>
           <div className="rounded bg-base-200/40 p-2">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
@@ -6,11 +6,9 @@ import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   addMarketWatchlistAsset,
   getAppConfig,
-  getMarketCandlesByInstrumentId,
   getTradeBrowse,
   getCoinDetail,
   getMarketWatchlist,
-  resolveAssetIdentity,
   getTokenKline,
   ingestAgentEvent,
   removeMarketWatchlistAsset,
@@ -204,7 +202,6 @@ function findBrowseFallbackItem(
   const items = [
     ...payload.topMovers,
     ...payload.trendings,
-    ...payload.stocks,
   ];
 
   const normalizedInstrumentId = options.instrumentId?.trim() || null;
@@ -278,43 +275,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     [normalizedChain, normalizedContract, queryClient],
   );
 
-  const previewInstrumentId = routePreview?.instrument_id?.trim() || null;
-
-  const { data: resolvedIdentity } = useQuery({
-    queryKey: ['trade-token-identity', normalizedChain, normalizedContract],
-    queryFn: () =>
-      resolveAssetIdentity({
-        chain: normalizedChain,
-        contract: normalizedContract || 'native',
-        marketType: 'spot',
-        symbol: routePreview?.symbol,
-        nameHint: routePreview?.name,
-      }),
-    staleTime: 5 * 60_000,
-    enabled: Boolean(normalizedChain),
-  });
-
-  const resolvedInstrumentId = resolvedIdentity?.instrument_id?.trim() || null;
-  const activeInstrumentId = resolvedInstrumentId
-    || previewInstrumentId
-    || null;
-
   const activeChartRequest = KLINE_RANGE_REQUESTS[chartRange];
-
-  const fetchTokenCandles = useCallback(
-    async (period: KlinePeriod, size: number) => {
-      if (activeInstrumentId) {
-        try {
-          const byInstrument = await getMarketCandlesByInstrumentId(activeInstrumentId, period, size);
-          if (byInstrument.length > 0) return byInstrument;
-        } catch {
-          // Fall through to legacy endpoint for resilience when instrument route is stale or rate-limited.
-        }
-      }
-      return getTokenKline(normalizedChain, normalizedContract, period, size);
-    },
-    [activeInstrumentId, normalizedChain, normalizedContract],
-  );
 
   const { data: detail, isLoading: isLegacyDetailLoading } = useQuery({
     queryKey: ['trade-token-detail-legacy', normalizedChain, normalizedContract],
@@ -334,12 +295,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
       'trade-token-kline',
       normalizedChain,
       normalizedContract,
-      activeInstrumentId,
       chartRange,
       activeChartRequest.period,
       activeChartRequest.size,
     ],
-    queryFn: () => fetchTokenCandles(activeChartRequest.period, activeChartRequest.size),
+    queryFn: () => getTokenKline(normalizedChain, normalizedContract, activeChartRequest.period, activeChartRequest.size),
     staleTime: 20_000,
     refetchInterval: 30_000,
   });
@@ -402,11 +362,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const tradeBrowseFallbackItem = useMemo(
     () =>
       findBrowseFallbackItem(tradeBrowseFallback, {
-        instrumentId: activeInstrumentId,
+        instrumentId: null,
         chain: normalizedChain,
         contract: normalizedContract,
       }),
-    [activeInstrumentId, normalizedChain, normalizedContract, tradeBrowseFallback],
+    [normalizedChain, normalizedContract, tradeBrowseFallback],
   );
 
   const tradeBrowseFallbackPriceChangePct = tradeBrowseFallbackItem?.change24h ?? null;
@@ -417,10 +377,10 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const shouldUseKlineChangeFallback = !Number.isFinite(Number(rawPriceChangePct));
 
   const { data: fallbackChangeKlineData } = useQuery({
-    queryKey: ['trade-token-kline-change-fallback', normalizedChain, normalizedContract, activeInstrumentId],
+    queryKey: ['trade-token-kline-change-fallback', normalizedChain, normalizedContract],
     queryFn: async () => {
       for (const option of KLINE_RANGE_FALLBACK_CHANGE_OPTIONS) {
-        const candles = await fetchTokenCandles(option.period, option.size);
+        const candles = await getTokenKline(normalizedChain, normalizedContract, option.period, option.size);
         if (candles.length > 1) return candles;
       }
       return [];
@@ -433,12 +393,12 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   useEffect(() => {
     ingestAgentEvent('asset_viewed', {
       asset: (preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
-      itemId: activeInstrumentId ?? undefined,
+      itemId: undefined,
       chain: normalizedChain,
       contract: normalizedContract,
       source: 'trade_detail',
     }).catch(() => undefined);
-  }, [activeInstrumentId, normalizedChain, normalizedContract, preferredDetail?.symbol, routePreview?.symbol]);
+  }, [normalizedChain, normalizedContract, preferredDetail?.symbol, routePreview?.symbol]);
 
   const chartCandles = useMemo<CandlePoint[]>(
     () => normalizeCandlesForLiveline(klineData),
@@ -517,12 +477,11 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
           'trade-token-kline',
           normalizedChain,
           normalizedContract,
-          activeInstrumentId,
           nextRange,
           nextRequest.period,
           nextRequest.size,
         ],
-        queryFn: () => fetchTokenCandles(nextRequest.period, nextRequest.size),
+        queryFn: () => getTokenKline(normalizedChain, normalizedContract, nextRequest.period, nextRequest.size),
         staleTime: 20_000,
       });
       setChartRange(nextRange);
@@ -555,7 +514,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         });
         ingestAgentEvent('asset_favorited', {
           asset: (preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
-          itemId: activeInstrumentId ?? undefined,
+          itemId: undefined,
           chain: normalizedChain,
           contract: normalizedContract,
           source: 'trade_detail',

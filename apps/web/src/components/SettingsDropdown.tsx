@@ -1,3 +1,4 @@
+import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
 
@@ -14,6 +15,7 @@ type SettingsDropdownProps = {
 export function SettingsDropdown({ onLogout }: SettingsDropdownProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
+  const separator = <li aria-hidden="true" className="mx-3 my-2 h-px bg-base-300/70" />;
 
   return (
     <div className="dropdown dropdown-end">
@@ -54,12 +56,12 @@ export function SettingsDropdown({ onLogout }: SettingsDropdownProps) {
             >
               {label}
               {i18n.language.startsWith(code) && (
-                <span className="badge badge-sm badge-primary ms-auto">✓</span>
+                <Check size={16} className="ms-auto shrink-0 text-primary" aria-hidden="true" />
               )}
             </button>
           </li>
         ))}
-        <li className="divider my-1" />
+        {separator}
         <li className="menu-title px-3 py-2 text-xs font-semibold uppercase opacity-70">
           {t('settings.theme')}
         </li>
@@ -72,14 +74,14 @@ export function SettingsDropdown({ onLogout }: SettingsDropdownProps) {
             >
               {t(`settings.theme${mode.charAt(0).toUpperCase() + mode.slice(1)}`)}
               {theme === mode && (
-                <span className="badge badge-sm badge-primary ms-auto">✓</span>
+                <Check size={16} className="ms-auto shrink-0 text-primary" aria-hidden="true" />
               )}
             </button>
           </li>
         ))}
         {onLogout ? (
           <>
-            <li className="divider my-1" />
+            {separator}
             <li>
               <button type="button" className="text-error" onClick={onLogout}>
                 {t('common.logout')}

@@ -209,7 +209,6 @@
     "watchlistCategory": {
       "crypto": "Crypto",
       "perps": "Perps",
-      "stock": "Stock",
       "prediction": "Prediction"
     },
     "topicRecommendationsTitle": "Topic Recommendations",
@@ -234,7 +233,7 @@
     "listenStopped": "Reading stopped",
     "listenFailed": "Listen failed, please try again",
     "zeroBalanceTitle": "Start your on-chain finance journey",
-    "zeroBalanceSubtitle": "Invest in crypto and stocks, use stablecoins for payments or yield."
+    "zeroBalanceSubtitle": "Invest in crypto, use stablecoins for payments, or explore yield."
   },
   "agent": {
     "helpPromptHome": "Need help finding opportunities or reviewing your portfolio?",
@@ -265,11 +264,10 @@
     "topMovers": "Top movers",
     "trending": "Trending",
     "tokens": "Tokens",
-    "stocks": "Stocks",
     "search": "Search",
-    "searchPlaceholder": "Search tokens, stocks, perps, or predictions",
+    "searchPlaceholder": "Search tokens, perps, or predictions",
     "searchNoResults": "No matching markets found.",
-    "searchHint": "Search across Binance spot, tokenized stocks, Hyperliquid perps, and Polymarket predictions.",
+    "searchHint": "Search across Binance spot, Hyperliquid perps, and Polymarket predictions.",
     "perps": "Perps",
     "prediction": "Prediction",
     "noSectionData": "No market data available right now. Pull to refresh and try again.",

@@ -209,7 +209,6 @@
     "watchlistCategory": {
       "crypto": "Crypto",
       "perps": "合约",
-      "stock": "股票",
       "prediction": "预测"
     },
     "topicRecommendationsTitle": "专题推荐",
@@ -265,11 +264,10 @@
     "topMovers": "涨幅榜",
     "trending": "热门趋势",
     "tokens": "代币",
-    "stocks": "股票",
     "search": "搜索",
-    "searchPlaceholder": "搜索代币、股票、合约或预测市场",
+    "searchPlaceholder": "搜索代币、合约或预测市场",
     "searchNoResults": "未找到匹配的市场。",
-    "searchHint": "可搜索 Binance 现货、代币化股票、Hyperliquid 合约和 Polymarket 预测市场。",
+    "searchHint": "可搜索 Binance 现货、Hyperliquid 合约和 Polymarket 预测市场。",
     "perps": "合约",
     "prediction": "预测市场",
     "noSectionData": "当前暂无可用市场数据，请下拉刷新重试。",

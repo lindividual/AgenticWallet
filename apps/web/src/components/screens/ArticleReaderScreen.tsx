@@ -8,6 +8,7 @@ import {
   type AgentArticleRelatedAsset,
   type TopMarketAsset,
 } from '../../api';
+import { buildChainAssetId } from '../../utils/assetIdentity';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { useToast } from '../../contexts/ToastContext';
 import type { TradeMarketDetailType } from '../../utils/tradeMarketDetail';
@@ -130,12 +131,12 @@ function normalizeRoutableTokenContract(chain: string, contract: string): string
 }
 
 function toTokenPreview(asset: AgentArticleRelatedAsset, chain: string, contract: string): TopMarketAsset | null {
-  if (!asset.asset_id) return null;
+  const chainAssetId = buildChainAssetId(chain, contract);
+  const assetId = asset.asset_id ?? chainAssetId;
   return {
-    id: asset.asset_id,
-    asset_id: asset.asset_id,
-    instrument_id: asset.instrument_id ?? undefined,
-    chain_asset_id: `${chain}:${contract}`,
+    id: assetId,
+    asset_id: assetId,
+    chain_asset_id: chainAssetId,
     chain,
     contract,
     symbol: asset.symbol,

@@ -1,7 +1,6 @@
 import { fetchNewsHeadlines } from '../durableObjects/userAgentRss';
 import { generateWithLlm, getLlmErrorInfo, getLlmStatus } from './llm';
 import type { ArticleRelatedAssetRef } from './articleRelatedAssets';
-import { resolveAssetIdentityBatch } from './assetData';
 import type { MarketTopAsset } from './bitgetWallet';
 import { fetchTopMarketAssets } from './marketTopAssets';
 import { fetchOpenNewsCryptoNews, fetchOpenTwitterCryptoTweets, type NewsItem, type TweetItem } from './openNews';
@@ -171,7 +170,6 @@ export async function generateTopicSpecialBatch(
       generatedAt: new Date().toISOString(),
       topMovers: [] as TradeBrowseMarketItem[],
       trendings: [] as TradeBrowseMarketItem[],
-      stocks: [] as TradeBrowseMarketItem[],
       perps: [] as TradeBrowseMarketItem[],
       predictions: [] as TradeBrowsePredictionItem[],
     })),
@@ -462,6 +460,7 @@ async function buildTopicDrafts(
       temperature: 0.35,
       maxTokens: 1600,
       retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
+      maxRetryDelayMs: 60_000,
     });
     console.log('topic_special_draft_llm_succeeded', {
       requestId: llmResult.requestId ?? null,
@@ -591,6 +590,7 @@ async function buildTopicArticleMarkdown(
       temperature: 0.45,
       maxTokens: TOPIC_SPECIAL_ARTICLE_MAX_TOKENS,
       retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
+      maxRetryDelayMs: 60_000,
     });
     console.log('topic_special_article_llm_succeeded', {
       slotKey: input.slotKey,
@@ -850,17 +850,6 @@ function buildDefaultAssetPool(marketAssets: MarketTopAsset[], newsItems: NewsIt
 type TopicRelatedRefCandidate = {
   key: string;
   ref: ArticleRelatedAssetRef;
-  resolveInput?:
-    | {
-        chain?: string;
-        contract?: string;
-        itemId?: string;
-        marketType?: string;
-        symbol?: string;
-        venue?: string;
-        nameHint?: string;
-      }
-    | null;
 };
 
 function normalizePredictionSearchText(raw: string): string {
@@ -948,7 +937,7 @@ function scorePredictionCandidate(
 }
 
 async function buildTopicRelatedAssetRefs(
-  env: Bindings,
+  _env: Bindings,
   input: {
     topic: string;
     summary: string;
@@ -983,22 +972,13 @@ async function buildTopicRelatedAssetRefs(
         market_type: 'spot',
         market_item_id: null,
         asset_id: matched?.asset_id ?? null,
-        instrument_id: matched?.instrument_id ?? null,
+        instrument_id: null,
         chain: matched?.chain ?? null,
         contract: matched?.contract || null,
         name: matched?.name ?? null,
         image: matched?.image ?? null,
         price_change_percentage_24h: matched?.price_change_percentage_24h ?? null,
       },
-      resolveInput: matched
-        ? {
-            chain: matched.chain,
-            contract: matched.contract,
-            marketType: 'spot',
-            symbol: matched.symbol,
-            nameHint: matched.name,
-          }
-        : null,
     });
   }
 
@@ -1026,16 +1006,11 @@ async function buildTopicRelatedAssetRefs(
         symbol,
         market_type: 'perp',
         market_item_id: matchedPerp.id,
+        asset_id: null,
+        instrument_id: null,
         name: matchedPerp.name,
         image: matchedPerp.image,
         price_change_percentage_24h: matchedPerp.change24h,
-      },
-      resolveInput: {
-        itemId: matchedPerp.id,
-        marketType: 'perp',
-        symbol: matchedPerp.symbol,
-        venue: matchedPerp.source,
-        nameHint: matchedPerp.name,
       },
     });
     perpCount += 1;
@@ -1063,34 +1038,16 @@ async function buildTopicRelatedAssetRefs(
         symbol: primarySymbol,
         market_type: 'prediction',
         market_item_id: item.prediction.id,
+        asset_id: null,
+        instrument_id: null,
         name: item.prediction.title,
         image: item.prediction.image,
         price_change_percentage_24h: null,
       },
-      resolveInput: {
-        itemId: item.prediction.id,
-        marketType: 'prediction',
-        venue: item.prediction.source,
-        nameHint: item.prediction.title,
-      },
     });
   }
 
-  const dedupedCandidates = [...new Map(candidates.map((item) => [item.key, item])).values()].slice(0, 8);
-  const resolveInputs = dedupedCandidates
-    .map((item) => item.resolveInput)
-    .filter((value): value is NonNullable<TopicRelatedRefCandidate['resolveInput']> => Boolean(value));
-  const results = await resolveAssetIdentityBatch(env, resolveInputs);
-  let resolvedIndex = 0;
-
-  return dedupedCandidates.map((candidate) => {
-    const resolved = candidate.resolveInput ? results[resolvedIndex++] ?? null : null;
-    return {
-      ...candidate.ref,
-      asset_id: resolved && resolved.ok ? resolved.result.asset_id : candidate.ref.asset_id ?? null,
-      instrument_id: resolved && resolved.ok ? resolved.result.instrument_id : candidate.ref.instrument_id ?? null,
-    };
-  });
+  return [...new Map(candidates.map((item) => [item.key, item.ref])).values()].slice(0, 8);
 }
 
 function normalizeAssetSymbols(assets: string[] | null | undefined, fallbackAssets: string[]): string[] {

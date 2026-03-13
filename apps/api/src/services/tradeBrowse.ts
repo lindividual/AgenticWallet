@@ -1,7 +1,6 @@
 import type { Bindings } from '../types';
 import { fetchBitgetTopMarketAssets, type MarketTopAsset } from './bitgetWallet';
 import { fetchCoinGeckoTopMarketAssets } from './coingecko';
-import { fetchBinanceStockTokens, fetchBinanceStockDetail, fetchBinanceStockKlines } from './binance';
 import { getSupportedMarketChains } from '../config/appConfig';
 import { normalizeMarketChain } from './assetIdentity';
 import { loadTokenIconLookup, resolveTokenIconFromLookup } from './marketTopAssets';
@@ -62,7 +61,7 @@ export type TradeBrowsePredictionOutcomeRow = {
   noProbability: number | null;
 };
 
-export type TradeMarketDetailType = 'stock' | 'perp' | 'prediction';
+export type TradeMarketDetailType = 'perp' | 'prediction';
 
 export type PredictionEventOutcome = {
   id: string;
@@ -114,7 +113,6 @@ export type TradeBrowseResponse = {
   generatedAt: string;
   topMovers: TradeBrowseMarketItem[];
   trendings: TradeBrowseMarketItem[];
-  stocks: TradeBrowseMarketItem[];
   perps: TradeBrowseMarketItem[];
   predictions: TradeBrowsePredictionItem[];
 };
@@ -124,7 +122,6 @@ type TradeBrowseShelfKey = keyof Omit<TradeBrowseResponse, 'generatedAt'>;
 type TradeBrowseShelfValueByKey = {
   topMovers: TradeBrowseMarketItem[];
   trendings: TradeBrowseMarketItem[];
-  stocks: TradeBrowseMarketItem[];
   perps: TradeBrowseMarketItem[];
   predictions: TradeBrowsePredictionItem[];
 };
@@ -143,7 +140,6 @@ const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
 const POLYMARKET_EVENTS_BASE_URL = 'https://gamma-api.polymarket.com/events';
 const POLYMARKET_PRICES_HISTORY_URL = 'https://clob.polymarket.com/prices-history';
 const POLYMARKET_PUBLIC_SEARCH_URL = 'https://gamma-api.polymarket.com/public-search';
-const TOKENIZED_STOCK_ICON_CATEGORIES = ['tokenized-stock', 'tokenized-stocks'];
 const STABLECOIN_SYMBOLS = new Set([
   'USDT',
   'USDC',
@@ -374,7 +370,7 @@ async function getCachedTradeBrowseShelf<K extends TradeBrowseShelfKey>(
 
 export function normalizeTradeMarketDetailType(value: unknown): TradeMarketDetailType | null {
   const normalized = normalizeText(value)?.toLowerCase();
-  if (normalized === 'stock' || normalized === 'perp' || normalized === 'prediction') {
+  if (normalized === 'perp' || normalized === 'prediction') {
     return normalized;
   }
   return null;
@@ -731,51 +727,6 @@ async function fetchTrendings(env: Bindings): Promise<TradeBrowseMarketItem[]> {
     .slice(0, 16)
     .map((asset) => mapTopAssetToBrowseItem(asset, 'coingecko'));
   return applyCanonicalCryptoItemLogos(env, items);
-}
-
-async function fetchStocks(env: Bindings): Promise<TradeBrowseMarketItem[]> {
-  try {
-    const items = (await fetchBinanceStockTokens(15)).slice(0, 10);
-    const stockIconLookup = await loadTokenIconLookup(env, {
-      source: 'auto',
-      name: 'marketCap',
-      limit: 200,
-      chains: getSupportedMarketChains(),
-      categories: TOKENIZED_STOCK_ICON_CATEGORIES,
-    });
-
-    return items.map((item) => {
-      const normalizedChain = normalizeMarketChain(item.chain);
-      const normalizedContract = normalizeText(item.contract);
-      const mappedImage = resolveTokenIconFromLookup(
-        stockIconLookup,
-        {
-          symbol: item.stockTicker,
-          name: item.name,
-          chain: normalizedChain,
-          contract: normalizedContract,
-        },
-      );
-
-      return {
-        id: item.id,
-        symbol: item.stockTicker,
-        name: item.name,
-        image: mappedImage ?? item.image,
-        chain: normalizedChain || null,
-        contract: normalizedContract ?? null,
-        currentPrice: item.currentPrice,
-        change24h: item.change24h,
-        volume24h: item.volume24h,
-        source: 'binance' as const,
-        metaLabel: item.marketCap ? 'MCap' : null,
-        metaValue: item.marketCap,
-        externalUrl: `https://www.binance.com/en/alpha/${item.alphaId}`,
-      };
-    });
-  } catch {
-    return [];
-  }
 }
 
 async function fetchPerps(env: Bindings): Promise<TradeBrowseMarketItem[]> {
@@ -1352,51 +1303,6 @@ export async function fetchTradeMarketDetail(
   const id = normalizeText(options.id);
   if (!id) return null;
 
-  if (options.type === 'stock') {
-    const alphaIdRaw = id.startsWith('binance-stock:') ? id.slice('binance-stock:'.length) : null;
-    if (alphaIdRaw) {
-      try {
-        const detail = await fetchBinanceStockDetail(alphaIdRaw);
-        if (detail) {
-          const chain = normalizeMarketChain(detail.chain);
-          const contract = normalizeContractAddress(detail.contract);
-          const stockIconLookup = await loadTokenIconLookup(env, {
-            source: 'auto',
-            name: 'marketCap',
-            limit: 200,
-            chains: getSupportedMarketChains(),
-            categories: TOKENIZED_STOCK_ICON_CATEGORIES,
-          });
-          return {
-            id: detail.id,
-            symbol: detail.stockTicker,
-            name: detail.name,
-            image: resolveTokenIconFromLookup(
-              stockIconLookup,
-              {
-                symbol: detail.stockTicker,
-                name: detail.name,
-                chain,
-                contract,
-              },
-            ) ?? detail.image,
-            chain: chain || null,
-            contract: contract ?? null,
-            currentPrice: detail.currentPrice,
-            change24h: detail.change24h,
-            volume24h: detail.volume24h,
-            source: 'binance' as const,
-            metaLabel: detail.marketCap ? 'MCap' : null,
-            metaValue: detail.marketCap,
-            externalUrl: `https://www.binance.com/en/alpha/${detail.alphaId}`,
-          };
-        }
-      } catch { /* fall through to browse list */ }
-    }
-    const stocks = await fetchStocks(env);
-    return stocks.find((item) => item.id === id) ?? null;
-  }
-
   if (options.type === 'perp') {
     const perps = await fetchPerps(env);
     return perps.find((item) => item.id === id) ?? null;
@@ -1943,20 +1849,6 @@ export async function fetchTradeMarketKline(
   const period = normalizeTradeKlinePeriod(options.period);
   const size = sanitizeKlineSize(options.size);
 
-  if (options.type === 'stock') {
-    const alphaId = options.id.startsWith('binance-stock:')
-      ? options.id.slice('binance-stock:'.length)
-      : null;
-    if (alphaId) {
-      try {
-        return await fetchBinanceStockKlines(alphaId, period, size);
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  }
-
   if (options.type === 'perp') {
     const symbol = parsePerpSymbolFromId(options.id);
     if (!symbol) return [];
@@ -1998,10 +1890,9 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseResponse> {
-  const [topMovers, trendings, stocks, perps, predictions] = await Promise.all([
+  const [topMovers, trendings, perps, predictions] = await Promise.all([
     getCachedTradeBrowseShelf(env, 'topMovers', () => safeFetch(() => fetchTopMovers(env), [])),
     getCachedTradeBrowseShelf(env, 'trendings', () => safeFetch(() => fetchTrendings(env), [])),
-    getCachedTradeBrowseShelf(env, 'stocks', () => safeFetch(() => fetchStocks(env).then((items) => items.slice(0, 5)), [])),
     getCachedTradeBrowseShelf(env, 'perps', () => safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 5)), [])),
     getCachedTradeBrowseShelf(env, 'predictions', () => safeFetch(() => fetchPredictions(5), [])),
   ]);
@@ -2009,7 +1900,6 @@ export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseRespon
   const generatedTimes = [
     topMovers.generatedAt,
     trendings.generatedAt,
-    stocks.generatedAt,
     perps.generatedAt,
     predictions.generatedAt,
   ]
@@ -2020,7 +1910,6 @@ export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseRespon
     generatedAt: generatedTimes.length ? new Date(Math.min(...generatedTimes)).toISOString() : new Date().toISOString(),
     topMovers: topMovers.value,
     trendings: trendings.value,
-    stocks: stocks.value,
     perps: perps.value,
     predictions: predictions.value,
   };
