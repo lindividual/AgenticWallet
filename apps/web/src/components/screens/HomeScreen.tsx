@@ -58,7 +58,9 @@ function isOpenableCryptoWatch(asset: WatchlistAsset): boolean {
   if (!asset.chain || asset.contract == null) return false;
   const contract = normalizeContractForChain(asset.chain, asset.contract);
   if (!contract || contract === 'native') return true;
-  return asset.chain.trim().toLowerCase() === 'sol' ? contract !== 'native' : /^0x[a-f0-9]{40}$/.test(contract);
+  const normalizedChain = asset.chain.trim().toLowerCase();
+  if (normalizedChain === 'sol' || normalizedChain === 'tron') return contract !== 'native';
+  return /^0x[a-f0-9]{40}$/.test(contract);
 }
 
 function normalizeLookupChain(raw: string | null | undefined): string | null {
@@ -77,6 +79,7 @@ function pickPreferredSymbolDetail(
     ['eth', 0],
     ['base', 1],
     ['bnb', 2],
+    ['tron', 3],
   ]);
   const sorted = [...assets].sort((a, b) => {
     const aRank = chainPriority.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
@@ -243,7 +246,7 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
       .map((asset) => {
         const rawSymbol = (asset.symbol ?? '').trim().toUpperCase();
         const chain = normalizeLookupChain(asset.chain);
-        const contract = (asset.contract ?? '').trim().toLowerCase();
+        const contract = chain ? normalizeContractForChain(chain, asset.contract) : '';
         const exactKey = chain ? buildChainAssetId(chain, contract) : '';
         const matched =
           (exactKey ? byChainAssetId.get(exactKey) : undefined)

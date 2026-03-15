@@ -66,6 +66,7 @@
     "receiveAddressTypeEthereum": "Ethereum",
     "receiveAddressTypeSolana": "Solana",
     "receiveAddressTypeEvm": "EVM",
+    "receiveAddressTypeTron": "Tron",
     "receiveAddressTypeBitcoin": "Bitcoin",
     "receiveAddressNetworkFallback": "{{network}} network",
     "receiveAddressTypeHelp": "Choose the address that matches the network you're sending from.",
@@ -249,7 +250,14 @@
     "chatSend": "Send",
     "chatThinking": "Thinking...",
     "chatClose": "Close chat",
-    "chatError": "Failed to get a response. Please try again."
+    "chatError": "Failed to get a response. Please try again.",
+    "chatTransferPreviewTitle": "Transfer Preview",
+    "chatTransferPreparing": "Preparing a transfer preview...",
+    "chatTransferConfirmHint": "Reply yes or tap Send to confirm this transfer.",
+    "chatTransferSubmitted": "Transfer submitted.",
+    "chatTransferPreviewFailed": "Could not prepare the transfer preview yet.",
+    "chatTransferFrom": "From",
+    "chatTransferTokenNotFound": "I couldn't resolve that token on the selected network."
   },
   "trade": {
     "title": "Trade",

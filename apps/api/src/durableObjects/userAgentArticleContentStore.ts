@@ -7,8 +7,12 @@ export async function putArticleMarkdownContent(
   r2Key: string,
   markdown: string,
 ): Promise<void> {
+  const normalizedKey = normalizeR2Key(r2Key);
+  if (!normalizedKey) {
+    throw new Error('invalid_r2_key');
+  }
   try {
-    await env.AGENT_ARTICLES.put(r2Key, markdown, {
+    await env.AGENT_ARTICLES.put(normalizedKey, new TextEncoder().encode(markdown), {
       httpMetadata: {
         contentType: 'text/markdown; charset=utf-8',
       },
@@ -24,6 +28,15 @@ export async function putArticleMarkdownContent(
     });
     throw error;
   }
+}
+
+export async function deleteArticleMarkdownContent(
+  env: Bindings,
+  r2Key: string,
+): Promise<void> {
+  const normalizedKey = normalizeR2Key(r2Key);
+  if (!normalizedKey) return;
+  await env.AGENT_ARTICLES.delete(normalizedKey);
 }
 
 export async function getArticleMarkdownContent(

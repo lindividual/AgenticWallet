@@ -134,7 +134,7 @@ function getOwnedAddresses(wallet: WalletSummary | null | undefined): Set<string
   const primary = normalizeAddress(wallet?.address);
   if (primary) owned.add(primary);
   for (const account of wallet?.chainAccounts ?? []) {
-    const address = account.protocol === 'svm'
+    const address = account.protocol === 'svm' || account.protocol === 'tvm'
       ? normalizeText(account.address)
       : normalizeAddress(account.address);
     if (address) owned.add(address);

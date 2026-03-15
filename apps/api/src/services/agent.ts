@@ -1,6 +1,7 @@
 import type { AgentEventRecord } from '../agent/events';
 import type { ArticleRelatedAssetRef } from './articleRelatedAssets';
 import type { Bindings } from '../types';
+import type { EventRow, PortfolioSnapshotPoint } from '../durableObjects/userAgentTypes';
 
 type AgentEventIngestResult = {
   ok: true;
@@ -109,6 +110,82 @@ export type AgentWatchlistAsset = {
   updated_at: string;
 };
 
+export type AgentOpsJob = {
+  id: string;
+  job_type: AgentJobType;
+  run_at: string;
+  status: string;
+  payload_json: string;
+  retry_count: number;
+  job_key: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentOpsOverview = {
+  generated_at: string;
+  locale: {
+    preferred: string | null;
+    request: string | null;
+    effective: string | null;
+  };
+  activity: {
+    is_active: boolean;
+    active_until: string | null;
+    event_count: number;
+    recent_events: EventRow[];
+  };
+  daily: {
+    date: string;
+    status: AgentTodayDailyResponse['status'];
+    article: AgentArticle | null;
+    last_ready_article: AgentArticle | null;
+  };
+  jobs: {
+    counts: {
+      queued: number;
+      running: number;
+      succeeded: number;
+      failed: number;
+    };
+    next_queued_run_at: string | null;
+    recent: AgentOpsJob[];
+  };
+  recommendations: {
+    dirty: boolean;
+    last_refreshed_at: string | null;
+    count: number;
+    items: AgentRecommendation[];
+  };
+  articles: {
+    items: AgentArticle[];
+  };
+  portfolio: {
+    latest_hourly_snapshot: {
+      bucket_hour_utc: string;
+      total_usd: number;
+      holdings_count: number;
+      as_of: string;
+      created_at: string;
+    } | null;
+    latest_daily_snapshot: {
+      bucket_date_utc: string;
+      total_usd: number;
+      as_of: string;
+      created_at: string;
+    } | null;
+    points_24h: PortfolioSnapshotPoint[];
+  };
+  watchlist: {
+    count: number;
+    items: AgentWatchlistAsset[];
+  };
+  transfers: {
+    count: number;
+    items: AgentTransfer[];
+  };
+};
+
 export type AgentChatRequest = {
   sessionId: string;
   page: string;
@@ -116,9 +193,22 @@ export type AgentChatRequest = {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
 };
 
+export type AgentChatTransferAction = {
+  type: 'transfer_preview';
+  networkKey: string;
+  toAddress: string;
+  amount: string;
+  tokenSymbol?: string | null;
+  tokenAddress?: string | null;
+  tokenDecimals?: number | null;
+};
+
+export type AgentChatAction = AgentChatTransferAction;
+
 export type AgentChatResponse = {
   reply: string;
   sessionId: string;
+  actions?: AgentChatAction[];
 };
 
 type UserAgentRpcStub = DurableObjectStub & {
@@ -227,6 +317,17 @@ type UserAgentRpcStub = DurableObjectStub & {
       contract?: string | null;
     },
   ): Promise<{ removed: boolean }>;
+  getOpsDashboardRpc(
+    userId: string,
+    options?: {
+      recentJobLimit?: number;
+      recentEventLimit?: number;
+      recommendationLimit?: number;
+      articleLimit?: number;
+      watchlistLimit?: number;
+      transferLimit?: number;
+    },
+  ): Promise<AgentOpsOverview>;
   chatRpc(
     userId: string,
     request: AgentChatRequest,
@@ -358,6 +459,15 @@ export async function regenerateUserTodayDaily(
 ): Promise<AgentRegenerateTodayDailyResponse> {
   const stub = getUserAgentStub(env, userId);
   return stub.regenerateTodayDailyRpc(userId);
+}
+
+export async function getUserAgentOpsOverview(
+  env: Bindings,
+  userId: string,
+  options?: Parameters<UserAgentRpcStub['getOpsDashboardRpc']>[1],
+): Promise<AgentOpsOverview> {
+  const stub = getUserAgentStub(env, userId);
+  return stub.getOpsDashboardRpc(userId, options);
 }
 
 export async function saveUserPortfolioSnapshot(

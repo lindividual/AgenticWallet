@@ -66,6 +66,7 @@
     "receiveAddressTypeEthereum": "Ethereum",
     "receiveAddressTypeSolana": "Solana",
     "receiveAddressTypeEvm": "EVM",
+    "receiveAddressTypeTron": "Tron",
     "receiveAddressTypeBitcoin": "Bitcoin",
     "receiveAddressNetworkFallback": "شبكة {{network}}",
     "receiveAddressTypeHelp": "اختر العنوان الذي يطابق الشبكة التي سترسل منها الأصل.",
@@ -249,7 +250,14 @@
     "chatSend": "إرسال",
     "chatThinking": "جارٍ التفكير...",
     "chatClose": "إغلاق المحادثة",
-    "chatError": "فشل في الحصول على رد. يرجى المحاولة مرة أخرى."
+    "chatError": "فشل في الحصول على رد. يرجى المحاولة مرة أخرى.",
+    "chatTransferPreviewTitle": "معاينة التحويل",
+    "chatTransferPreparing": "جارٍ تجهيز معاينة التحويل...",
+    "chatTransferConfirmHint": "أرسل نعم أو اضغط إرسال لتأكيد هذا التحويل.",
+    "chatTransferSubmitted": "تم إرسال التحويل.",
+    "chatTransferPreviewFailed": "تعذر تجهيز معاينة التحويل حالياً.",
+    "chatTransferFrom": "من",
+    "chatTransferTokenNotFound": "تعذر عليّ تحديد هذا الرمز على الشبكة المحددة."
   },
   "trade": {
     "title": "تداول",

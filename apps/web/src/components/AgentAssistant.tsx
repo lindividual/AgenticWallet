@@ -1,8 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Bot, ChevronDown, Send } from 'lucide-react';
-import { agentChat, getCoinDetail, getMarketWatchlist, type AgentChatMessage, type TopMarketAsset } from '../api';
+import { Bot, CheckCircle2, ChevronDown, LoaderCircle, Send } from 'lucide-react';
+import {
+  agentChat,
+  getAppConfig,
+  getCoinDetail,
+  getMarketWatchlist,
+  quoteTransfer,
+  searchMarketTokens,
+  submitTransfer,
+  type AgentChatMessage,
+  type AgentChatResponse,
+  type AgentChatTransferAction,
+  type TopMarketAsset,
+  type TransferQuoteResponse,
+  type TransferRecord,
+} from '../api';
 import type { AgentNudge, PageContext } from '../agent/types';
 import { normalizeContractForChain } from '../utils/chainIdentity';
 
@@ -13,7 +27,25 @@ type AgentAssistantProps = {
   openRequestKey?: number;
 };
 
-type ChatMessage = AgentChatMessage & { id: string };
+type TransferPreviewActionState = 'quoting' | 'ready' | 'quoteError' | 'submitting' | 'submitError' | 'submitted';
+
+type TransferPreviewActionCard = {
+  kind: 'transfer_preview';
+  id: string;
+  request: AgentChatTransferAction;
+  state: TransferPreviewActionState;
+  quote: TransferQuoteResponse | null;
+  transfer: TransferRecord | null;
+  resolvedSymbol: string | null;
+  errorMessage: string | null;
+};
+
+type ChatActionCard = TransferPreviewActionCard;
+
+type ChatMessage = AgentChatMessage & {
+  id: string;
+  actions?: ChatActionCard[];
+};
 
 const HELP_PROMPT_KEYS: Record<string, string> = {
   home: 'agent.helpPromptHome',
@@ -26,6 +58,10 @@ const HELP_PROMPT_KEYS: Record<string, string> = {
 
 function generateSessionId(): string {
   return `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function generateChatActionId(): string {
+  return `action_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function formatTokenContextNumber(value: number | null | undefined, digits = 4): string | null {
@@ -79,6 +115,32 @@ function buildTokenAnalysisPrompt(locale: string | null): string {
   return 'Please analyze this token directly using the current page context, including trend, main risks, and the most useful next step.';
 }
 
+function truncateAddress(value: string): string {
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function formatFeeAmount(rawAmount: string | null, decimals: number | null | undefined): string | null {
+  if (!rawAmount) return null;
+  const normalizedDecimals = Number.isFinite(Number(decimals)) ? Number(decimals) : 18;
+  if (normalizedDecimals < 0 || normalizedDecimals > 36) return null;
+  try {
+    const raw = BigInt(rawAmount);
+    const divisor = 10n ** BigInt(normalizedDecimals);
+    const whole = raw / divisor;
+    const fraction = raw % divisor;
+    if (fraction === 0n) return whole.toString();
+    const fractionText = fraction.toString().padStart(normalizedDecimals, '0').replace(/0+$/, '').slice(0, 6);
+    return `${whole.toString()}.${fractionText}`;
+  } catch {
+    return null;
+  }
+}
+
+function isTransferActionCard(action: ChatActionCard): action is TransferPreviewActionCard {
+  return action.kind === 'transfer_preview';
+}
+
 export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRequestKey = 0 }: AgentAssistantProps) {
   const { i18n, t } = useTranslation();
   const queryClient = useQueryClient();
@@ -116,6 +178,16 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     enabled: currentPageKey === 'token' && Boolean(normalizedTokenChain && normalizedTokenContract),
     staleTime: 15_000,
   });
+  const { data: appConfig } = useQuery({
+    queryKey: ['app-config'],
+    queryFn: getAppConfig,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const transferSupportedChains = useMemo(
+    () => (appConfig?.supportedChains ?? []).filter((chain) => chain.protocol === 'evm' || chain.protocol === 'svm' || chain.protocol === 'tvm' || chain.protocol === 'btc'),
+    [appConfig?.supportedChains],
+  );
 
   const panelSupportText = useCallback(
     (nudge: AgentNudge): string => {
@@ -219,17 +291,290 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     watchlistData?.assets,
   ]);
 
+  const getSupportedChain = useCallback(
+    (networkKey: string) => transferSupportedChains.find((chain) => chain.networkKey === networkKey) ?? null,
+    [transferSupportedChains],
+  );
+
+  const getTransferFeeText = useCallback(
+    (quote: TransferQuoteResponse) => {
+      const symbol = quote.tokenSymbol ?? '';
+      if (quote.estimatedFeeTokenAmount) {
+        return `${quote.estimatedFeeTokenAmount} ${symbol}`.trim();
+      }
+      const normalized = formatFeeAmount(quote.estimatedFeeTokenWei, quote.tokenDecimals);
+      if (normalized) return `${normalized} ${symbol}`.trim();
+      return quote.estimatedFeeWei ?? t('wallet.transferQuoteUnavailable');
+    },
+    [t],
+  );
+
+  const getTransferActionErrorMessage = useCallback(
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : 'unknown_error';
+      if (message === 'transfer_chain_not_supported' || message === 'invalid_network_key') {
+        return t('wallet.transferChainNotSupported');
+      }
+      if (message === 'agent_transfer_token_not_found') {
+        return t('agent.chatTransferTokenNotFound');
+      }
+      if (message === 'insufficient_fee_token_balance') {
+        return t('wallet.transferInsufficientFeeTokenBalance');
+      }
+      if (message === 'unsupported_fee_token') {
+        return t('wallet.transferUnsupportedFeeToken');
+      }
+      return `${t('wallet.transferFailed')}: ${message}`;
+    },
+    [t],
+  );
+
+  const resolveTransferQuoteRequest = useCallback(
+    async (request: AgentChatTransferAction) => {
+      const chain = getSupportedChain(request.networkKey);
+      if (!chain) {
+        throw new Error('transfer_chain_not_supported');
+      }
+
+      let tokenSymbol = request.tokenSymbol?.trim().toUpperCase() || undefined;
+      let tokenAddress = request.tokenAddress?.trim() || undefined;
+      const tokenDecimals = Number.isFinite(Number(request.tokenDecimals)) ? Number(request.tokenDecimals) : undefined;
+      const isNativeAsset = tokenSymbol ? tokenSymbol === chain.symbol.trim().toUpperCase() : !tokenAddress;
+
+      if (!tokenAddress && tokenSymbol && !isNativeAsset) {
+        const results = await searchMarketTokens(tokenSymbol, 12);
+        const matched = results.find((item) => (
+          item.marketType === 'spot'
+          && item.symbol.trim().toUpperCase() === tokenSymbol
+          && (item.chain ?? '').trim().toLowerCase() === chain.marketChain
+          && Boolean(item.contract)
+        ));
+        if (!matched?.contract) {
+          throw new Error('agent_transfer_token_not_found');
+        }
+        tokenAddress = matched.contract;
+        tokenSymbol = matched.symbol.trim().toUpperCase();
+      }
+
+      return {
+        networkKey: chain.networkKey,
+        toAddress: request.toAddress.trim(),
+        amount: request.amount.trim(),
+        tokenAddress: isNativeAsset ? undefined : tokenAddress,
+        tokenSymbol,
+        tokenDecimals,
+      };
+    },
+    [getSupportedChain],
+  );
+
+  const buildTransferActionCard = useCallback(
+    async (request: AgentChatTransferAction): Promise<TransferPreviewActionCard> => {
+      const chain = getSupportedChain(request.networkKey);
+      const fallbackSymbol = request.tokenSymbol?.trim().toUpperCase() || chain?.symbol || null;
+      try {
+        const quoteRequest = await resolveTransferQuoteRequest(request);
+        const quote = await quoteTransfer(quoteRequest);
+        if (quote.insufficientFeeTokenBalance) {
+          return {
+            kind: 'transfer_preview',
+            id: generateChatActionId(),
+            request,
+            state: 'quoteError',
+            quote,
+            transfer: null,
+            resolvedSymbol: quote.tokenSymbol ?? fallbackSymbol,
+            errorMessage: t('wallet.transferInsufficientFeeTokenBalanceWithFee', { fee: getTransferFeeText(quote) }),
+          };
+        }
+        return {
+          kind: 'transfer_preview',
+          id: generateChatActionId(),
+          request,
+          state: 'ready',
+          quote,
+          transfer: null,
+          resolvedSymbol: quote.tokenSymbol ?? fallbackSymbol,
+          errorMessage: null,
+        };
+      } catch (error) {
+        return {
+          kind: 'transfer_preview',
+          id: generateChatActionId(),
+          request,
+          state: 'quoteError',
+          quote: null,
+          transfer: null,
+          resolvedSymbol: fallbackSymbol,
+          errorMessage: getTransferActionErrorMessage(error),
+        };
+      }
+    },
+    [getSupportedChain, getTransferActionErrorMessage, getTransferFeeText, resolveTransferQuoteRequest, t],
+  );
+
+  const buildAssistantMessage = useCallback(
+    async (result: AgentChatResponse): Promise<ChatMessage> => {
+      const actions = await Promise.all(
+        (result.actions ?? []).map(async (action) => {
+          if (action.type === 'transfer_preview') {
+            return buildTransferActionCard(action);
+          }
+          return null;
+        }),
+      );
+      return {
+        id: `assistant_${Date.now()}`,
+        role: 'assistant',
+        content: result.reply,
+        actions: actions.filter((action): action is ChatActionCard => Boolean(action)),
+      };
+    },
+    [buildTransferActionCard],
+  );
+
+  const updateTransferActionCard = useCallback(
+    (
+      actionId: string,
+      updater: (action: TransferPreviewActionCard) => TransferPreviewActionCard,
+    ) => {
+      setMessages((prev) => prev.map((message) => {
+        if (!message.actions?.length) return message;
+        let changed = false;
+        const nextActions = message.actions.map((action) => {
+          if (!isTransferActionCard(action) || action.id !== actionId) return action;
+          changed = true;
+          return updater(action);
+        });
+        return changed ? { ...message, actions: nextActions } : message;
+      }));
+    },
+    [],
+  );
+
+  const retryTransferPreview = useCallback(
+    async (actionId: string, request: AgentChatTransferAction) => {
+      updateTransferActionCard(actionId, (action) => ({
+        ...action,
+        state: 'quoting',
+        errorMessage: null,
+      }));
+
+      try {
+        const quoteRequest = await resolveTransferQuoteRequest(request);
+        const quote = await quoteTransfer(quoteRequest);
+        if (quote.insufficientFeeTokenBalance) {
+          updateTransferActionCard(actionId, (action) => ({
+            ...action,
+            state: 'quoteError',
+            quote,
+            resolvedSymbol: quote.tokenSymbol ?? action.resolvedSymbol,
+            errorMessage: t('wallet.transferInsufficientFeeTokenBalanceWithFee', { fee: getTransferFeeText(quote) }),
+          }));
+          return;
+        }
+        updateTransferActionCard(actionId, (action) => ({
+          ...action,
+          state: 'ready',
+          quote,
+          resolvedSymbol: quote.tokenSymbol ?? action.resolvedSymbol,
+          errorMessage: null,
+        }));
+      } catch (error) {
+        updateTransferActionCard(actionId, (action) => ({
+          ...action,
+          state: 'quoteError',
+          errorMessage: getTransferActionErrorMessage(error),
+        }));
+      }
+    },
+    [getTransferActionErrorMessage, getTransferFeeText, resolveTransferQuoteRequest, t, updateTransferActionCard],
+  );
+
+  const findLatestConfirmableTransfer = useCallback((): TransferPreviewActionCard | null => {
+    for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+      const action = [...(messages[messageIndex]?.actions ?? [])]
+        .reverse()
+        .find((candidate) => (
+          isTransferActionCard(candidate)
+          && (candidate.state === 'ready' || candidate.state === 'submitError')
+          && !candidate.transfer
+        ));
+      if (action && isTransferActionCard(action)) {
+        return action;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  const findTransferActionById = useCallback(
+    (actionId: string): TransferPreviewActionCard | null => {
+      for (const message of messages) {
+        for (const action of message.actions ?? []) {
+          if (isTransferActionCard(action) && action.id === actionId) {
+            return action;
+          }
+        }
+      }
+      return null;
+    },
+    [messages],
+  );
+
   const requestReply = useCallback(
     async (apiMessages: AgentChatMessage[]) => {
-      const result = await agentChat({
+      return agentChat({
         sessionId,
         page: currentPageKey,
         pageContext: buildPageContextPayload(),
         messages: apiMessages,
       });
-      return result.reply;
     },
     [buildPageContextPayload, currentPageKey, sessionId],
+  );
+
+  const confirmTransferAction = useCallback(
+    async (actionId: string) => {
+      const activeAction = findTransferActionById(actionId);
+      if (!activeAction || (activeAction.state !== 'ready' && activeAction.state !== 'submitError')) return;
+
+      const quote = activeAction.quote;
+      if (!quote) {
+        await retryTransferPreview(actionId, activeAction.request);
+        return;
+      }
+
+      updateTransferActionCard(actionId, (action) => ({
+        ...action,
+        state: 'submitting',
+        errorMessage: null,
+      }));
+
+      try {
+        const result = await submitTransfer({
+          networkKey: quote.networkKey,
+          toAddress: quote.toAddress,
+          amount: quote.amountInput,
+          tokenAddress: quote.tokenAddress ?? undefined,
+          tokenSymbol: quote.tokenSymbol ?? undefined,
+          tokenDecimals: quote.tokenDecimals,
+          idempotencyKey: `agent-chat:${sessionId}:${actionId}`,
+        });
+        updateTransferActionCard(actionId, (action) => ({
+          ...action,
+          state: 'submitted',
+          transfer: result.transfer,
+          errorMessage: null,
+        }));
+      } catch (error) {
+        updateTransferActionCard(actionId, (action) => ({
+          ...action,
+          state: 'submitError',
+          errorMessage: getTransferActionErrorMessage(error),
+        }));
+      }
+    },
+    [findTransferActionById, getTransferActionErrorMessage, retryTransferPreview, sessionId, updateTransferActionCard],
   );
 
   const openTaskChat = useCallback(
@@ -254,20 +599,14 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
       setLoading(true);
 
       try {
-        const reply = await requestReply(
+        const result = await requestReply(
           seededMessages.map((message) => ({
             role: message.role,
             content: message.content,
           })),
         );
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `assistant_${Date.now()}`,
-            role: 'assistant',
-            content: reply,
-          },
-        ]);
+        const assistantMessage = await buildAssistantMessage(result);
+        setMessages((prev) => [...prev, assistantMessage]);
       } catch {
         setMessages((prev) => [
           ...prev,
@@ -281,7 +620,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
         setLoading(false);
       }
     },
-    [loading, requestReply, t],
+    [buildAssistantMessage, loading, requestReply, t],
   );
 
   useEffect(() => {
@@ -319,6 +658,9 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
       && messages.length === 1
       && messages[0]?.role === 'assistant'
       && isShortAffirmation(text);
+    const pendingTransferAction = !shouldExpandTokenAnalysis && isShortAffirmation(text)
+      ? findLatestConfirmableTransfer()
+      : null;
     const normalizedUserMsg = shouldExpandTokenAnalysis
       ? {
           ...userMsg,
@@ -328,6 +670,12 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     const updatedMessages = [...messages, normalizedUserMsg];
     setMessages(updatedMessages);
     setInput('');
+
+    if (pendingTransferAction) {
+      await confirmTransferAction(pendingTransferAction.id);
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -335,16 +683,9 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
         role: m.role,
         content: m.content,
       }));
-      const reply = await requestReply(apiMessages);
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `assistant_${Date.now()}`,
-          role: 'assistant',
-          content: reply,
-        },
-      ]);
+      const result = await requestReply(apiMessages);
+      const assistantMessage = await buildAssistantMessage(result);
+      setMessages((prev) => [...prev, assistantMessage]);
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -357,7 +698,107 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, requestReply, t]);
+  }, [
+    buildAssistantMessage,
+    confirmTransferAction,
+    findLatestConfirmableTransfer,
+    i18n.language,
+    i18n.resolvedLanguage,
+    input,
+    loading,
+    messages,
+    requestReply,
+    t,
+    currentPageKey,
+  ]);
+
+  const renderTransferActionCard = useCallback(
+    (action: TransferPreviewActionCard) => {
+      const chain = getSupportedChain(action.request.networkKey);
+      const networkLabel = chain?.name ?? action.request.networkKey;
+      const assetSymbol = action.quote?.tokenSymbol ?? action.resolvedSymbol ?? chain?.symbol ?? t('trade.nativeToken');
+      const feeText = action.quote ? getTransferFeeText(action.quote) : t('wallet.transferQuoteUnavailable');
+      const statusText = (() => {
+        if (action.state === 'quoting') return t('agent.chatTransferPreparing');
+        if (action.state === 'ready') return t('agent.chatTransferConfirmHint');
+        if (action.state === 'submitting') return t('wallet.transferSubmitting');
+        if (action.state === 'submitted') return action.transfer?.txHash
+          ? `${t('agent.chatTransferSubmitted')} ${truncateAddress(action.transfer.txHash)}`
+          : t('agent.chatTransferSubmitted');
+        return action.errorMessage ?? t('agent.chatTransferPreviewFailed');
+      })();
+
+      return (
+        <div key={action.id} className="rounded-[1.5rem] border border-primary/15 bg-gradient-to-br from-base-100 via-base-100 to-base-200/70 p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.24em] text-primary/70">
+                {t('agent.chatTransferPreviewTitle')}
+              </p>
+              <p className="m-0 mt-1 text-lg font-semibold text-base-content">
+                {action.request.amount} {assetSymbol}
+              </p>
+            </div>
+            {action.state === 'submitting' || action.state === 'quoting' ? (
+              <LoaderCircle size={18} className="mt-1 animate-spin text-primary" />
+            ) : action.state === 'submitted' ? (
+              <CheckCircle2 size={18} className="mt-1 text-success" />
+            ) : (
+              <Send size={17} className="mt-1 text-primary" />
+            )}
+          </div>
+
+          <div className="mt-4 grid gap-2 rounded-2xl bg-base-200/60 p-3 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-base-content/60">{t('wallet.transferChain')}</span>
+              <span className="font-medium text-base-content">{networkLabel}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-base-content/60">{t('agent.chatTransferFrom')}</span>
+              <span className="font-medium text-base-content">{truncateAddress(action.quote?.fromAddress ?? '--')}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-base-content/60">{t('wallet.transferToAddress')}</span>
+              <span className="font-medium text-base-content">{truncateAddress(action.request.toAddress)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-base-content/60">{t('wallet.transferQuoteFee')}</span>
+              <span className="font-medium text-base-content">{feeText}</span>
+            </div>
+          </div>
+
+          <p className={`m-0 mt-3 text-xs leading-relaxed ${
+            action.state === 'quoteError' || action.state === 'submitError' ? 'text-error' : 'text-base-content/65'
+          }`}>
+            {statusText}
+          </p>
+
+          <div className="mt-3 flex gap-2">
+            {(action.state === 'quoteError' || action.state === 'quoting') && (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm flex-1 rounded-full"
+                onClick={() => void retryTransferPreview(action.id, action.request)}
+                disabled={action.state === 'quoting'}
+              >
+                {t('wallet.transferRetry')}
+              </button>
+            )}
+            {(action.state === 'ready' || action.state === 'submitError') && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm flex-1 rounded-full"
+                onClick={() => void confirmTransferAction(action.id)}
+              >
+                {t('wallet.transferConfirm')}
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    },
+    [confirmTransferAction, getSupportedChain, getTransferFeeText, retryTransferPreview, t],
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -375,7 +816,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     return (
       <div className="fixed inset-0 z-50 flex flex-col agent-chat-enter">
         <div className="flex-1 bg-black/20" onClick={handleCloseChat} />
-        <div className="mx-auto flex w-full max-w-105 flex-col bg-base-100 shadow-2xl" style={{ maxHeight: '70vh' }}>
+        <div className="agent-chat-sheet mx-auto flex w-full max-w-105 flex-col bg-base-100 shadow-2xl">
           <div className="flex items-center justify-between border-b border-base-300 px-4 py-3">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
@@ -393,7 +834,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
             </button>
           </div>
 
-          <div className="flex flex-col gap-4 px-4 py-4">
+          <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
             <div className="rounded-3xl border border-base-300 bg-base-200/70 p-4">
               <p className="m-0 text-lg font-semibold">{activeNudge.title}</p>
               <p className="m-0 mt-2 text-sm leading-relaxed text-base-content/75">{activeNudge.message}</p>
@@ -427,8 +868,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   return (
     <div className="fixed inset-0 z-50 flex flex-col agent-chat-enter">
       <div className="flex-1 bg-black/20" onClick={handleCloseChat} />
-      <div className="mx-auto flex w-full max-w-105 flex-col bg-base-100 shadow-2xl"
-           style={{ maxHeight: '70vh' }}>
+      <div className="agent-chat-sheet mx-auto flex w-full max-w-105 flex-col bg-base-100 shadow-2xl">
         <div className="flex items-center justify-between border-b border-base-300 px-4 py-3">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
@@ -457,14 +897,23 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
                   <Bot size={12} className="text-primary-content" />
                 </div>
               )}
-              <div
-                className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${
-                  msg.role === 'user'
-                    ? 'bg-primary text-primary-content'
-                    : 'bg-base-200 text-base-content'
-                }`}
-              >
-                {msg.content}
+              <div className={`${msg.role === 'user' ? 'max-w-[80%]' : 'max-w-[88%]'}`}>
+                {msg.content ? (
+                  <div
+                    className={`rounded-2xl px-3 py-2 text-sm leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-primary text-primary-content'
+                        : 'bg-base-200 text-base-content'
+                    }`}
+                  >
+                    {msg.content}
+                  </div>
+                ) : null}
+                {msg.role === 'assistant' && msg.actions?.length ? (
+                  <div className={msg.content ? 'mt-3 space-y-3' : 'space-y-3'}>
+                    {msg.actions.map((action) => isTransferActionCard(action) ? renderTransferActionCard(action) : null)}
+                  </div>
+                ) : null}
               </div>
             </div>
           ))}

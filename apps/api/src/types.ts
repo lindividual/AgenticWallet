@@ -12,6 +12,7 @@ export type Bindings = {
   ETHEREUM_RPC_URL?: string;
   BASE_RPC_URL?: string;
   BNB_RPC_URL?: string;
+  TRON_RPC_URL?: string;
   SOLANA_RPC_URL?: string;
   BICONOMY_MEE_VERSION?: string;
   BICONOMY_BUNDLER_API_KEY?: string;
@@ -23,6 +24,10 @@ export type Bindings = {
   LLM_BASE_URL?: string;
   LLM_API_KEY?: string;
   LLM_MODEL?: string;
+  LLM_FALLBACK_PROVIDER?: string;
+  LLM_FALLBACK_BASE_URL?: string;
+  LLM_FALLBACK_API_KEY?: string;
+  LLM_FALLBACK_MODEL?: string;
   CF_AI_GATEWAY_ACCOUNT_ID?: string;
   CF_AI_GATEWAY_GATEWAY_ID?: string;
   CF_AI_GATEWAY_TOKEN?: string;
@@ -35,6 +40,8 @@ export type Bindings = {
   COINGECKO_API_KEY?: string;
   COINGECKO_API_BASE_URL?: string;
   COINGECKO_USER_AGENT?: string;
+  TRON_PRO_API_KEY?: string;
+  TRONSCAN_API_KEY?: string;
   OPENNEWS_TOKEN?: string;
   TWITTER_TOKEN?: string;
   TOPIC_SPECIAL_ADMIN_TOKEN?: string;
@@ -46,7 +53,7 @@ export type Bindings = {
   PREDICTION_SIGNATURE_TYPE?: string;
 };
 
-export type WalletProtocol = 'evm' | 'svm' | 'btc';
+export type WalletProtocol = 'evm' | 'svm' | 'tvm' | 'btc';
 export type WalletNetworkKey = string;
 
 export type Variables = {

@@ -6,6 +6,7 @@ import { AgentAssistant } from './components/AgentAssistant';
 import type { PageContext } from './agent/types';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
+import { AgentOpsScreen } from './components/screens/AgentOpsScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
 import { HomeScreen } from './components/screens/HomeScreen';
 import { MarketDetailScreen } from './components/screens/MarketDetailScreen';
@@ -38,6 +39,7 @@ export function App() {
   const tokenMatch = useMatch({ from: '/token/$chain/$contract', shouldThrow: false });
   const walletAssetMatch = useMatch({ from: '/wallet/asset/$chain/$contract', shouldThrow: false });
   const marketMatch = useMatch({ from: '/market/$marketType/$itemId', shouldThrow: false });
+  const agentOpsMatch = useMatch({ from: '/ops/agent', shouldThrow: false });
   const routeArticleId = articleMatch?.params.articleId ?? null;
   const isArticleRoute = Boolean(routeArticleId);
   const routeToken = tokenMatch?.params
@@ -61,6 +63,7 @@ export function App() {
       }
     : null;
   const isMarketRoute = Boolean(routeMarket?.marketType && routeMarket.itemId);
+  const isAgentOpsRoute = Boolean(agentOpsMatch);
 
   const [activeArticleId, setActiveArticleId] = useState<string | null>(routeArticleId);
   const [isArticleExiting, setIsArticleExiting] = useState(false);
@@ -171,7 +174,7 @@ export function App() {
         : isWalletAssetRoute
           ? { page: 'wallet' }
           : { page: activeTab };
-  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
+  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute && !isAgentOpsRoute;
   const intervention = useAgentIntervention(agentPageContext, i18n.resolvedLanguage ?? i18n.language ?? null);
 
   if (!auth) {
@@ -209,7 +212,11 @@ export function App() {
       clearTimeout(articleExitTimerRef.current);
     }
     articleExitTimerRef.current = setTimeout(() => {
-      void navigate({ to: '/' });
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        void navigate({ to: '/' });
+      }
       setIsArticleExiting(false);
       setActiveArticleId(null);
       articleExitTimerRef.current = null;
@@ -326,6 +333,14 @@ export function App() {
     }, WALLET_ASSET_EXIT_MS);
   }
 
+  function handleCloseAgentOps() {
+    if (canGoBack) {
+      window.history.back();
+      return;
+    }
+    void navigate({ to: '/' });
+  }
+
   function handleTabChange(tab: AppTab) {
     if (tab === 'home') {
       void navigate({ to: '/' });
@@ -404,6 +419,14 @@ export function App() {
               marketType={activeMarketRoute.marketType}
               itemId={activeMarketRoute.itemId}
               onBack={handleCloseMarket}
+            />
+          </div>
+        ) : isAgentOpsRoute ? (
+          <div className="app-page-slide-in">
+            <AgentOpsScreen
+              auth={authenticatedState}
+              onBack={handleCloseAgentOps}
+              onOpenArticle={handleOpenArticle}
             />
           </div>
         ) : (

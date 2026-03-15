@@ -84,6 +84,7 @@ function pickPreferredSymbolDetail(
     ['eth', 0],
     ['base', 1],
     ['bnb', 2],
+    ['tron', 3],
   ]);
   const sorted = [...assets].sort((a, b) => {
     const aRank = chainPriority.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
@@ -101,7 +102,7 @@ function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; con
     if (contract === 'native') {
       return { chain, contract: '' };
     }
-    if (chain === 'sol') {
+    if (chain === 'sol' || chain === 'tron') {
       return { chain, contract };
     }
     if (/^0x[a-f0-9]{40}$/.test(contract)) {
@@ -115,6 +116,7 @@ function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; con
   const name = item.name.trim().toLowerCase();
   if (symbol === 'ETH' || id.includes('ethereum') || name === 'ethereum') return { chain: 'eth', contract: '' };
   if (symbol === 'BNB' || id.includes('binancecoin') || name === 'bnb') return { chain: 'bnb', contract: '' };
+  if (symbol === 'TRX' || id.includes('tron') || name === 'tron') return { chain: 'tron', contract: '' };
   if (symbol === 'SOL' || id.includes('solana') || name === 'solana') return { chain: 'sol', contract: '' };
   return null;
 }

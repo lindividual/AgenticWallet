@@ -435,7 +435,9 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const canTradeToken = Boolean(
     tradeNetworkKey
       && tradeTokenConfig
-      && (tradeMarketChain === 'sol' ? tradeContract && tradeContract !== 'native' : /^0x[a-fA-F0-9]{40}$/.test(tradeContract)),
+      && (tradeMarketChain === 'sol' || tradeMarketChain === 'tron'
+        ? tradeContract && tradeContract !== 'native'
+        : /^0x[a-fA-F0-9]{40}$/.test(tradeContract)),
   );
 
   useEffect(() => {

@@ -188,7 +188,7 @@ function resolvePriceChangeLookupParams(
   const transferAsset = asset.transferAsset as SimEvmBalance & { market_chain?: string; contract_key?: string };
   const chain = (transferAsset.market_chain ?? transferAsset.chain ?? '').trim().toLowerCase();
   const contractCandidate = normalizeContractForChain(chain, transferAsset.contract_key ?? transferAsset.address);
-  const isValidContract = chain === 'sol'
+  const isValidContract = chain === 'sol' || chain === 'tron'
     ? contractCandidate !== 'native'
     : /^0x[a-f0-9]{40}$/.test(contractCandidate);
   if (!chain || !isValidContract) return null;
@@ -296,7 +296,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
   const totalBalance = portfolioData?.totalUsd ?? 0;
   const supportedChains = appConfig?.supportedChains ?? [];
   const transferSupportedChains = useMemo(
-    () => supportedChains.filter((chain) => chain.protocol === 'evm' || chain.protocol === 'svm' || chain.protocol === 'btc'),
+    () => supportedChains.filter((chain) => chain.protocol === 'evm' || chain.protocol === 'svm' || chain.protocol === 'tvm' || chain.protocol === 'btc'),
     [supportedChains],
   );
   const tradeSupportedChains = useMemo(

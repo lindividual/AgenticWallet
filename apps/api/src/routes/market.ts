@@ -85,6 +85,7 @@ const NATIVE_COIN_ASSET_ID_BY_CHAIN: Record<string, string> = {
   eth: 'coingecko:ethereum',
   base: 'coingecko:ethereum',
   bnb: 'coingecko:binancecoin',
+  tron: 'coingecko:tron',
   sol: 'coingecko:solana',
   btc: 'coingecko:bitcoin',
 };
@@ -93,6 +94,7 @@ const NATIVE_MAJOR_SEARCH_ITEMS = [
   { symbol: 'BTC', name: 'Bitcoin', chain: 'btc' },
   { symbol: 'ETH', name: 'Ethereum', chain: 'eth' },
   { symbol: 'BNB', name: 'BNB', chain: 'bnb' },
+  { symbol: 'TRX', name: 'TRON', chain: 'tron' },
   { symbol: 'SOL', name: 'Solana', chain: 'sol' },
 ] as const;
 
@@ -122,6 +124,7 @@ function toValidSize(raw: unknown, fallback: number): number {
 
 function getExpectedNativeSymbol(chain: string): string {
   if (chain === 'bnb') return 'BNB';
+  if (chain === 'tron') return 'TRX';
   if (chain === 'sol') return 'SOL';
   if (chain === 'btc') return 'BTC';
   return 'ETH';

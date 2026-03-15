@@ -1,4 +1,5 @@
 import type { Bindings } from '../types';
+import { deleteArticleMarkdownContent } from '../durableObjects/userAgentArticleContentStore';
 
 const TOPIC_SPECIAL_RETENTION_DAYS = 90;
 const TOPIC_SPECIAL_DELETE_BATCH_SIZE = 100;
@@ -109,7 +110,7 @@ export async function runD1Maintenance(env: Bindings): Promise<void> {
 
   let topicSpecialR2DeleteFailures = 0;
   if (topicSpecialRows.length > 0) {
-    const results = await Promise.allSettled(topicSpecialRows.map((row) => env.AGENT_ARTICLES.delete(row.r2_key)));
+    const results = await Promise.allSettled(topicSpecialRows.map((row) => deleteArticleMarkdownContent(env, row.r2_key)));
     results.forEach((result, index) => {
       if (result.status === 'fulfilled') return;
       topicSpecialR2DeleteFailures += 1;

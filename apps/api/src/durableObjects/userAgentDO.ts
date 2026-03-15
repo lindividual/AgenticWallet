@@ -3,6 +3,7 @@ import { Keypair } from '@solana/web3.js';
 import type { AgentEventRecord } from '../agent/events';
 import {
   buildMissingArticleMarkdownFallback,
+  deleteArticleMarkdownContent,
   generateDailyDigestContent,
   getArticleMarkdownContent,
   refreshRecommendationsContent,
@@ -31,6 +32,7 @@ import { initializeAgentSchema } from './userAgentSchema';
 import type {
   ArticleRow,
   EventRow,
+  JobRow,
   JobType,
   PortfolioSnapshotPoint,
   RecommendationRow,
@@ -43,6 +45,7 @@ import type { ArticleRelatedAssetRef } from '../services/articleRelatedAssets';
 import { encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
 import { fetchWalletPortfolio } from '../services/market';
 import { privateKeyToBitcoinSegwitAddress } from '../utils/bitcoin';
+import { evmAddressToTronAddress } from '../utils/tron';
 import { ensureTopicSpecialSchema } from '../services/topicSpecials';
 import {
   BNB_NETWORK_KEY,
@@ -54,6 +57,8 @@ import {
   EVM_WALLET_PROVIDER,
   SOLANA_NETWORK_KEY,
   SVM_PROTOCOL,
+  TRON_NETWORK_KEY,
+  TVM_PROTOCOL,
   type WalletWithPrivateKey,
 } from '../services/wallet';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -68,6 +73,33 @@ const HOURLY_SNAPSHOT_RETENTION_HOURS = 72;
 const DAILY_SNAPSHOT_RETENTION_DAYS = 180;
 const TOPIC_SPECIAL_FETCH_MULTIPLIER = 3;
 const TOPIC_SPECIAL_MIN_FETCH = 24;
+
+type AgentChatTransferAction = {
+  type: 'transfer_preview';
+  networkKey: string;
+  toAddress: string;
+  amount: string;
+  tokenSymbol?: string | null;
+  tokenAddress?: string | null;
+  tokenDecimals?: number | null;
+};
+
+type AgentChatAction = AgentChatTransferAction;
+
+function stripJsonFences(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  return (fenced?.[1] ?? trimmed).trim();
+}
+
+function extractJsonObject(text: string): string | null {
+  const candidate = stripJsonFences(text);
+  if (candidate.startsWith('{') && candidate.endsWith('}')) return candidate;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  return candidate.slice(start, end + 1);
+}
 const MAX_WATCHLIST_SIZE = 500;
 const ACTIVE_USER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const RECOMMENDATION_REFRESH_COOLDOWN_MS = 30 * 60 * 1000;
@@ -107,6 +139,81 @@ type WalletChainAccountRow = {
 type RecommendationState = {
   dirty?: boolean;
   lastRefreshedAt?: string | null;
+};
+
+type JobStatusCounts = {
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+};
+
+type JobHistoryRow = JobRow & {
+  created_at: string;
+  updated_at: string;
+};
+
+type LatestHourlyPortfolioSnapshot = {
+  bucket_hour_utc: string;
+  total_usd: number;
+  holdings_count: number;
+  as_of: string;
+  created_at: string;
+};
+
+type LatestDailyPortfolioSnapshot = {
+  bucket_date_utc: string;
+  total_usd: number;
+  as_of: string;
+  created_at: string;
+};
+
+type AgentOpsDashboardData = {
+  generated_at: string;
+  locale: {
+    preferred: string | null;
+    request: string | null;
+    effective: string | null;
+  };
+  activity: {
+    is_active: boolean;
+    active_until: string | null;
+    event_count: number;
+    recent_events: EventRow[];
+  };
+  daily: {
+    date: string;
+    status: TodayDailyStatus;
+    article: ArticleRow | null;
+    last_ready_article: ArticleRow | null;
+  };
+  jobs: {
+    counts: JobStatusCounts;
+    next_queued_run_at: string | null;
+    recent: JobHistoryRow[];
+  };
+  recommendations: {
+    dirty: boolean;
+    last_refreshed_at: string | null;
+    count: number;
+    items: RecommendationRow[];
+  };
+  articles: {
+    items: ArticleRow[];
+  };
+  portfolio: {
+    latest_hourly_snapshot: LatestHourlyPortfolioSnapshot | null;
+    latest_daily_snapshot: LatestDailyPortfolioSnapshot | null;
+    points_24h: PortfolioSnapshotPoint[];
+  };
+  watchlist: {
+    count: number;
+    items: WatchlistAssetRow[];
+  };
+  transfers: {
+    count: number;
+    items: TransferRow[];
+  };
 };
 
 export class UserAgentDO extends DurableObject<Bindings> {
@@ -309,6 +416,76 @@ export class UserAgentDO extends DurableObject<Bindings> {
       ok: true,
       deletedArticleIds,
       article,
+    };
+  }
+
+  async getOpsDashboardRpc(
+    userId: string,
+    options?: {
+      recentJobLimit?: number;
+      recentEventLimit?: number;
+      recommendationLimit?: number;
+      articleLimit?: number;
+      watchlistLimit?: number;
+      transferLimit?: number;
+    },
+  ): Promise<AgentOpsDashboardData> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    await this.ensureTodayDailyReady();
+
+    const now = new Date();
+    const dateKey = isoDate(now);
+    const recommendationState = this.getRecommendationState();
+    const article = this.getTodayDailyArticle(dateKey);
+    const lastReadyArticle = this.getLatestDailyBefore(dateKey);
+
+    return {
+      generated_at: now.toISOString(),
+      locale: {
+        preferred: this.getLocaleByKey(USER_LOCALE_KEY),
+        request: this.getLocaleByKey(REQUEST_LOCALE_KEY),
+        effective: this.getEffectiveLocale(),
+      },
+      activity: {
+        is_active: this.isUserActive(now.toISOString()),
+        active_until: this.getActiveUntil(),
+        event_count: this.countEvents(),
+        recent_events: this.getLatestEvents(options?.recentEventLimit ?? 12),
+      },
+      daily: {
+        date: dateKey,
+        status: article ? 'ready' : this.getTodayDailyJobStatus(dateKey),
+        article,
+        last_ready_article: lastReadyArticle,
+      },
+      jobs: {
+        counts: this.getJobStatusCounts(),
+        next_queued_run_at: this.getNextQueuedJobRunAt(),
+        recent: this.getRecentJobs(options?.recentJobLimit ?? 12),
+      },
+      recommendations: {
+        dirty: recommendationState.dirty === true,
+        last_refreshed_at: recommendationState.lastRefreshedAt ?? null,
+        count: this.countActiveRecommendations(),
+        items: this.getRecommendations(options?.recommendationLimit ?? 6),
+      },
+      articles: {
+        items: await this.getArticles(options?.articleLimit ?? 6),
+      },
+      portfolio: {
+        latest_hourly_snapshot: this.getLatestHourlyPortfolioSnapshot(),
+        latest_daily_snapshot: this.getLatestDailyPortfolioSnapshot(),
+        points_24h: this.listPortfolioSnapshots('24h'),
+      },
+      watchlist: {
+        count: this.countWatchlistAssets(),
+        items: this.getWatchlistAssets(options?.watchlistLimit ?? 8),
+      },
+      transfers: {
+        count: this.countTransfers(),
+        items: this.listTransfers(options?.transferLimit ?? 8),
+      },
     };
   }
 
@@ -519,7 +696,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       pageContext?: Record<string, string>;
       messages: Array<{ role: 'user' | 'assistant'; content: string }>;
     },
-  ): Promise<{ reply: string; sessionId: string }> {
+  ): Promise<{ reply: string; sessionId: string; actions?: AgentChatAction[] }> {
     this.ensureOwner(userId);
 
     const systemPrompt = this.buildChatSystemPrompt(request.page, request.pageContext ?? {});
@@ -532,6 +709,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     ];
 
     let reply: string;
+    let actions: AgentChatAction[] = [];
     try {
       const result = await generateWithLlm(this.env, {
         messages: llmMessages,
@@ -540,12 +718,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
         retryAttempts: 2,
         maxRetryDelayMs: 5_000,
       });
-      reply = result.text;
+      const parsed = this.parseChatLlmOutput(result.text, request.page);
+      reply = parsed.reply;
+      actions = parsed.actions;
     } catch {
       reply = this.getFallbackChatReply(request.page);
     }
 
-    return { reply, sessionId: request.sessionId };
+    return { reply, sessionId: request.sessionId, actions };
   }
 
   async alarm(): Promise<void> {
@@ -714,7 +894,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private normalizeWalletProtocol(raw: string | null | undefined): WalletProtocol | null {
-    if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
+    if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === TVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
     return null;
   }
 
@@ -877,6 +1057,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const privateKey = generatePrivateKeyHex();
     const evmAccount = privateKeyToAccount(privateKey);
     const bitcoinAddress = privateKeyToBitcoinSegwitAddress(privateKey);
+    const tronAddress = evmAddressToTronAddress(evmAccount.address);
     const solanaKeypair = Keypair.generate();
     const solanaSecretKey = encodeBase64(solanaKeypair.secretKey);
     const encryptedPrivateKey = await encryptString(privateKey, this.env.APP_SECRET);
@@ -886,6 +1067,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       { networkKey: ETHEREUM_NETWORK_KEY, chainId: mainnet.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
       { networkKey: BASE_NETWORK_KEY, chainId: base.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
       { networkKey: BNB_NETWORK_KEY, chainId: bsc.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+      { networkKey: TRON_NETWORK_KEY, chainId: null, protocol: TVM_PROTOCOL, address: tronAddress },
       { networkKey: SOLANA_NETWORK_KEY, chainId: null, protocol: SVM_PROTOCOL, address: solanaKeypair.publicKey.toBase58() },
       { networkKey: BITCOIN_NETWORK_KEY, chainId: null, protocol: BTC_PROTOCOL, address: bitcoinAddress },
     ];
@@ -898,6 +1080,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       encryptedPrivateKey,
       encryptedProtocolKeys: {
         [EVM_PROTOCOL]: encryptedPrivateKey,
+        [TVM_PROTOCOL]: encryptedPrivateKey,
         [BTC_PROTOCOL]: encryptedPrivateKey,
         [SVM_PROTOCOL]: encryptedSolanaKey,
       },
@@ -959,6 +1142,11 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return activeUntilMs > referenceMs;
   }
 
+  private getActiveUntil(): string | null {
+    const state = this.getAgentState<{ activeUntil?: string | null }>(ACTIVE_UNTIL_KEY);
+    return normalizeSqlString(state?.activeUntil);
+  }
+
   private getRecommendationState(): RecommendationState {
     return this.getAgentState<RecommendationState>(RECOMMENDATION_STATE_KEY) ?? { dirty: true, lastRefreshedAt: null };
   }
@@ -1002,6 +1190,19 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const row = this.ctx.storage.sql.exec('SELECT COUNT(*) as count FROM user_events').one() as
       | Record<string, unknown>
       | null;
+    return normalizeSqlNumber(row?.count);
+  }
+
+  private countActiveRecommendations(): number {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT COUNT(*) as count
+         FROM recommendations
+         WHERE valid_until IS NULL
+            OR valid_until > ?`,
+        new Date().toISOString(),
+      )
+      .toArray()[0] as Record<string, unknown> | undefined;
     return normalizeSqlNumber(row?.count);
   }
 
@@ -1052,6 +1253,79 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return rows
       .filter((row) => !this.isLegacySyntheticCryptoMarketWatch(row))
       .slice(0, sanitizedLimit);
+  }
+
+  private countWatchlistAssets(): number {
+    return this.getWatchlistAssets(MAX_WATCHLIST_SIZE).length;
+  }
+
+  private countTransfers(): number {
+    const row = this.ctx.storage.sql
+      .exec('SELECT COUNT(*) as count FROM transfers')
+      .toArray()[0] as Record<string, unknown> | undefined;
+    return normalizeSqlNumber(row?.count);
+  }
+
+  private getRecentJobs(limit = 12): JobHistoryRow[] {
+    return this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          job_type,
+          run_at,
+          status,
+          payload_json,
+          retry_count,
+          job_key,
+          created_at,
+          updated_at
+         FROM jobs
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT ?`,
+        sanitizeLimit(limit, 1, 50),
+      )
+      .toArray() as JobHistoryRow[];
+  }
+
+  private getJobStatusCounts(): JobStatusCounts {
+    const counts: JobStatusCounts = {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+    };
+    const rows = this.ctx.storage.sql
+      .exec(
+        `SELECT status, COUNT(*) as count
+         FROM jobs
+         GROUP BY status`,
+      )
+      .toArray() as Array<{ status?: string | null; count?: number | null }>;
+
+    for (const row of rows) {
+      const status = normalizeSqlString(row.status);
+      if (!status) continue;
+      if (status === JOB_STATUS_QUEUED) counts.queued = normalizeSqlNumber(row.count);
+      if (status === JOB_STATUS_RUNNING) counts.running = normalizeSqlNumber(row.count);
+      if (status === JOB_STATUS_SUCCEEDED) counts.succeeded = normalizeSqlNumber(row.count);
+      if (status === JOB_STATUS_FAILED) counts.failed = normalizeSqlNumber(row.count);
+    }
+
+    return counts;
+  }
+
+  private getNextQueuedJobRunAt(): string | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT run_at
+         FROM jobs
+         WHERE status = ?
+         ORDER BY run_at ASC
+         LIMIT 1`,
+        JOB_STATUS_QUEUED,
+      )
+      .toArray()[0] as Record<string, unknown> | undefined;
+    return normalizeSqlString(row?.run_at);
   }
 
   private getWatchlistSymbols(limit = 12): string[] {
@@ -1741,8 +2015,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
     const relatedAssetRefs = this.parseRelatedAssetRefs(topicRow.related_assets_json);
     const topicArticle = this.toTopicArticleRow(topicRow, relatedAssetRefs.map((item) => item.symbol));
-    const object = await this.env.AGENT_ARTICLES.get(topicRow.r2_key);
-    const markdown = object ? await object.text() : '';
+    const markdown = await getArticleMarkdownContent(this.env, topicArticle.id, topicRow.r2_key);
     return {
       article: topicArticle,
       markdown: markdown || buildMissingArticleMarkdownFallback({
@@ -1935,7 +2208,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const articles = this.getDailyArticlesForDate(dateKey);
     for (const article of articles) {
       try {
-        await this.env.AGENT_ARTICLES.delete(article.r2_key);
+        await deleteArticleMarkdownContent(this.env, article.r2_key);
       } catch (error) {
         console.error('article_markdown_delete_failed', {
           articleId: article.id,
@@ -2144,6 +2417,70 @@ export class UserAgentDO extends DurableObject<Bindings> {
       .filter((row) => Boolean(row.ts));
   }
 
+  private getLatestHourlyPortfolioSnapshot(): LatestHourlyPortfolioSnapshot | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT
+          bucket_hour_utc,
+          total_usd,
+          holdings_json,
+          as_of,
+          created_at
+         FROM portfolio_snapshots_hourly
+         ORDER BY bucket_hour_utc DESC
+         LIMIT 1`,
+      )
+      .toArray()[0] as
+      | {
+          bucket_hour_utc?: string | null;
+          total_usd?: number | null;
+          holdings_json?: string | null;
+          as_of?: string | null;
+          created_at?: string | null;
+        }
+      | undefined;
+
+    if (!row) return null;
+    const holdings = safeJsonParse<unknown[]>(normalizeSqlString(row.holdings_json) ?? '[]') ?? [];
+    return {
+      bucket_hour_utc: normalizeSqlString(row.bucket_hour_utc) ?? '',
+      total_usd: normalizeSqlNumber(row.total_usd),
+      holdings_count: Array.isArray(holdings) ? holdings.length : 0,
+      as_of: normalizeSqlString(row.as_of) ?? '',
+      created_at: normalizeSqlString(row.created_at) ?? '',
+    };
+  }
+
+  private getLatestDailyPortfolioSnapshot(): LatestDailyPortfolioSnapshot | null {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT
+          bucket_date_utc,
+          total_usd,
+          as_of,
+          created_at
+         FROM portfolio_snapshots_daily
+         ORDER BY bucket_date_utc DESC
+         LIMIT 1`,
+      )
+      .toArray()[0] as
+      | {
+          bucket_date_utc?: string | null;
+          total_usd?: number | null;
+          as_of?: string | null;
+          created_at?: string | null;
+        }
+      | undefined;
+
+    if (!row) return null;
+    return {
+      bucket_date_utc: normalizeSqlString(row.bucket_date_utc) ?? '',
+      total_usd: normalizeSqlNumber(row.total_usd),
+      as_of: normalizeSqlString(row.as_of) ?? '',
+      created_at: normalizeSqlString(row.created_at) ?? '',
+    };
+  }
+
   private buildChatSystemPrompt(page: string, pageContext: Record<string, string>): string {
     const pageDescriptions: Record<string, string> = {
       home: 'the home screen showing daily digest, asset recommendations, watchlist, and topic articles',
@@ -2194,10 +2531,77 @@ export class UserAgentDO extends DurableObject<Bindings> {
       '- Offer actionable suggestions related to the current page.',
       '- If asked about specific assets, provide general guidance (not financial advice).',
       '- If the user gives a short affirmative reply after you offered help on the token page, treat it as a request to analyze the current token immediately.',
+      '- Return raw JSON only, with this exact top-level shape: {"reply":"string","actions":[]}. Do not wrap it in markdown fences.',
+      `- Supported transfer network keys: ${ETHEREUM_NETWORK_KEY} (Ethereum), ${BASE_NETWORK_KEY} (Base), ${BNB_NETWORK_KEY} (BNB Chain), ${SOLANA_NETWORK_KEY} (Solana), ${BITCOIN_NETWORK_KEY} (Bitcoin).`,
+      '- When the user clearly wants to transfer funds and provides a supported network, a recipient address, and an amount, include one action like {"type":"transfer_preview","networkKey":"...","toAddress":"...","amount":"...","tokenSymbol":"ETH","tokenAddress":null,"tokenDecimals":null}.',
+      '- Only include a transfer_preview action when the details are explicit or clearly implied by the current page context.',
+      '- If the user refers to the current token on the token page, you may use the current token symbol and contract from context.',
+      '- If the asset is the native asset for that network, set tokenAddress to null.',
+      '- Never invent recipient addresses, contract addresses, token decimals, or amounts. Ask a concise follow-up question when details are missing or ambiguous.',
       `- ${langHint}`,
     ]
       .filter(Boolean)
       .join('\n');
+  }
+
+  private parseChatLlmOutput(text: string, page: string): { reply: string; actions: AgentChatAction[] } {
+    const candidate = extractJsonObject(text);
+    const parsed = safeJsonParse<Record<string, unknown>>(candidate);
+    if (parsed) {
+      const normalized = this.normalizeChatPayload(parsed);
+      if (normalized) return normalized;
+    }
+
+    return {
+      reply: stripJsonFences(text) || this.getFallbackChatReply(page),
+      actions: [],
+    };
+  }
+
+  private normalizeChatPayload(payload: Record<string, unknown>): { reply: string; actions: AgentChatAction[] } | null {
+    const reply = typeof payload.reply === 'string'
+      ? payload.reply.trim()
+      : typeof payload.assistantReply === 'string'
+        ? payload.assistantReply.trim()
+        : '';
+    if (!reply) return null;
+
+    const actions = Array.isArray(payload.actions)
+      ? payload.actions
+        .map((action) => this.normalizeChatAction(action))
+        .filter((action): action is AgentChatAction => Boolean(action))
+      : [];
+
+    return { reply, actions };
+  }
+
+  private normalizeChatAction(input: unknown): AgentChatAction | null {
+    if (!input || typeof input !== 'object') return null;
+    const payload = input as Record<string, unknown>;
+    const type = typeof payload.type === 'string' ? payload.type.trim() : '';
+    if (type !== 'transfer_preview') return null;
+
+    const networkKey = typeof payload.networkKey === 'string' ? payload.networkKey.trim().toLowerCase() : '';
+    const toAddress = typeof payload.toAddress === 'string' ? payload.toAddress.trim() : '';
+    const amount = typeof payload.amount === 'string' ? payload.amount.trim() : '';
+    const tokenSymbol = typeof payload.tokenSymbol === 'string' ? payload.tokenSymbol.trim().slice(0, 32) : null;
+    const tokenAddress = typeof payload.tokenAddress === 'string' ? payload.tokenAddress.trim() : null;
+    const tokenDecimalsValue = typeof payload.tokenDecimals === 'number' ? payload.tokenDecimals : null;
+    const tokenDecimals = Number.isFinite(tokenDecimalsValue) && tokenDecimalsValue != null
+      ? Math.max(0, Math.min(36, Math.trunc(tokenDecimalsValue)))
+      : null;
+
+    if (!networkKey || !toAddress || !amount) return null;
+
+    return {
+      type: 'transfer_preview',
+      networkKey,
+      toAddress,
+      amount,
+      tokenSymbol: tokenSymbol || null,
+      tokenAddress: tokenAddress || null,
+      tokenDecimals,
+    };
   }
 
   private getFallbackChatReply(page: string): string {

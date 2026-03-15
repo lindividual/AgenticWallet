@@ -41,7 +41,7 @@ npm install
 cp apps/api/.dev.vars.example apps/api/.dev.vars
 cp apps/web/.env.example apps/web/.env
 ```
-- Update `apps/api/.dev.vars` RPC values:
+- Update `apps/api/.dev.vars`:
   - `SIM_API_KEY`
   - `BGW_API_KEY` / `BGW_API_SECRET` (optional, defaults to Bitget Wallet public demo credentials)
   - `COINGECKO_API_KEY` (optional, public free tier works without key)
@@ -50,6 +50,22 @@ cp apps/web/.env.example apps/web/.env
   - `ETHEREUM_RPC_URL`
   - `BASE_RPC_URL`
   - `BNB_RPC_URL`
+- Optional LLM settings:
+  - Direct Gemini call on Cloudflare AI Gateway:
+    - `LLM_PROVIDER=gemini`
+    - `LLM_MODEL=gemini-2.5-flash`
+    - `LLM_BASE_URL=https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_ID>/google-ai-studio`
+    - `CF_AIG_TOKEN=<your gateway token>`
+  - OpenAI primary with Gemini fallback on the same Cloudflare AI Gateway:
+    - `LLM_PROVIDER=openai`
+    - `LLM_BASE_URL=https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/<GATEWAY_ID>/openai`
+    - `LLM_MODEL=gpt-4.1-nano`
+    - `LLM_FALLBACK_PROVIDER=gemini`
+    - `LLM_FALLBACK_MODEL=gemini-2.5-flash`
+    - `CF_AI_GATEWAY_ACCOUNT_ID=<ACCOUNT_ID>`
+    - `CF_AI_GATEWAY_GATEWAY_ID=<GATEWAY_ID>`
+    - `CF_AIG_TOKEN=<your gateway token>`
+  - Or keep default OpenAI route by leaving `LLM_PROVIDER=openai` and setting `LLM_API_KEY`.
 - Set secrets:
 ```bash
 cd apps/api

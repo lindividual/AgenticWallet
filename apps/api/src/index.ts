@@ -6,7 +6,7 @@ import { runD1Maintenance } from './services/dbMaintenance';
 import { enqueueTopicSpecialGeneration } from './services/topicSpecialCoordinator';
 import type { AppEnv } from './types';
 export { UserAgentDO } from './durableObjects/userAgentDO';
-export { TopicSpecialDO } from './durableObjects/topicSpecialDO';
+export { TopicSpecialSqliteDO, TopicSpecialDO } from './durableObjects/topicSpecialDO';
 
 const app = new Hono<AppEnv>();
 

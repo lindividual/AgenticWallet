@@ -6,10 +6,10 @@ import { buildAssetId, buildChainAssetId, inferProtocolFromChain, NATIVE_CONTRAC
 import { resolveCoinGeckoAssetIdForContract } from './coingecko';
 import { fetchSolanaPortfolio as fetchSolanaPortfolioViaRpc } from './solana';
 import type { WalletSummary } from '../types';
-import { BITCOIN_NETWORK_KEY, SOLANA_NETWORK_KEY } from './wallet';
+import { BITCOIN_NETWORK_KEY, SOLANA_NETWORK_KEY, TRON_NETWORK_KEY } from './wallet';
 
 type PortfolioBalanceRow = {
-  protocol?: 'evm' | 'svm' | 'btc';
+  protocol?: 'evm' | 'svm' | 'tvm' | 'btc';
   network_key: string;
   chain: string;
   chain_id: number | null;
@@ -85,9 +85,29 @@ type BitcoinAddressResponse = {
   mempool_stats?: BitcoinAddressStats;
 };
 
+type TronScanTokenRow = {
+  amount?: string | number | null;
+  quantity?: string | number | null;
+  tokenId?: string | null;
+  tokenName?: string | null;
+  tokenAbbr?: string | null;
+  tokenLogo?: string | null;
+  tokenPriceInUsd?: string | number | null;
+  amountInUsd?: string | number | null;
+  balance?: string | number | null;
+  tokenDecimal?: string | number | null;
+  tokenType?: string | null;
+};
+
+type TronScanAccountTokensResponse = {
+  total?: string | number | null;
+  data?: TronScanTokenRow[];
+};
+
 const FALLBACK_ASSET_NAME_BY_ID: Record<string, string> = {
   'coingecko:ethereum': 'Ethereum',
   'coingecko:binancecoin': 'BNB',
+  'coingecko:tron': 'TRON',
   'coingecko:bitcoin': 'Bitcoin',
   'coingecko:tether': 'Tether',
   'coingecko:usd-coin': 'USD Coin',
@@ -96,6 +116,7 @@ const FALLBACK_ASSET_NAME_BY_ID: Record<string, string> = {
 const FALLBACK_ASSET_NAME_BY_SYMBOL: Record<string, string> = {
   ETH: 'Ethereum',
   BNB: 'BNB',
+  TRX: 'TRON',
   BTC: 'Bitcoin',
   USDT: 'Tether',
   USDC: 'USD Coin',
@@ -147,6 +168,7 @@ function normalizeMarketChain(raw: string | undefined): string {
   if (!value) return 'unknown';
   if (value === 'ethereum') return 'eth';
   if (value === 'bsc' || value === 'binance-smart-chain') return 'bnb';
+  if (value === 'trx' || value === 'trc20') return 'tron';
   return value;
 }
 
@@ -163,6 +185,11 @@ function resolveHoldingContractKey(row: PortfolioBalanceRow): string {
   const protocol = row.protocol ?? inferProtocolFromChain(marketChain);
   if (protocol === 'svm') {
     const address = normalizeBase58(row.address);
+    if (!address || address === NATIVE_CONTRACT_KEY) return NATIVE_CONTRACT_KEY;
+    return address;
+  }
+  if (protocol === 'tvm') {
+    const address = normalizeText(row.address);
     if (!address || address === NATIVE_CONTRACT_KEY) return NATIVE_CONTRACT_KEY;
     return address;
   }
@@ -325,6 +352,117 @@ async function fetchSolanaPortfolio(
   }
 }
 
+function normalizeTronTokenType(raw: unknown): string | null {
+  const value = normalizeText(raw)?.toLowerCase();
+  return value || null;
+}
+
+function isSupportedTronTokenType(raw: unknown): boolean {
+  const tokenType = normalizeTronTokenType(raw);
+  return tokenType === 'trc10' || tokenType === 'trc20';
+}
+
+function resolveTronContractKey(row: TronScanTokenRow): string {
+  const tokenId = normalizeText(row.tokenId);
+  const symbol = normalizeText(row.tokenAbbr)?.toUpperCase();
+  if (!tokenId || tokenId === '_' || symbol === 'TRX') {
+    return NATIVE_CONTRACT_KEY;
+  }
+  return toContractKey(tokenId, 'tron');
+}
+
+function resolveTronValueUsd(row: TronScanTokenRow): number | null {
+  const direct = normalizeFiniteNumber(row.amountInUsd);
+  if (direct != null) return direct;
+  const quantity = normalizeFiniteNumber(row.quantity ?? row.amount);
+  const price = normalizeFiniteNumber(row.tokenPriceInUsd);
+  if (quantity != null && price != null) {
+    return quantity * price;
+  }
+  return null;
+}
+
+async function fetchTronPortfolio(
+  env: Bindings,
+  walletAddress: string,
+): Promise<PortfolioBalanceRow[]> {
+  const tronScanApiKey = env.TRONSCAN_API_KEY?.trim();
+  if (!tronScanApiKey) {
+    return [];
+  }
+
+  const balances: PortfolioBalanceRow[] = [];
+  let start = 0;
+  let total = Number.POSITIVE_INFINITY;
+  const limit = 200;
+
+  while (start < total) {
+    const url = new URL('https://apilist.tronscanapi.com/api/account/tokens');
+    url.searchParams.set('address', walletAddress);
+    url.searchParams.set('start', String(start));
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('hidden', '0');
+    url.searchParams.set('show', '0');
+    url.searchParams.set('sortType', '0');
+    url.searchParams.set('sortBy', '2');
+    url.searchParams.set('assetType', '1');
+
+    const response = await fetchWithTimeout(
+      url.toString(),
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'TRON-PRO-API-KEY': tronScanApiKey,
+        },
+      },
+      PORTFOLIO_FETCH_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      throw new Error(`failed_to_fetch_tron_portfolio:${response.status}`);
+    }
+
+    const payload = (await response.json()) as TronScanAccountTokensResponse;
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    total = Math.max(normalizeFiniteNumber(payload.total) ?? rows.length, rows.length);
+
+    balances.push(
+      ...rows
+        .filter((row) => isSupportedTronTokenType(row.tokenType))
+        .map((row) => {
+          const contractKey = resolveTronContractKey(row);
+          const priceUsd = normalizeFiniteNumber(row.tokenPriceInUsd);
+          const valueUsd = resolveTronValueUsd(row);
+          return {
+            protocol: 'tvm' as const,
+            network_key: TRON_NETWORK_KEY,
+            chain: 'tron',
+            chain_id: null,
+            address: contractKey,
+            asset_id: buildAssetId('tron', contractKey),
+            chain_asset_id: buildChainAssetId('tron', contractKey),
+            amount: normalizeText(row.balance) ?? '0',
+            symbol: normalizeText(row.tokenAbbr)?.toUpperCase() ?? undefined,
+            name: normalizeText(row.tokenName) ?? undefined,
+            decimals: normalizeFiniteNumber(row.tokenDecimal) ?? undefined,
+            price_usd: priceUsd,
+            value_usd: valueUsd,
+            logo: normalizeText(row.tokenLogo),
+            logo_uri: null,
+            url: null,
+          } satisfies PortfolioBalanceRow;
+        })
+        .filter((row) => Number(row.value_usd ?? 0) > 0 || hasPositiveAmount(row.amount)),
+    );
+
+    if (rows.length < limit) break;
+    start += rows.length;
+  }
+
+  return balances.sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+}
+
 function getBitcoinBalanceSats(response: BitcoinAddressResponse): bigint {
   const chainFunded = BigInt(response.chain_stats?.funded_txo_sum ?? 0);
   const chainSpent = BigInt(response.chain_stats?.spent_txo_sum ?? 0);
@@ -402,15 +540,17 @@ export async function fetchWalletPortfolio(
   wallet: WalletSummary,
 ): Promise<{ totalUsd: number; holdings: PortfolioBalanceRow[]; asOf: string }> {
   const evmAccounts = wallet.chainAccounts.filter((row) => row.protocol === 'evm');
+  const tronAccount = wallet.chainAccounts.find((row) => row.networkKey === TRON_NETWORK_KEY);
   const solanaAccount = wallet.chainAccounts.find((row) => row.networkKey === SOLANA_NETWORK_KEY);
   const bitcoinAccount = wallet.chainAccounts.find((row) => row.networkKey === BITCOIN_NETWORK_KEY);
   const evmPrimary = evmAccounts[0]?.address ?? wallet.address;
-  const [evmHoldings, solanaHoldings, bitcoinHoldings] = await Promise.all([
+  const [evmHoldings, tronHoldings, solanaHoldings, bitcoinHoldings] = await Promise.all([
     evmPrimary ? fetchEvmPortfolio(env, evmPrimary).catch(() => []) : Promise.resolve([]),
+    tronAccount ? fetchTronPortfolio(env, tronAccount.address).catch(() => []) : Promise.resolve([]),
     solanaAccount ? fetchSolanaPortfolio(env, solanaAccount.address).catch(() => []) : Promise.resolve([]),
     bitcoinAccount ? fetchBitcoinPortfolio(env, bitcoinAccount.address).catch(() => []) : Promise.resolve([]),
   ]);
-  const holdings = [...evmHoldings, ...solanaHoldings, ...bitcoinHoldings]
+  const holdings = [...evmHoldings, ...tronHoldings, ...solanaHoldings, ...bitcoinHoldings]
     .sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
   const totalUsd = holdings.reduce((acc, row) => acc + Number(row.value_usd ?? 0), 0);
   return {

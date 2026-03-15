@@ -26,6 +26,7 @@ import {
   BNB_NETWORK_KEY,
   ETHEREUM_NETWORK_KEY,
   SOLANA_NETWORK_KEY,
+  TRON_NETWORK_KEY,
   buildEvmWalletExecutionContext,
   getWalletChainAddress,
 } from './wallet';
@@ -36,6 +37,13 @@ import {
   waitForPreparedSolanaTransfer,
   type PreparedSolanaTransfer,
 } from './solanaTransfer';
+import {
+  prepareTronTransfer,
+  refreshTronTransferStatusByHash,
+  sendPreparedTronTransfer,
+  waitForPreparedTronTransfer,
+  type PreparedTronTransfer,
+} from './tronTransfer';
 
 const ERC20_ABI = [
   {
@@ -98,7 +106,12 @@ type EoaPreparedTransfer = {
   };
 };
 
-export type PreparedTransfer = MeePreparedTransfer | EoaPreparedTransfer | PreparedSolanaTransfer | PreparedBitcoinTransfer;
+export type PreparedTransfer =
+  | MeePreparedTransfer
+  | EoaPreparedTransfer
+  | PreparedSolanaTransfer
+  | PreparedBitcoinTransfer
+  | PreparedTronTransfer;
 
 function resolveChainConfig(env: Bindings, networkKey: string): ChainRuntimeConfig {
   if (networkKey === ETHEREUM_NETWORK_KEY) {
@@ -290,6 +303,9 @@ export async function prepareTransfer(
   }
   if (networkKey === BITCOIN_NETWORK_KEY) {
     return prepareBitcoinTransfer(env, userId, input);
+  }
+  if (networkKey === TRON_NETWORK_KEY) {
+    return prepareTronTransfer(env, userId, input);
   }
 
   const { chain } = resolveChainConfig(env, networkKey);
@@ -575,6 +591,9 @@ export async function sendPreparedTransfer(prepared: PreparedTransfer): Promise<
   if (prepared.mode === 'btc') {
     return sendPreparedBitcoinTransfer(prepared);
   }
+  if (prepared.mode === 'tron') {
+    return sendPreparedTronTransfer(prepared);
+  }
 
   if (prepared.mode === 'mee') {
     const payload = await prepared.meeClient.executeQuote({ quote: prepared.meeQuote });
@@ -593,6 +612,9 @@ export async function waitForTransferReceipt(
   }
   if (prepared.mode === 'btc') {
     return waitForPreparedBitcoinTransfer(txHash);
+  }
+  if (prepared.mode === 'tron') {
+    return waitForPreparedTronTransfer(prepared, txHash);
   }
   if (prepared.mode === 'mee') {
     try {
@@ -633,6 +655,9 @@ export async function refreshTransferStatusByHash(
   }
   if (networkKey === BITCOIN_NETWORK_KEY) {
     return refreshBitcoinTransferStatusByHash(txHash);
+  }
+  if (networkKey === TRON_NETWORK_KEY) {
+    return refreshTronTransferStatusByHash(env, txHash);
   }
   try {
     const { meeClient } = await buildTransferContext(env, userId, networkKey);

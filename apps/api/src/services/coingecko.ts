@@ -1,11 +1,12 @@
 import type { Bindings } from '../types';
 import type { MarketTopAsset, TopAssetListName } from './bitgetWallet';
 import { buildAssetId, buildChainAssetId, toContractKey } from './assetIdentity';
+import { normalizeTronAddress } from '../utils/tron';
 
 const DEFAULT_COINGECKO_BASE_URL = 'https://api.coingecko.com/api/v3';
 const DEFAULT_COINGECKO_USER_AGENT = 'AgenticWallet-MVP/0.1 (market-shelves; +https://agentic-wallet.local)';
 const MAX_MARKETS_PAGE_SIZE = 250;
-const DEFAULT_SUPPORTED_CHAINS: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'> = ['eth', 'base', 'bnb', 'sol', 'btc'];
+const DEFAULT_SUPPORTED_CHAINS: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'> = ['eth', 'base', 'bnb', 'tron', 'sol', 'btc'];
 const PLATFORM_CACHE_TTL_MS = 10 * 60 * 1000;
 const COIN_LIST_CACHE_TTL_MS = 60 * 60 * 1000;
 const COIN_LIST_SYNC_MIN_INTERVAL_MS = 10 * 60 * 1000;
@@ -47,7 +48,7 @@ type CoinGeckoCoinListItem = {
 };
 
 type ChainMatch = {
-  chain: 'eth' | 'base' | 'bnb' | 'sol' | 'btc';
+  chain: 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc';
   contract: string;
 };
 
@@ -134,7 +135,13 @@ function parsePlatformsJson(raw: string | null | undefined): Record<string, stri
   }
 }
 
-function normalizeContractAddress(raw: unknown): string | null {
+function normalizeContractAddress(
+  raw: unknown,
+  chain?: 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' | null,
+): string | null {
+  if (chain === 'tron') {
+    return normalizeTronAddress(raw);
+  }
   const value = normalizeText(raw)?.toLowerCase();
   if (!value) return null;
   if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
@@ -157,34 +164,35 @@ function resolveCoinGeckoUserAgent(raw: string | undefined): string {
   return value || DEFAULT_COINGECKO_USER_AGENT;
 }
 
-function normalizeChains(chains?: string[]): Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'> {
+function normalizeChains(chains?: string[]): Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'> {
   const normalized = new Set(
     (chains ?? [])
       .map((item) => item.trim().toLowerCase())
       .filter(
-        (item): item is 'eth' | 'base' | 'bnb' | 'sol' | 'btc' =>
-          item === 'eth' || item === 'base' || item === 'bnb' || item === 'sol' || item === 'btc',
+        (item): item is 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' =>
+          item === 'eth' || item === 'base' || item === 'bnb' || item === 'tron' || item === 'sol' || item === 'btc',
       ),
   );
   if (normalized.size === 0) return [...DEFAULT_SUPPORTED_CHAINS];
   return [...normalized];
 }
 
-function normalizeSingleChain(raw: unknown): 'eth' | 'base' | 'bnb' | 'sol' | 'btc' | null {
+function normalizeSingleChain(raw: unknown): 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' | null {
   const value = normalizeText(raw)?.toLowerCase();
-  if (value === 'eth' || value === 'base' || value === 'bnb' || value === 'sol' || value === 'btc') return value;
+  if (value === 'eth' || value === 'base' || value === 'bnb' || value === 'tron' || value === 'sol' || value === 'btc') return value;
   return null;
 }
 
-function mapPlatformToChain(platform: string): 'eth' | 'base' | 'bnb' | 'sol' | 'btc' | null {
+function mapPlatformToChain(platform: string): 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' | null {
   if (platform === 'ethereum') return 'eth';
   if (platform === 'base') return 'base';
   if (platform === 'binance-smart-chain' || platform === 'bnb-smart-chain') return 'bnb';
+  if (platform === 'tron') return 'tron';
   if (platform === 'solana') return 'sol';
   return null;
 }
 
-function buildContractLookupKey(chain: 'eth' | 'base' | 'bnb' | 'sol' | 'btc', contract: string): string {
+function buildContractLookupKey(chain: 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc', contract: string): string {
   return `${chain}:${contract}`;
 }
 
@@ -196,7 +204,7 @@ function getOrderByListName(name: TopAssetListName): string {
 
 function pickChainFromPlatforms(
   platforms: Record<string, string | null | undefined> | undefined,
-  preferredChains: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'>,
+  preferredChains: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'>,
 ): ChainMatch | null {
   if (!platforms) return null;
   const normalizedPlatforms = Object.fromEntries(
@@ -218,6 +226,10 @@ function pickChainFromPlatforms(
       );
       if (contract) return { chain, contract };
     }
+    if (chain === 'tron') {
+      const contract = normalizeContractAddress(normalizedPlatforms.tron, 'tron');
+      if (contract) return { chain, contract };
+    }
     if (chain === 'sol') {
       const contract = normalizeText(normalizedPlatforms.solana);
       if (contract) return { chain, contract };
@@ -230,7 +242,7 @@ function pickChainFromPlatforms(
 function pickNativeChainFallback(
   coinId: string | null,
   symbol: string | null,
-  preferredChains: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'>,
+  preferredChains: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'>,
 ): ChainMatch | null {
   const id = (coinId ?? '').trim().toLowerCase();
   const sym = (symbol ?? '').trim().toUpperCase();
@@ -242,6 +254,9 @@ function pickNativeChainFallback(
   }
   if ((id === 'binancecoin' || sym === 'BNB') && preferred.has('bnb')) {
     return { chain: 'bnb', contract: '' };
+  }
+  if ((id === 'tron' || sym === 'TRX') && preferred.has('tron')) {
+    return { chain: 'tron', contract: '' };
   }
   if ((id === 'solana' || sym === 'SOL') && preferred.has('sol')) {
     return { chain: 'sol', contract: '' };
@@ -651,7 +666,7 @@ async function loadContractCoinLookupFromDb(db: D1Database): Promise<Map<string,
       const platform = normalizeText(platformRaw)?.toLowerCase() ?? '';
       const chain = mapPlatformToChain(platform);
       if (!chain) continue;
-      const contract = normalizeContractAddress(contractRaw);
+      const contract = normalizeContractAddress(contractRaw, chain);
       if (!contract) continue;
       const key = buildContractLookupKey(chain, contract);
       const existing = lookup.get(key);
@@ -697,7 +712,7 @@ export async function resolveCoinGeckoAssetIdForContract(
 ): Promise<string | null> {
   const normalizedChain = normalizeSingleChain(chain);
   if (!normalizedChain) return null;
-  const normalizedContract = normalizeContractAddress(contract);
+  const normalizedContract = normalizeContractAddress(contract, normalizedChain);
   if (!normalizedContract) return null;
   const lookup = await getContractCoinLookup(env);
   const coinId = normalizeText(lookup.get(buildContractLookupKey(normalizedChain, normalizedContract)));

@@ -5,6 +5,7 @@ WEBAUTHN_REQUIRE_UV=false
 ETHEREUM_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/replace
 BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/replace
 BNB_RPC_URL=https://bnb-mainnet.g.alchemy.com/v2/replace
+TRON_RPC_URL=https://api.trongrid.io
 # Optional, defaults to 2.2.1 for broad chain compatibility
 BICONOMY_MEE_VERSION=2.2.1
 # Optional, used by abstractjs Nexus client (bundler URL can also be provided directly)
@@ -26,17 +27,42 @@ PREDICTION_CLOB_HOST=
 PREDICTION_SIGNATURE_TYPE=proxy
 
 # Optional LLM integration (Phase 1 content/recommendation generation)
+# Default example: OpenAI
 LLM_PROVIDER=openai
-# Direct OpenAI default; if CF_AI_GATEWAY_ACCOUNT_ID and CF_AI_GATEWAY_GATEWAY_ID are set, the API will route through AI Gateway automatically.
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4.1-mini
 LLM_API_KEY=replace-with-llm-api-key
+
+# Gemini via Cloudflare AI Gateway (example)
+# LLM_PROVIDER=gemini
+# LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+# LLM_MODEL=gemini-2.5-flash
+# LLM_API_KEY=replace-with-gemini-api-key
+# 或者走 Cloudflare AI Gateway（推荐）
+# LLM_PROVIDER=gemini
+# LLM_BASE_URL=https://gateway.ai.cloudflare.com/v1/{ACCOUNT_ID}/{GATEWAY_ID}/google-ai-studio
+# LLM_MODEL=gemini-2.5-flash
+# CF_AIG_TOKEN=replace-with-cf-gateway-token
+# Optional fallback provider handoff (for example: openai -> gemini)
+LLM_FALLBACK_PROVIDER=
+LLM_FALLBACK_BASE_URL=
+LLM_FALLBACK_MODEL=
+LLM_FALLBACK_API_KEY=
+# Example: reuse the same Cloudflare AI Gateway token for OpenAI primary + Gemini fallback
+# LLM_PROVIDER=openai
+# LLM_BASE_URL=https://gateway.ai.cloudflare.com/v1/{ACCOUNT_ID}/{GATEWAY_ID}/openai
+# LLM_MODEL=gpt-4.1-nano
+# LLM_FALLBACK_PROVIDER=gemini
+# LLM_FALLBACK_MODEL=gemini-2.5-flash
+# CF_AI_GATEWAY_ACCOUNT_ID={ACCOUNT_ID}
+# CF_AI_GATEWAY_GATEWAY_ID={GATEWAY_ID}
+# CF_AIG_TOKEN=replace-with-cf-gateway-token
 # Optional Cloudflare AI Gateway (when set, defaults to https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openai)
 CF_AI_GATEWAY_ACCOUNT_ID=
 CF_AI_GATEWAY_GATEWAY_ID=
 # Optional for authenticated gateways; omit for unauthenticated gateways
 CF_AI_GATEWAY_TOKEN=
-# Alias for AI Gateway examples where the gateway token is passed directly. For Responses API, prefer the /openai provider path over /compat.
+# Alias for AI Gateway examples where the gateway token is passed directly.
 CF_AIG_TOKEN=
 
 # Optional Bitget Wallet ToB API override (defaults to built-in public demo key/secret)
@@ -49,6 +75,11 @@ COINGECKO_API_KEY=
 COINGECKO_API_BASE_URL=
 # Recommended when CoinGecko requires descriptive client identity
 COINGECKO_USER_AGENT=AgenticWallet-MVP/0.1 (market-shelves; +https://agentic-wallet.local)
+
+# Optional TRON fullnode API key for transfers and contract reads
+TRON_PRO_API_KEY=
+# Optional TRONSCAN API key for Tron portfolio holdings
+TRONSCAN_API_KEY=
 
 # Optional OpenNews / OpenTwitter data sources (from https://6551.io/mcp)
 OPENNEWS_TOKEN=

@@ -66,6 +66,7 @@
     "receiveAddressTypeEthereum": "Ethereum",
     "receiveAddressTypeSolana": "Solana",
     "receiveAddressTypeEvm": "EVM",
+    "receiveAddressTypeTron": "Tron",
     "receiveAddressTypeBitcoin": "Bitcoin",
     "receiveAddressNetworkFallback": "{{network}} 网络",
     "receiveAddressTypeHelp": "请选择与发送资产所在网络对应的收款地址。",
@@ -249,7 +250,14 @@
     "chatSend": "发送",
     "chatThinking": "思考中...",
     "chatClose": "关闭对话",
-    "chatError": "获取回复失败，请重试。"
+    "chatError": "获取回复失败，请重试。",
+    "chatTransferPreviewTitle": "转账预览",
+    "chatTransferPreparing": "正在准备转账预览...",
+    "chatTransferConfirmHint": "回复“好”或点击发送，即可确认这笔转账。",
+    "chatTransferSubmitted": "转账已提交。",
+    "chatTransferPreviewFailed": "暂时还无法生成这笔转账的预览。",
+    "chatTransferFrom": "转出地址",
+    "chatTransferTokenNotFound": "我暂时无法在所选网络上定位这个代币。"
   },
   "trade": {
     "title": "交易",

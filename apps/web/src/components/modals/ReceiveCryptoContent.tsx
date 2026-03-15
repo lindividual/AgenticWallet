@@ -10,7 +10,7 @@ type ReceiveCryptoContentProps = {
   chainAccounts?: Array<{
     networkKey: string;
     chainId: number | null;
-    protocol?: 'evm' | 'svm' | 'btc';
+    protocol?: 'evm' | 'svm' | 'tvm' | 'btc';
     address: string;
   }>;
   supportedChains: Array<{
@@ -19,7 +19,7 @@ type ReceiveCryptoContentProps = {
     name: string;
     symbol: string;
     marketChain?: string;
-    protocol?: 'evm' | 'svm' | 'btc';
+    protocol?: 'evm' | 'svm' | 'tvm' | 'btc';
   }>;
   onBack: () => void;
   onCopyAddress: (address: string) => void;
@@ -28,7 +28,7 @@ type ReceiveCryptoContentProps = {
   stageClassName?: string;
 };
 
-type ReceiveAddressType = 'svm' | 'evm' | 'btc';
+type ReceiveAddressType = 'svm' | 'evm' | 'tvm' | 'btc';
 
 const evmChainIcons = [
   { src: '/eth.svg' },
@@ -39,6 +39,7 @@ const evmChainIcons = [
 
 function getProtocolIconPath(protocol: ReceiveAddressType): string {
   if (protocol === 'svm') return '/sol.svg';
+  if (protocol === 'tvm') return '/trx.svg';
   if (protocol === 'btc') return '/btc.svg';
   return '/eth.svg';
 }
@@ -75,7 +76,11 @@ function ReceiveProtocolIcon({ protocol, alt }: { protocol: ReceiveAddressType; 
       aria-label={alt}
       className={[
         'flex h-11 w-11 items-center justify-center overflow-hidden rounded-lg p-1.5',
-        protocol === 'btc' ? 'border border-[#F7931A] bg-[#F7931A]' : 'border border-base-300 bg-base-200',
+        protocol === 'btc'
+          ? 'border border-[#F7931A] bg-[#F7931A]'
+          : protocol === 'tvm'
+            ? 'border border-[#FF060A] bg-[#FF060A]'
+            : 'border border-base-300 bg-base-200',
       ].join(' ')}
     >
       <img
@@ -111,6 +116,7 @@ export function ReceiveCryptoContent({
 
   const receiveOptions = useMemo(() => {
     const evmChains = supportedChains.filter((chain) => chain.protocol === 'evm');
+    const tronChains = supportedChains.filter((chain) => chain.protocol === 'tvm');
     const solanaChains = supportedChains.filter((chain) => chain.protocol === 'svm');
     const bitcoinChains = supportedChains.filter((chain) => chain.protocol === 'btc');
     const evmNetworkLabel =
@@ -119,6 +125,7 @@ export function ReceiveCryptoContent({
       .map((chain) => chain.name)
       .filter((name) => name.trim() && name.trim().toLowerCase() !== 'ethereum');
     const svmAddress = chainAccounts.find((item) => item.protocol === 'svm')?.address?.trim() || '';
+    const tronAddress = chainAccounts.find((item) => item.protocol === 'tvm')?.address?.trim() || '';
     const evmAddress = chainAccounts.find((item) => (item.protocol ?? 'evm') === 'evm')?.address?.trim() || walletAddress;
     const bitcoinAddress = chainAccounts.find((item) => item.protocol === 'btc')?.address?.trim() || '';
 
@@ -133,6 +140,15 @@ export function ReceiveCryptoContent({
           otherEvmChains.length > 0
             ? t('wallet.receiveAddressSharedEvmNoticeWithNetworks', { networks: otherEvmChains.join(', ') })
             : t('wallet.receiveAddressSharedEvmNotice'),
+      },
+      {
+        id: 'tvm' as const,
+        title: t('wallet.receiveAddressTypeTron'),
+        address: tronAddress,
+        addressLabel: t('wallet.receiveAddressOptionLabel', { chain: t('wallet.receiveAddressTypeTron') }),
+        networkLabel:
+          tronChains.map((chain) => chain.name).join(' / ') ||
+          t('wallet.receiveAddressNetworkFallback', { network: 'Tron' }),
       },
       {
         id: 'svm' as const,

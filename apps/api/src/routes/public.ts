@@ -23,6 +23,7 @@ import { nowIso } from '../utils/time';
 
 const IMAGE_PROXY_CACHE_CONTROL = 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000';
 const BLOCKED_PROXY_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
+const IMAGE_SNIFF_BYTES = 512;
 
 function isUniqueConstraintError(error: unknown, field: string): boolean {
   if (!(error instanceof Error)) return false;
@@ -38,6 +39,63 @@ function normalizeOptionalText(raw: unknown): string | null {
 
 function isSupportedProxyProtocol(protocol: string): boolean {
   return protocol === 'http:' || protocol === 'https:';
+}
+
+function startsWithBytes(bytes: Uint8Array, signature: number[]): boolean {
+  if (bytes.length < signature.length) return false;
+  return signature.every((value, index) => bytes[index] === value);
+}
+
+function sniffImageContentType(bytes: Uint8Array): string | null {
+  if (startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return 'image/png';
+  }
+
+  if (startsWithBytes(bytes, [0xff, 0xd8, 0xff])) {
+    return 'image/jpeg';
+  }
+
+  if (startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) || startsWithBytes(bytes, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])) {
+    return 'image/gif';
+  }
+
+  if (
+    bytes.length >= 12 &&
+    startsWithBytes(bytes, [0x52, 0x49, 0x46, 0x46]) &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+
+  if (startsWithBytes(bytes, [0x42, 0x4d])) {
+    return 'image/bmp';
+  }
+
+  if (startsWithBytes(bytes, [0x00, 0x00, 0x01, 0x00])) {
+    return 'image/x-icon';
+  }
+
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70 &&
+    ((bytes[8] === 0x61 && bytes[9] === 0x76 && bytes[10] === 0x69 && (bytes[11] === 0x66 || bytes[11] === 0x73)) ||
+      (bytes[8] === 0x6d && bytes[9] === 0x69 && bytes[10] === 0x66 && bytes[11] === 0x31))
+  ) {
+    return 'image/avif';
+  }
+
+  const probe = new TextDecoder().decode(bytes.subarray(0, IMAGE_SNIFF_BYTES)).replace(/^\uFEFF/, '').trimStart();
+  if (/^(<\?xml[\s\S]*?\?>\s*)?<svg[\s>]/i.test(probe)) {
+    return 'image/svg+xml';
+  }
+
+  return null;
 }
 
 async function cleanupPartialRegistration(env: AppEnv['Bindings'], userId: string): Promise<void> {
@@ -98,22 +156,36 @@ export function registerPublicRoutes(app: Hono<AppEnv>): void {
       return c.json({ error: 'image_fetch_failed' }, 502);
     }
 
-    const contentType = normalizeOptionalText(upstream.headers.get('content-type'));
-    if (!contentType?.toLowerCase().startsWith('image/')) {
+    const upstreamContentType = normalizeOptionalText(upstream.headers.get('content-type'));
+    let resolvedContentType: string | null = upstreamContentType;
+    let responseBody: BodyInit | null = upstream.body;
+    let responseContentLength = normalizeOptionalText(upstream.headers.get('content-length'));
+
+    if (!upstreamContentType?.toLowerCase().startsWith('image/')) {
+      const buffer = await upstream.arrayBuffer();
+      const sniffedContentType = sniffImageContentType(new Uint8Array(buffer));
+      if (!sniffedContentType) {
+        return c.json({ error: 'invalid_image_content_type' }, 415);
+      }
+      resolvedContentType = sniffedContentType;
+      responseBody = buffer;
+      responseContentLength = String(buffer.byteLength);
+    }
+
+    if (!resolvedContentType) {
       return c.json({ error: 'invalid_image_content_type' }, 415);
     }
 
     const headers = new Headers();
-    headers.set('Content-Type', contentType);
+    headers.set('Content-Type', resolvedContentType);
     headers.set('Cache-Control', IMAGE_PROXY_CACHE_CONTROL);
     const etag = normalizeOptionalText(upstream.headers.get('etag'));
     if (etag) headers.set('ETag', etag);
     const lastModified = normalizeOptionalText(upstream.headers.get('last-modified'));
     if (lastModified) headers.set('Last-Modified', lastModified);
-    const contentLength = normalizeOptionalText(upstream.headers.get('content-length'));
-    if (contentLength) headers.set('Content-Length', contentLength);
+    if (responseContentLength) headers.set('Content-Length', responseContentLength);
 
-    const response = new Response(upstream.body, {
+    const response = new Response(responseBody, {
       status: 200,
       headers,
     });

@@ -101,7 +101,7 @@ function normalizeContract(chain: string | null, raw: unknown): string | null {
   const value = normalizeText(raw);
   if (!value) return null;
   if (value.toLowerCase() === 'native') return 'native';
-  if (chain === 'sol') return value;
+  if (chain === 'sol' || chain === 'tron') return value;
   return value.toLowerCase();
 }
 
@@ -131,6 +131,7 @@ const NATIVE_COIN_ASSET_ID_BY_CHAIN: Record<string, string> = {
   eth: 'coingecko:ethereum',
   base: 'coingecko:ethereum',
   bnb: 'coingecko:binancecoin',
+  tron: 'coingecko:tron',
   sol: 'coingecko:solana',
   btc: 'coingecko:bitcoin',
 };

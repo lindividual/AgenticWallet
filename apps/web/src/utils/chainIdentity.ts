@@ -1,10 +1,13 @@
-export type WalletProtocol = 'evm' | 'svm' | 'btc';
+export type WalletProtocol = 'evm' | 'svm' | 'tvm' | 'btc';
+
+const TRON_ADDRESS_REGEX = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
 
 export function normalizeMarketChain(raw: string | null | undefined): string {
   const value = (raw ?? '').trim().toLowerCase();
   if (!value) return 'unknown';
   if (value === 'ethereum' || value === 'mainnet') return 'eth';
   if (value === 'bsc' || value === 'binance-smart-chain' || value === 'bnb-smart-chain') return 'bnb';
+  if (value === 'trx' || value === 'trc20') return 'tron';
   if (value === 'solana') return 'sol';
   if (value === 'bitcoin' || value === 'btc') return 'btc';
   return value;
@@ -13,6 +16,7 @@ export function normalizeMarketChain(raw: string | null | undefined): string {
 export function inferProtocolFromChain(chain: string | null | undefined): WalletProtocol {
   const normalizedChain = normalizeMarketChain(chain);
   if (normalizedChain === 'sol') return 'svm';
+  if (normalizedChain === 'tron') return 'tvm';
   if (normalizedChain === 'btc') return 'btc';
   return 'evm';
 }
@@ -21,6 +25,7 @@ export function inferWalletProtocolFromAddress(address: string | null | undefine
   const value = (address ?? '').trim();
   if (!value) return null;
   if (value.startsWith('0x')) return 'evm';
+  if (TRON_ADDRESS_REGEX.test(value)) return 'tvm';
   if (value.toLowerCase().startsWith('bc1')) return 'btc';
   return 'svm';
 }

@@ -40,7 +40,8 @@ function pickPreferredMarketAsset(
     ['eth', 0],
     ['base', 1],
     ['bnb', 2],
-    ['sol', 3],
+    ['tron', 3],
+    ['sol', 4],
   ]);
   const sorted = [...assets].sort((a, b) => {
     const aChainRank = chainRank.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
@@ -158,7 +159,7 @@ export function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): 
 
 export function getPortfolioHoldings(
   sql: SqlStorage,
-  supportedChains: Array<'eth' | 'base' | 'bnb' | 'sol' | 'btc'>,
+  supportedChains: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'>,
 ): Array<{ symbol: string; valueUsd: number }> {
   const snapshot = getLatestPortfolioSnapshot(sql);
   if (!snapshot?.holdings_json) return [];
@@ -170,9 +171,11 @@ export function getPortfolioHoldings(
           ? 'base-mainnet'
           : chain === 'bnb'
             ? 'bnb-mainnet'
-            : chain === 'sol'
-              ? 'solana-mainnet'
-              : 'bitcoin-mainnet',
+            : chain === 'tron'
+              ? 'tron-mainnet'
+              : chain === 'sol'
+                ? 'solana-mainnet'
+                : 'bitcoin-mainnet',
     ),
   );
   try {

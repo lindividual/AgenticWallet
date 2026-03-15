@@ -209,6 +209,11 @@
   animation: agent-chat-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+.agent-chat-sheet {
+  height: 80vh;
+  max-height: 80dvh;
+}
+
 @keyframes thinking-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }

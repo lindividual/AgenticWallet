@@ -4,6 +4,7 @@ const NATIVE_ASSET_ID_BY_CHAIN: Record<string, string> = {
   eth: 'coingecko:ethereum',
   base: 'coingecko:ethereum',
   bnb: 'coingecko:binancecoin',
+  tron: 'coingecko:tron',
   sol: 'coingecko:solana',
   btc: 'coingecko:bitcoin',
 };
@@ -18,14 +19,16 @@ export function normalizeMarketChain(raw: unknown): string {
   const value = normalizeText(raw)?.toLowerCase() ?? 'unknown';
   if (value === 'ethereum' || value === 'mainnet') return 'eth';
   if (value === 'bsc' || value === 'binance-smart-chain' || value === 'bnb-smart-chain') return 'bnb';
+  if (value === 'trx' || value === 'trc20') return 'tron';
   if (value === 'solana') return 'sol';
   if (value === 'bitcoin' || value === 'btc') return 'btc';
   return value;
 }
 
-export function inferProtocolFromChain(raw: unknown): 'evm' | 'svm' | 'btc' {
+export function inferProtocolFromChain(raw: unknown): 'evm' | 'svm' | 'tvm' | 'btc' {
   const chain = normalizeMarketChain(raw);
   if (chain === 'sol') return 'svm';
+  if (chain === 'tron') return 'tvm';
   if (chain === 'btc') return 'btc';
   return 'evm';
 }
@@ -34,7 +37,7 @@ export function toContractKey(raw: unknown, chain?: unknown): string {
   const protocol = inferProtocolFromChain(chain);
   const value = normalizeText(raw);
   if (!value || value === NATIVE_CONTRACT_KEY) return NATIVE_CONTRACT_KEY;
-  return protocol === 'svm' ? value : value.toLowerCase();
+  return protocol === 'svm' || protocol === 'tvm' ? value : value.toLowerCase();
 }
 
 export function contractKeyToUpstreamContract(raw: unknown, chain?: unknown): string {

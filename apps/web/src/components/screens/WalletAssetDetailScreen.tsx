@@ -405,7 +405,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
 
   const supportedChains = appConfig?.supportedChains ?? [];
   const transferSupportedChains = useMemo(
-    () => supportedChains.filter((item) => item.protocol === 'evm' || item.protocol === 'svm' || item.protocol === 'btc'),
+    () => supportedChains.filter((item) => item.protocol === 'evm' || item.protocol === 'svm' || item.protocol === 'tvm' || item.protocol === 'btc'),
     [supportedChains],
   );
   const tradeSupportedChains = useMemo(
@@ -651,9 +651,12 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
   }
 
   function openTransferModal(): void {
-    const asset = selectedHolding?.transferAsset;
+    const asset = selectedHolding?.transferAsset as (SimEvmBalance & { market_chain?: string }) | undefined;
     const tokenAddress = normalizeText(asset?.address);
-    const isValidTokenAddress = /^0x[a-fA-F0-9]{40}$/.test(tokenAddress);
+    const normalizedChain = normalizeText(asset?.chain ?? asset?.market_chain);
+    const isValidTokenAddress = normalizedChain === 'tron'
+      ? /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(tokenAddress)
+      : /^0x[a-fA-F0-9]{40}$/.test(tokenAddress);
     const isNative = normalizeContractForMatch(tokenAddress) === 'native';
 
     setPresetTransferAsset(

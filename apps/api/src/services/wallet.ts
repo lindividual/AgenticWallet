@@ -10,10 +10,12 @@ import { resolveMeeVersion } from '../utils/env';
 export const ETHEREUM_NETWORK_KEY: WalletNetworkKey = 'ethereum-mainnet';
 export const BASE_NETWORK_KEY: WalletNetworkKey = 'base-mainnet';
 export const BNB_NETWORK_KEY: WalletNetworkKey = 'bnb-mainnet';
+export const TRON_NETWORK_KEY: WalletNetworkKey = 'tron-mainnet';
 export const SOLANA_NETWORK_KEY: WalletNetworkKey = 'solana-mainnet';
 export const BITCOIN_NETWORK_KEY: WalletNetworkKey = 'bitcoin-mainnet';
 export const EVM_PROTOCOL: WalletProtocol = 'evm';
 export const SVM_PROTOCOL: WalletProtocol = 'svm';
+export const TVM_PROTOCOL: WalletProtocol = 'tvm';
 export const BTC_PROTOCOL: WalletProtocol = 'btc';
 export const EVM_WALLET_PROVIDER = 'eoa-7702';
 
@@ -52,7 +54,7 @@ type WalletRpcStub = DurableObjectStub & {
 };
 
 function normalizeWalletProtocol(raw: string | null | undefined): WalletProtocol | null {
-  if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
+  if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === TVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
   return null;
 }
 

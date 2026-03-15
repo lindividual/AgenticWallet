@@ -1,31 +1,53 @@
 import { DurableObject } from 'cloudflare:workers';
-import { generateTopicSpecialBatch, getTopicSpecialSlotKey, type TopicSpecialGenerationResult } from '../services/topicSpecials';
+import {
+  fetchTopicSpecialSourcePacket,
+  generateTopicSpecialBatchFromSourcePacket,
+  generateTopicSpecialPreviewFromSourcePacket,
+  getTopicSpecialSlotKey,
+  persistTopicSpecialArticle,
+  probeTopicSpecialDraftsFromSourcePacket,
+  type TopicSpecialDebugOptions,
+  type TopicSpecialDraftProbeResult,
+  type TopicSpecialGenerationResult,
+  type TopicSpecialPersistInput,
+  type TopicSpecialPreviewResult,
+  type TopicSpecialSourcePacket,
+} from '../services/topicSpecials';
 import type { Bindings } from '../types';
 
 const JOB_STATUS_QUEUED = 'queued';
+const JOB_STATUS_STAGED = 'staged';
 const JOB_STATUS_RUNNING = 'running';
 const JOB_STATUS_SUCCEEDED = 'succeeded';
 const JOB_STATUS_FAILED = 'failed';
 const MAX_JOB_RETRIES = 3;
+const JOB_STORAGE_PREFIX = 'topic-special-job:';
+const STAGE_STORAGE_PREFIX = 'topic-special-stage:';
 
-type TopicSpecialJobRow = {
+type TopicSpecialJobStatus =
+  | typeof JOB_STATUS_QUEUED
+  | typeof JOB_STATUS_STAGED
+  | typeof JOB_STATUS_RUNNING
+  | typeof JOB_STATUS_SUCCEEDED
+  | typeof JOB_STATUS_FAILED;
+
+type TopicSpecialJobRecord = {
   id: string;
-  slot_key: string;
-  force: number;
+  slotKey: string;
+  force: boolean;
   trigger: string;
-  status: string;
-  retry_count: number;
-  run_at: string;
+  status: TopicSpecialJobStatus;
+  retryCount: number;
+  runAt: string;
+  resultJson: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
 };
 
-export class TopicSpecialDO extends DurableObject<Bindings> {
-  constructor(ctx: DurableObjectState, env: Bindings) {
-    super(ctx, env);
-    this.ctx.blockConcurrencyWhile(async () => {
-      this.initializeSchema();
-    });
-  }
-
+export class TopicSpecialSqliteDO extends DurableObject<Bindings> {
   async enqueueGenerationRpc(input?: {
     force?: boolean;
     slotKey?: string;
@@ -34,26 +56,14 @@ export class TopicSpecialDO extends DurableObject<Bindings> {
     jobId: string;
     deduped: boolean;
     slotKey: string;
-    status: 'queued' | 'running' | 'succeeded' | 'failed';
+    status: 'queued' | 'staged' | 'running' | 'succeeded' | 'failed';
   }> {
     const slotKey = normalizeSlotKey(input?.slotKey) ?? getTopicSpecialSlotKey(new Date());
     const force = input?.force === true;
     const trigger = normalizeTrigger(input?.trigger);
-    const activeJob = this.ctx.storage.sql
-      .exec(
-        `SELECT id, status
-         FROM topic_special_jobs
-         WHERE slot_key = ?
-           AND status IN (?, ?)
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        slotKey,
-        JOB_STATUS_QUEUED,
-        JOB_STATUS_RUNNING,
-      )
-      .toArray()[0] as { id?: string; status?: string } | undefined;
+    const activeJob = await this.findLatestActiveJobForSlot(slotKey);
 
-    if (typeof activeJob?.id === 'string' && isJobStatus(activeJob.status)) {
+    if (activeJob) {
       return {
         jobId: activeJob.id,
         deduped: true,
@@ -62,148 +72,124 @@ export class TopicSpecialDO extends DurableObject<Bindings> {
       };
     }
 
-    const jobId = crypto.randomUUID();
     const nowIso = new Date().toISOString();
-    this.ctx.storage.sql.exec(
-      `INSERT INTO topic_special_jobs (
-        id,
-        slot_key,
-        force,
-        trigger,
-        status,
-        retry_count,
-        run_at,
-        result_json,
-        error_message,
-        created_at,
-        updated_at,
-        started_at,
-        completed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      jobId,
+    const job: TopicSpecialJobRecord = {
+      id: crypto.randomUUID(),
       slotKey,
-      force ? 1 : 0,
+      force,
       trigger,
-      JOB_STATUS_QUEUED,
-      0,
-      nowIso,
-      null,
-      null,
-      nowIso,
-      nowIso,
-      null,
-      null,
-    );
+      status: JOB_STATUS_QUEUED,
+      retryCount: 0,
+      runAt: nowIso,
+      resultJson: null,
+      errorMessage: null,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      startedAt: null,
+      completedAt: null,
+    };
+    await this.putJob(job);
     await this.scheduleNextAlarm();
     return {
-      jobId,
+      jobId: job.id,
       deduped: false,
       slotKey,
-      status: JOB_STATUS_QUEUED,
+      status: job.status,
     };
   }
 
+  async persistTopicSpecialArticleRpc(input: TopicSpecialPersistInput): Promise<void> {
+    await persistTopicSpecialArticle(this.env, input);
+  }
+
+  async generatePreviewRpc(input: {
+    packet: TopicSpecialSourcePacket;
+    options?: { force?: boolean; slotKey?: string } & TopicSpecialDebugOptions;
+  }): Promise<TopicSpecialPreviewResult> {
+    return generateTopicSpecialPreviewFromSourcePacket(this.env, input.packet, input.options);
+  }
+
+  async probeTopicDraftsRpc(input: {
+    packet: TopicSpecialSourcePacket;
+    options?: { slotKey?: string } & TopicSpecialDebugOptions;
+  }): Promise<TopicSpecialDraftProbeResult> {
+    return probeTopicSpecialDraftsFromSourcePacket(this.env, input.packet, input.options);
+  }
+
+  async runBatchFromPacketRpc(input: {
+    packet: TopicSpecialSourcePacket;
+    options?: { force?: boolean };
+  }): Promise<TopicSpecialGenerationResult> {
+    return generateTopicSpecialBatchFromSourcePacket(this.env, input.packet, input.options);
+  }
+
   async alarm(): Promise<void> {
-    const job = this.getNextDueJob();
+    const job = await this.getNextDueJob();
     if (!job) {
       await this.scheduleNextAlarm();
       return;
     }
 
-    const startedAt = new Date().toISOString();
-    this.ctx.storage.sql.exec(
-      `UPDATE topic_special_jobs
-       SET status = ?, updated_at = ?, started_at = ?, error_message = NULL
-       WHERE id = ?`,
-      JOB_STATUS_RUNNING,
-      startedAt,
-      startedAt,
-      job.id,
-    );
-    console.log('topic_special_job_started', {
-      jobId: job.id,
-      slotKey: job.slot_key,
-      force: job.force === 1,
-      trigger: job.trigger,
-      retryCount: job.retry_count,
-    });
-
     try {
-      const result = await generateTopicSpecialBatch(this.env, {
-        force: job.force === 1,
-        slotKey: job.slot_key,
-      });
-      this.completeJob(job.id, result);
+      if (job.status === JOB_STATUS_STAGED) {
+        await this.runStagedJob(job);
+      } else {
+        await this.stageJob(job);
+      }
     } catch (error) {
-      this.failJob(job, error);
+      await this.failJob(job, error, job.status === JOB_STATUS_STAGED ? JOB_STATUS_STAGED : JOB_STATUS_QUEUED);
     }
 
     await this.scheduleNextAlarm();
   }
 
-  private initializeSchema(): void {
-    this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS topic_special_jobs (
-        id TEXT PRIMARY KEY,
-        slot_key TEXT NOT NULL,
-        force INTEGER NOT NULL DEFAULT 0,
-        trigger TEXT NOT NULL,
-        status TEXT NOT NULL,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        run_at TEXT NOT NULL,
-        result_json TEXT,
-        error_message TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        started_at TEXT,
-        completed_at TEXT
-      )`,
-    );
-    this.ctx.storage.sql.exec(
-      'CREATE INDEX IF NOT EXISTS idx_topic_special_jobs_status_run_at ON topic_special_jobs(status, run_at)',
-    );
-    this.ctx.storage.sql.exec(
-      'CREATE INDEX IF NOT EXISTS idx_topic_special_jobs_slot_created_at ON topic_special_jobs(slot_key, created_at DESC)',
-    );
+  private async listJobs(): Promise<TopicSpecialJobRecord[]> {
+    const entries = await this.ctx.storage.list<TopicSpecialJobRecord>({
+      prefix: JOB_STORAGE_PREFIX,
+    });
+    return Array.from(entries.values());
   }
 
-  private getNextDueJob(): TopicSpecialJobRow | null {
-    const row = this.ctx.storage.sql
-      .exec(
-        `SELECT
-           id,
-           slot_key,
-           force,
-           trigger,
-           status,
-           retry_count,
-           run_at
-         FROM topic_special_jobs
-         WHERE status = ?
-           AND run_at <= ?
-         ORDER BY run_at ASC, created_at ASC
-         LIMIT 1`,
-        JOB_STATUS_QUEUED,
-        new Date().toISOString(),
-      )
-      .toArray()[0] as TopicSpecialJobRow | undefined;
-    return row ?? null;
+  private async findLatestActiveJobForSlot(slotKey: string): Promise<TopicSpecialJobRecord | null> {
+    const jobs = await this.listJobs();
+    return jobs
+      .filter((job) =>
+        job.slotKey === slotKey
+        && (job.status === JOB_STATUS_QUEUED || job.status === JOB_STATUS_STAGED || job.status === JOB_STATUS_RUNNING))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
   }
 
-  private completeJob(jobId: string, result: TopicSpecialGenerationResult): void {
+  private async getNextDueJob(): Promise<TopicSpecialJobRecord | null> {
+    const nowIso = new Date().toISOString();
+    const jobs = await this.listJobs();
+    return jobs
+      .filter((job) =>
+        (job.status === JOB_STATUS_QUEUED || job.status === JOB_STATUS_STAGED)
+        && job.runAt <= nowIso)
+      .sort((a, b) => a.runAt.localeCompare(b.runAt) || a.createdAt.localeCompare(b.createdAt))[0] ?? null;
+  }
+
+  private async putJob(job: TopicSpecialJobRecord): Promise<void> {
+    await this.ctx.storage.put(jobStorageKey(job.id), job);
+  }
+
+  private async deleteStage(jobId: string): Promise<void> {
+    await this.ctx.storage.delete(stageStorageKey(jobId));
+  }
+
+  private async completeJob(job: TopicSpecialJobRecord, result: TopicSpecialGenerationResult): Promise<void> {
     const completedAt = new Date().toISOString();
-    this.ctx.storage.sql.exec(
-      `UPDATE topic_special_jobs
-       SET status = ?, result_json = ?, error_message = NULL, updated_at = ?, completed_at = ?
-       WHERE id = ?`,
-      JOB_STATUS_SUCCEEDED,
-      JSON.stringify(result),
+    await this.putJob({
+      ...job,
+      status: JOB_STATUS_SUCCEEDED,
+      resultJson: JSON.stringify(result),
+      errorMessage: null,
+      updatedAt: completedAt,
       completedAt,
-      completedAt,
-      jobId,
-    );
+    });
+    await this.deleteStage(job.id);
     console.log('topic_special_job_succeeded', {
-      jobId,
+      jobId: job.id,
       slotKey: result.slotKey,
       generated: result.generated,
       skipped: result.skipped,
@@ -211,25 +197,28 @@ export class TopicSpecialDO extends DurableObject<Bindings> {
     });
   }
 
-  private failJob(job: TopicSpecialJobRow, error: unknown): void {
-    const retryCount = job.retry_count + 1;
+  private async failJob(
+    job: TopicSpecialJobRecord,
+    error: unknown,
+    retryStatus: typeof JOB_STATUS_QUEUED | typeof JOB_STATUS_STAGED,
+  ): Promise<void> {
+    const retryCount = job.retryCount + 1;
     const message = error instanceof Error ? error.message : String(error);
+
     if (retryCount > MAX_JOB_RETRIES) {
       const failedAt = new Date().toISOString();
-      this.ctx.storage.sql.exec(
-        `UPDATE topic_special_jobs
-         SET status = ?, retry_count = ?, error_message = ?, updated_at = ?, completed_at = ?
-         WHERE id = ?`,
-        JOB_STATUS_FAILED,
+      await this.putJob({
+        ...job,
+        status: JOB_STATUS_FAILED,
         retryCount,
-        message,
-        failedAt,
-        failedAt,
-        job.id,
-      );
+        errorMessage: message,
+        updatedAt: failedAt,
+        completedAt: failedAt,
+      });
+      await this.deleteStage(job.id);
       console.error('topic_special_job_failed', {
         jobId: job.id,
-        slotKey: job.slot_key,
+        slotKey: job.slotKey,
         retryCount,
         finalFailed: true,
         error: message,
@@ -238,20 +227,17 @@ export class TopicSpecialDO extends DurableObject<Bindings> {
     }
 
     const nextRunAt = new Date(Date.now() + retryBackoffMs(retryCount)).toISOString();
-    this.ctx.storage.sql.exec(
-      `UPDATE topic_special_jobs
-       SET status = ?, retry_count = ?, run_at = ?, error_message = ?, updated_at = ?
-       WHERE id = ?`,
-      JOB_STATUS_QUEUED,
+    await this.putJob({
+      ...job,
+      status: retryStatus,
       retryCount,
-      nextRunAt,
-      message,
-      new Date().toISOString(),
-      job.id,
-    );
+      runAt: nextRunAt,
+      errorMessage: message,
+      updatedAt: new Date().toISOString(),
+    });
     console.error('topic_special_job_failed', {
       jobId: job.id,
-      slotKey: job.slot_key,
+      slotKey: job.slotKey,
       retryCount,
       finalFailed: false,
       nextRunAt,
@@ -259,23 +245,100 @@ export class TopicSpecialDO extends DurableObject<Bindings> {
     });
   }
 
+  private async stageJob(job: TopicSpecialJobRecord): Promise<void> {
+    console.log('topic_special_job_stage_started', {
+      jobId: job.id,
+      slotKey: job.slotKey,
+      force: job.force,
+      trigger: job.trigger,
+      retryCount: job.retryCount,
+    });
+
+    const packet = await fetchTopicSpecialSourcePacket(this.env, {
+      slotKey: job.slotKey,
+    });
+    await this.ctx.storage.put(stageStorageKey(job.id), packet);
+
+    const stagedAt = new Date().toISOString();
+    await this.putJob({
+      ...job,
+      status: JOB_STATUS_STAGED,
+      runAt: stagedAt,
+      resultJson: JSON.stringify({
+        stage: 'sources_loaded',
+        sourceRefCount: packet.sourceRefs.length,
+        defaultAssetCount: packet.defaultAssets.length,
+        newsCount: packet.newsItems.length,
+        twitterCount: packet.twitterItems.length,
+        rssHeadlineCount: packet.rssHeadlines.length,
+        marketAssetCount: packet.marketAssets.length,
+        memeHeatCount: packet.memeHeatItems.length,
+        perpCount: packet.perps.length,
+        predictionCount: packet.predictions.length,
+      }),
+      errorMessage: null,
+      updatedAt: stagedAt,
+    });
+
+    console.log('topic_special_job_stage_completed', {
+      jobId: job.id,
+      slotKey: job.slotKey,
+      sourceRefCount: packet.sourceRefs.length,
+      defaultAssetCount: packet.defaultAssets.length,
+      newsCount: packet.newsItems.length,
+      twitterCount: packet.twitterItems.length,
+      rssHeadlineCount: packet.rssHeadlines.length,
+      marketAssetCount: packet.marketAssets.length,
+      memeHeatCount: packet.memeHeatItems.length,
+      perpCount: packet.perps.length,
+      predictionCount: packet.predictions.length,
+    });
+  }
+
+  private async runStagedJob(job: TopicSpecialJobRecord): Promise<void> {
+    const packet = await this.ctx.storage.get<TopicSpecialSourcePacket>(stageStorageKey(job.id));
+    if (!packet) {
+      throw new Error('topic_special_stage_packet_missing');
+    }
+
+    const startedAt = new Date().toISOString();
+    const runningJob: TopicSpecialJobRecord = {
+      ...job,
+      status: JOB_STATUS_RUNNING,
+      updatedAt: startedAt,
+      startedAt,
+      errorMessage: null,
+    };
+    await this.putJob(runningJob);
+
+    console.log('topic_special_job_started', {
+      jobId: job.id,
+      slotKey: job.slotKey,
+      force: job.force,
+      trigger: job.trigger,
+      retryCount: job.retryCount,
+      stagedSourceRefCount: packet.sourceRefs.length,
+      stagedDefaultAssetCount: packet.defaultAssets.length,
+    });
+
+    const result = await generateTopicSpecialBatchFromSourcePacket(this.env, packet, {
+      force: job.force,
+    });
+    await this.completeJob(runningJob, result);
+  }
+
   private async scheduleNextAlarm(): Promise<void> {
-    const nextRow = this.ctx.storage.sql
-      .exec(
-        `SELECT run_at
-         FROM topic_special_jobs
-         WHERE status = ?
-         ORDER BY run_at ASC
-         LIMIT 1`,
-        JOB_STATUS_QUEUED,
-      )
-      .toArray()[0] as { run_at?: string } | undefined;
-    if (!nextRow?.run_at) {
+    const jobs = await this.listJobs();
+    const nextJob = jobs
+      .filter((job) => job.status === JOB_STATUS_QUEUED || job.status === JOB_STATUS_STAGED)
+      .sort((a, b) => a.runAt.localeCompare(b.runAt))[0];
+
+    if (!nextJob) {
       await this.ctx.storage.deleteAlarm();
       return;
     }
 
-    const nextTs = Date.parse(nextRow.run_at);
+    const nextTs = Date.parse(nextJob.runAt);
     if (!Number.isFinite(nextTs)) {
       await this.ctx.storage.deleteAlarm();
       return;
@@ -283,6 +346,16 @@ export class TopicSpecialDO extends DurableObject<Bindings> {
 
     await this.ctx.storage.setAlarm(nextTs);
   }
+}
+
+export { TopicSpecialSqliteDO as TopicSpecialDO };
+
+function jobStorageKey(jobId: string): string {
+  return `${JOB_STORAGE_PREFIX}${jobId}`;
+}
+
+function stageStorageKey(jobId: string): string {
+  return `${STAGE_STORAGE_PREFIX}${jobId}`;
 }
 
 function normalizeSlotKey(raw: string | undefined): string | null {
@@ -298,10 +371,6 @@ function normalizeSlotKey(raw: string | undefined): string | null {
 function normalizeTrigger(raw: string | undefined): string {
   const value = raw?.trim().toLowerCase() ?? '';
   return value || 'unknown';
-}
-
-function isJobStatus(value: unknown): value is 'queued' | 'running' | 'succeeded' | 'failed' {
-  return value === JOB_STATUS_QUEUED || value === JOB_STATUS_RUNNING || value === JOB_STATUS_SUCCEEDED || value === JOB_STATUS_FAILED;
 }
 
 function retryBackoffMs(retryCount: number): number {

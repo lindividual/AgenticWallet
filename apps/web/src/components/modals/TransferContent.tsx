@@ -115,7 +115,7 @@ export function TransferContent({
   }
 
   function getDisplayFeeText(nextQuote: TransferQuoteResponse): string {
-    const symbol = nextQuote.tokenSymbol ?? '';
+    const symbol = nextQuote.estimatedFeeTokenAddress ? (nextQuote.tokenSymbol ?? '') : (selectedChain?.symbol ?? nextQuote.tokenSymbol ?? '');
     if (nextQuote.estimatedFeeTokenAmount) {
       return `${nextQuote.estimatedFeeTokenAmount} ${symbol}`.trim();
     }

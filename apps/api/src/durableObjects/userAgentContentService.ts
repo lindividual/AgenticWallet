@@ -2,6 +2,7 @@ export { generateDailyDigestContent } from './userAgentDailyContentService';
 export { refreshRecommendationsContent } from './userAgentRecommendationContentService';
 export {
   buildMissingArticleMarkdownFallback,
+  deleteArticleMarkdownContent,
   getArticleMarkdownContent,
   putArticleMarkdownContent,
 } from './userAgentArticleContentStore';

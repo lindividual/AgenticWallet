@@ -125,7 +125,7 @@ function normalizeRoutableTokenContract(chain: string, contract: string): string
   if (!trimmed) return null;
   const normalized = trimmed.toLowerCase();
   if (normalized === 'native') return 'native';
-  if (chain === 'sol') return trimmed;
+  if (chain === 'sol' || chain === 'tron') return trimmed;
   if (/^0x[a-f0-9]{40}$/.test(normalized)) return normalized;
   return null;
 }
