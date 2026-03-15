@@ -23,6 +23,7 @@ import { TopUpContent } from '../modals/TopUpContent';
 import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { TransferContent } from '../modals/TransferContent';
 import type { AuthState } from '../../hooks/useWalletApp';
+import type { AgentChatOpenRequest } from '../../agent/types';
 import { useToast } from '../../contexts/ToastContext';
 import { buildWalletAccountsFingerprint } from '../../utils/chainIdentity';
 import { hideWalletAsset } from '../../utils/walletHiddenAssets';
@@ -32,7 +33,7 @@ type WalletAssetDetailScreenProps = {
   chain: string;
   contract: string;
   onBack: () => void;
-  onOpenAgentChat: (request?: { prompt?: string; intro?: string }) => void;
+  onOpenAgentChat: (request?: AgentChatOpenRequest) => void;
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';

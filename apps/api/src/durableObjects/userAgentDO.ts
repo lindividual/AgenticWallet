@@ -91,7 +91,17 @@ type AgentChatTransferAction = {
   tokenDecimals?: number | null;
 };
 
-type AgentChatAction = AgentChatTransferAction;
+type AgentChatQuickReplyOption = {
+  label: string;
+  message?: string | null;
+};
+
+type AgentChatQuickRepliesAction = {
+  type: 'quick_replies';
+  options: AgentChatQuickReplyOption[];
+};
+
+type AgentChatAction = AgentChatTransferAction | AgentChatQuickRepliesAction;
 
 function stripJsonFences(text: string): string {
   const trimmed = text.trim();
@@ -742,6 +752,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       actions = parsed.actions;
     } catch {
       reply = this.getFallbackChatReply(request.page);
+      actions = [];
     }
 
     return { reply, sessionId: request.sessionId, actions };
@@ -2752,6 +2763,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private buildChatSystemPrompt(page: string, pageContext: Record<string, string>): string {
+    const isReceiveFlow = pageContext.receiveMode === 'true';
     const pageDescriptions: Record<string, string> = {
       home: 'the home screen showing daily digest, asset recommendations, watchlist, and topic articles',
       trade: 'the trading screen with market overview, top movers, trending assets, perps, and predictions',
@@ -2760,7 +2772,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
       token: `viewing token details${pageContext.symbol ? ` for ${pageContext.symbol}` : ''}${pageContext.chain ? ` on ${pageContext.chain}` : ''}`,
       market: `viewing market details for a ${pageContext.marketType ?? 'market'} item`,
     };
-    const pageDesc = pageDescriptions[page] ?? `the ${page} page`;
+    const pageDesc = isReceiveFlow
+      ? 'the wallet receive flow where the user is choosing which receive address to share'
+      : pageDescriptions[page] ?? `the ${page} page`;
 
     const recentEvents = this.getLatestEvents(10);
     const eventSummary = recentEvents
@@ -2782,6 +2796,19 @@ export class UserAgentDO extends DurableObject<Bindings> {
           pageContext.inWatchlist === 'true' ? 'The token is already in the user watchlist.' : '',
         ].filter(Boolean)
       : [];
+    const receiveContextLines = isReceiveFlow
+      ? [
+          pageContext.receiveSupportedChains ? `Configured supported receive chains: ${pageContext.receiveSupportedChains}.` : '',
+          pageContext.receiveSupportedEvmChains ? `Configured EVM receive chains: ${pageContext.receiveSupportedEvmChains}.` : '',
+          pageContext.receiveSupportedTronChains ? `Configured Tron receive chains: ${pageContext.receiveSupportedTronChains}.` : '',
+          pageContext.receiveSupportedSolanaChains ? `Configured Solana receive chains: ${pageContext.receiveSupportedSolanaChains}.` : '',
+          pageContext.receiveSupportedBitcoinChains ? `Configured Bitcoin receive chains: ${pageContext.receiveSupportedBitcoinChains}.` : '',
+          pageContext.receiveAddressEvm ? `EVM receive address: ${pageContext.receiveAddressEvm}.` : '',
+          pageContext.receiveAddressTron ? `Tron receive address: ${pageContext.receiveAddressTron}.` : '',
+          pageContext.receiveAddressSolana ? `Solana receive address: ${pageContext.receiveAddressSolana}.` : '',
+          pageContext.receiveAddressBitcoin ? `Bitcoin receive address: ${pageContext.receiveAddressBitcoin}.` : '',
+        ].filter(Boolean)
+      : [];
 
     const locale = this.getEffectiveLocale();
     const langHint = locale?.startsWith('zh')
@@ -2794,6 +2821,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       'You are a helpful AI assistant for umi wallet, a crypto wallet and trading app.',
       `The user is currently on ${pageDesc}.`,
       ...tokenContextLines,
+      ...receiveContextLines,
       watchlistSummary ? `Their watchlist includes: ${watchlistSummary}.` : '',
       eventSummary ? `Recent activity: ${eventSummary}.` : '',
       'Guidelines:',
@@ -2803,11 +2831,17 @@ export class UserAgentDO extends DurableObject<Bindings> {
       '- If the user gives a short affirmative reply after you offered help on the token page, treat it as a request to analyze the current token immediately.',
       '- Return raw JSON only, with this exact top-level shape: {"reply":"string","actions":[]}. Do not wrap it in markdown fences.',
       `- Supported transfer network keys: ${ETHEREUM_NETWORK_KEY} (Ethereum), ${BASE_NETWORK_KEY} (Base), ${BNB_NETWORK_KEY} (BNB Chain), ${SOLANA_NETWORK_KEY} (Solana), ${BITCOIN_NETWORK_KEY} (Bitcoin).`,
+      '- When it would help the user choose a next step, you may include one quick reply action like {"type":"quick_replies","options":[{"label":"Analyze risks","message":"Analyze the main risks of this token."},{"label":"Compare with BTC","message":"Compare this token with BTC."}]}.',
+      '- Keep quick reply labels short, useful, and tappable. Prefer 2-4 options, and do not repeat the exact same wording as the reply sentence.',
+      '- When you ask the user to choose from a small known set, include quick_replies instead of only listing the choices in plain text.',
       '- When the user clearly wants to transfer funds and provides a supported network, a recipient address, and an amount, include one action like {"type":"transfer_preview","networkKey":"...","toAddress":"...","amount":"...","tokenSymbol":"ETH","tokenAddress":null,"tokenDecimals":null}.',
       '- Only include a transfer_preview action when the details are explicit or clearly implied by the current page context.',
       '- If the user refers to the current token on the token page, you may use the current token symbol and contract from context.',
       '- If the asset is the native asset for that network, set tokenAddress to null.',
       '- Never invent recipient addresses, contract addresses, token decimals, or amounts. Ask a concise follow-up question when details are missing or ambiguous.',
+      '- If the user is choosing a receive address, only recommend chains that appear in the configured supported receive chains from context.',
+      '- If the correct receive network is clear, provide the exact matching receive address from context instead of speaking abstractly.',
+      '- If multiple receive addresses are available, explain which network maps to which address and do not say unsupported networks are safe.',
       `- ${langHint}`,
     ]
       .filter(Boolean)
@@ -2849,6 +2883,20 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (!input || typeof input !== 'object') return null;
     const payload = input as Record<string, unknown>;
     const type = typeof payload.type === 'string' ? payload.type.trim() : '';
+    if (type === 'quick_replies') {
+      const options = Array.isArray(payload.options)
+        ? payload.options
+          .map((option) => this.normalizeChatQuickReplyOption(option))
+          .filter((option): option is AgentChatQuickReplyOption => Boolean(option))
+          .slice(0, 4)
+        : [];
+      if (options.length === 0) return null;
+      return {
+        type: 'quick_replies',
+        options,
+      };
+    }
+
     if (type !== 'transfer_preview') return null;
 
     const networkKey = typeof payload.networkKey === 'string' ? payload.networkKey.trim().toLowerCase() : '';
@@ -2871,6 +2919,25 @@ export class UserAgentDO extends DurableObject<Bindings> {
       tokenSymbol: tokenSymbol || null,
       tokenAddress: tokenAddress || null,
       tokenDecimals,
+    };
+  }
+
+  private normalizeChatQuickReplyOption(input: unknown): AgentChatQuickReplyOption | null {
+    if (typeof input === 'string') {
+      const value = input.trim().slice(0, 80);
+      if (!value) return null;
+      return { label: value, message: value };
+    }
+    if (!input || typeof input !== 'object') return null;
+
+    const payload = input as Record<string, unknown>;
+    const label = typeof payload.label === 'string' ? payload.label.trim().slice(0, 80) : '';
+    const message = typeof payload.message === 'string' ? payload.message.trim().slice(0, 280) : '';
+    if (!label) return null;
+
+    return {
+      label,
+      message: message || label,
     };
   }
 

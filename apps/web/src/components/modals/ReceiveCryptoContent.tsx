@@ -2,6 +2,7 @@ import { useMemo, useState, type MouseEvent } from 'react';
 import { ArrowDownToLine, CircleHelp, Copy, Info } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import encodeQR from 'qr';
+import type { AgentChatOpenRequest } from '../../agent/types';
 import { AssetListItem } from '../AssetListItem';
 import { ModalContentScaffold } from './ModalContentScaffold';
 
@@ -24,7 +25,7 @@ type ReceiveCryptoContentProps = {
   onBack: () => void;
   onCopyAddress: (address: string) => void;
   onClose: () => void;
-  onOpenAgentChat?: (request?: { prompt?: string; intro?: string }) => void;
+  onOpenAgentChat?: (request?: AgentChatOpenRequest) => void;
   footerVisible?: boolean;
   stageClassName?: string;
 };
@@ -49,6 +50,14 @@ function truncateAddress(address: string, head = 6, tail = 6): string {
   if (!address) return '';
   if (address.length <= head + tail + 3) return address;
   return `${address.slice(0, head)}...${address.slice(-tail)}`;
+}
+
+function joinChainNames(chains: ReceiveCryptoContentProps['supportedChains'], protocol?: ReceiveAddressType): string {
+  return chains
+    .filter((chain) => !protocol || chain.protocol === protocol)
+    .map((chain) => chain.name.trim())
+    .filter(Boolean)
+    .join(', ');
 }
 
 function ReceiveProtocolIcon({ protocol, alt }: { protocol: ReceiveAddressType; alt: string }) {
@@ -199,6 +208,30 @@ export function ReceiveCryptoContent({
     onBack();
   }
 
+  const receiveAgentRequest = useMemo<AgentChatOpenRequest>(() => {
+    const evmAddress = chainAccounts.find((item) => (item.protocol ?? 'evm') === 'evm')?.address?.trim() || walletAddress.trim();
+    const tronAddress = chainAccounts.find((item) => item.protocol === 'tvm')?.address?.trim() || '';
+    const solanaAddress = chainAccounts.find((item) => item.protocol === 'svm')?.address?.trim() || '';
+    const bitcoinAddress = chainAccounts.find((item) => item.protocol === 'btc')?.address?.trim() || '';
+
+    return {
+      intro: t('wallet.receiveAddressGuideAgentIntro'),
+      prompt: t('wallet.receiveAddressGuideAgentPrompt'),
+      contextOverrides: {
+        receiveMode: 'true',
+        receiveSupportedChains: joinChainNames(supportedChains),
+        receiveSupportedEvmChains: joinChainNames(supportedChains, 'evm'),
+        receiveSupportedTronChains: joinChainNames(supportedChains, 'tvm'),
+        receiveSupportedSolanaChains: joinChainNames(supportedChains, 'svm'),
+        receiveSupportedBitcoinChains: joinChainNames(supportedChains, 'btc'),
+        ...(evmAddress ? { receiveAddressEvm: evmAddress } : {}),
+        ...(tronAddress ? { receiveAddressTron: tronAddress } : {}),
+        ...(solanaAddress ? { receiveAddressSolana: solanaAddress } : {}),
+        ...(bitcoinAddress ? { receiveAddressBitcoin: bitcoinAddress } : {}),
+      },
+    };
+  }, [chainAccounts, supportedChains, t, walletAddress]);
+
   return (
     <ModalContentScaffold
       title={step === 'type' ? t('wallet.receiveSelectAddressTypeTitle') : t('wallet.receiveTransferToAddressTitle')}
@@ -218,10 +251,7 @@ export function ReceiveCryptoContent({
             type="button"
             className="w-full cursor-pointer text-left"
             onClick={handleButtonClick(() => {
-              onOpenAgentChat?.({
-                intro: t('wallet.receiveAddressGuideAgentIntro'),
-                prompt: t('wallet.receiveAddressGuideAgentPrompt'),
-              });
+              onOpenAgentChat?.(receiveAgentRequest);
             })}
           >
             <AssetListItem

@@ -990,7 +990,17 @@ export type AgentChatTransferAction = {
   tokenDecimals?: number | null;
 };
 
-export type AgentChatAction = AgentChatTransferAction;
+export type AgentChatQuickReplyOption = {
+  label: string;
+  message?: string | null;
+};
+
+export type AgentChatQuickRepliesAction = {
+  type: 'quick_replies';
+  options: AgentChatQuickReplyOption[];
+};
+
+export type AgentChatAction = AgentChatTransferAction | AgentChatQuickRepliesAction;
 
 export type AgentChatResponse = {
   reply: string;

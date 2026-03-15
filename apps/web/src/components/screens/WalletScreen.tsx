@@ -22,6 +22,7 @@ import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import type { AuthState } from '../../hooks/useWalletApp';
+import type { AgentChatOpenRequest } from '../../agent/types';
 import { AssetListItem } from '../AssetListItem';
 import { BalanceHeader } from '../BalanceHeader';
 import { CachedIconImage } from '../CachedIconImage';
@@ -38,7 +39,7 @@ type WalletScreenProps = {
   auth: AuthState;
   onLogout: () => void;
   onOpenAssetDetail: (chain: string, contract: string) => void;
-  onOpenAgentChat: (request?: { prompt?: string; intro?: string }) => void;
+  onOpenAgentChat: (request?: AgentChatOpenRequest) => void;
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
@@ -254,6 +255,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
+  const [isStablesExpanded, setIsStablesExpanded] = useState(false);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
   const [detailPriceChangeByHoldingKey, setDetailPriceChangeByHoldingKey] = useState<Record<string, number | null>>({});
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -312,6 +314,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   useEffect(() => {
     setCachedPortfolio(null);
     setDetailPriceChangeByHoldingKey({});
+    setIsStablesExpanded(false);
   }, [walletFingerprint]);
 
   useEffect(() => {
@@ -835,6 +838,17 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     void refetch();
   }
 
+  function openHoldingDetail(asset: WalletHoldingListItem) {
+    const routeAsset = asset.transferAsset as SimEvmBalance & {
+      market_chain?: string;
+      contract_key?: string;
+    };
+    onOpenAssetDetail(
+      routeAsset.market_chain ?? routeAsset.chain,
+      routeAsset.contract_key ?? routeAsset.address ?? '',
+    );
+  }
+
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-28">
       <BalanceHeader
@@ -965,12 +979,46 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         {!shouldShowLoading && !shouldShowError && holdings.length > 0 && (
           <div className="flex flex-col">
             <article className="border-b border-base-300 py-5">
-              <div className="flex flex-col gap-1">
-                <h3 className="m-0 text-sm text-base-content">{t('wallet.stables')}</h3>
-                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                  {formatUsdAdaptive(stableAndCryptos.stablesUsd, i18n.language)}
-                </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-col gap-1">
+                  <h3 className="m-0 text-sm text-base-content">{t('wallet.stables')}</h3>
+                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                    {formatUsdAdaptive(stableAndCryptos.stablesUsd, i18n.language)}
+                  </p>
+                </div>
+                {stableAndCryptos.stableHoldings.length > 0 ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm min-h-0 px-2 text-sm"
+                    aria-expanded={isStablesExpanded}
+                    onClick={() => setIsStablesExpanded((value) => !value)}
+                  >
+                    {isStablesExpanded ? t('common.less') : t('common.more')}
+                  </button>
+                ) : null}
               </div>
+              {isStablesExpanded && stableAndCryptos.stableHoldings.length > 0 ? (
+                <div className="mt-3 flex flex-col">
+                  {stableAndCryptos.stableHoldings.map((asset) => (
+                    <AssetListItem
+                      key={asset.key}
+                      className="py-3"
+                      onClick={() => openHoldingDetail(asset)}
+                      leftIcon={(
+                        <TokenAvatar
+                          icon={asset.logo}
+                          symbol={asset.symbol}
+                          name={asset.name || t('wallet.token')}
+                          fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
+                        />
+                      )}
+                      leftPrimary={asset.name || t('wallet.token')}
+                      leftSecondary={`${asset.amountText} ${asset.symbol}`}
+                      rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </article>
 
             <article className="border-b border-base-300 py-5">
@@ -996,16 +1044,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                     <AssetListItem
                       key={asset.key}
                       className="py-3"
-                      onClick={() => {
-                        const routeAsset = asset.transferAsset as SimEvmBalance & {
-                          market_chain?: string;
-                          contract_key?: string;
-                        };
-                        onOpenAssetDetail(
-                          routeAsset.market_chain ?? routeAsset.chain,
-                          routeAsset.contract_key ?? routeAsset.address ?? '',
-                        );
-                      }}
+                      onClick={() => openHoldingDetail(asset)}
                       leftIcon={
                         <TokenAvatar
                           icon={asset.logo}

@@ -11,13 +11,14 @@ import {
   searchMarketTokens,
   submitTransfer,
   type AgentChatMessage,
+  type AgentChatQuickReplyOption,
   type AgentChatResponse,
   type AgentChatTransferAction,
   type TopMarketAsset,
   type TransferQuoteResponse,
   type TransferRecord,
 } from '../api';
-import type { AgentNudge, PageContext } from '../agent/types';
+import type { AgentChatContextOverrides, AgentChatOpenRequest, AgentNudge, PageContext } from '../agent/types';
 import { normalizeContractForChain } from '../utils/chainIdentity';
 
 type AgentAssistantProps = {
@@ -26,9 +27,7 @@ type AgentAssistantProps = {
   pageContext: PageContext;
   openRequest?: {
     key: number;
-    prompt?: string;
-    intro?: string;
-  };
+  } & AgentChatOpenRequest;
 };
 
 type TransferPreviewActionState = 'quoting' | 'ready' | 'quoteError' | 'submitting' | 'submitError' | 'submitted';
@@ -44,7 +43,13 @@ type TransferPreviewActionCard = {
   errorMessage: string | null;
 };
 
-type ChatActionCard = TransferPreviewActionCard;
+type QuickRepliesActionCard = {
+  kind: 'quick_replies';
+  id: string;
+  options: AgentChatQuickReplyOption[];
+};
+
+type ChatActionCard = TransferPreviewActionCard | QuickRepliesActionCard;
 
 type ChatMessage = AgentChatMessage & {
   id: string;
@@ -145,6 +150,10 @@ function isTransferActionCard(action: ChatActionCard): action is TransferPreview
   return action.kind === 'transfer_preview';
 }
 
+function isQuickRepliesActionCard(action: ChatActionCard): action is QuickRepliesActionCard {
+  return action.kind === 'quick_replies';
+}
+
 export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRequest }: AgentAssistantProps) {
   const { i18n, t } = useTranslation();
   const queryClient = useQueryClient();
@@ -153,6 +162,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [contextOverrides, setContextOverrides] = useState<AgentChatContextOverrides>({});
   const [sessionId] = useState(generateSessionId);
   const handledOpenRequestKeyRef = useRef(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -219,12 +229,128 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     [i18n.language, i18n.resolvedLanguage],
   );
 
+  const buildStarterQuickReplies = useCallback((): AgentChatQuickReplyOption[] => {
+    const locale = (i18n.resolvedLanguage ?? i18n.language ?? '').trim().toLowerCase();
+    const pack = locale.startsWith('zh') ? 'zh' : locale.startsWith('ar') ? 'ar' : 'en';
+    const symbol = pageContext.tokenSymbol ?? tokenDetail?.symbol ?? routePreview?.symbol ?? null;
+    const tokenLabel = symbol ? symbol.trim().toUpperCase() : null;
+
+    const options = {
+      home: {
+        en: [
+          { label: 'Review portfolio', message: 'Review my portfolio and tell me the main risks and opportunities.' },
+          { label: 'Find setups', message: "Find a few trading setups worth watching today." },
+          { label: 'Summarize market', message: 'Give me a quick market summary for today.' },
+        ],
+        zh: [
+          { label: '看组合', message: '帮我看看我的投资组合，告诉我当前主要风险和机会。' },
+          { label: '找机会', message: '帮我找几个今天值得关注的交易机会。' },
+          { label: '看市场', message: '给我一个今天的市场简报。' },
+        ],
+        ar: [
+          { label: 'راجع المحفظة', message: 'راجع محفظتي وأخبرني بأهم المخاطر والفرص الآن.' },
+          { label: 'ابحث عن فرص', message: 'اعثر لي على بعض فرص التداول الجديرة بالمتابعة اليوم.' },
+          { label: 'ملخص السوق', message: 'أعطني ملخصاً سريعاً للسوق اليوم.' },
+        ],
+      },
+      trade: {
+        en: [
+          { label: 'Top setups', message: 'Show me the strongest trading setups on this page.' },
+          { label: 'Risk check', message: 'Which setups here look too risky right now?' },
+          { label: 'Explain momentum', message: 'Explain what is driving momentum here.' },
+        ],
+        zh: [
+          { label: '强势机会', message: '帮我找出这个页面里最强的交易机会。' },
+          { label: '风险检查', message: '这里哪些机会现在风险偏高？' },
+          { label: '解释动能', message: '解释一下这里的行情动能主要来自什么。' },
+        ],
+        ar: [
+          { label: 'أفضل الفرص', message: 'اعرض لي أقوى فرص التداول في هذه الصفحة.' },
+          { label: 'فحص المخاطر', message: 'أي الفرص هنا تبدو عالية المخاطر الآن؟' },
+          { label: 'اشرح الزخم', message: 'اشرح ما الذي يدفع الزخم في هذه الصفحة.' },
+        ],
+      },
+      wallet: {
+        en: [
+          { label: 'Review balances', message: 'Review my wallet balances and tell me what stands out.' },
+          { label: 'Transfer help', message: 'Help me prepare a transfer safely.' },
+          { label: 'Reduce risk', message: 'How can I reduce wallet risk from here?' },
+        ],
+        zh: [
+          { label: '看余额', message: '帮我看看钱包余额，指出最值得注意的地方。' },
+          { label: '转账帮助', message: '帮我安全地准备一笔转账。' },
+          { label: '降低风险', message: '从当前持仓看，我可以怎么降低钱包风险？' },
+        ],
+        ar: [
+          { label: 'راجع الأرصدة', message: 'راجع أرصدة المحفظة وأخبرني بما يستحق الانتباه.' },
+          { label: 'مساعدة تحويل', message: 'ساعدني في تجهيز تحويل بشكل آمن.' },
+          { label: 'خفض المخاطر', message: 'كيف يمكنني خفض مخاطر المحفظة من هنا؟' },
+        ],
+      },
+      token: {
+        en: [
+          { label: tokenLabel ? `Analyze ${tokenLabel}` : 'Analyze token', message: tokenLabel ? `Analyze ${tokenLabel} using the current page context.` : 'Analyze this token using the current page context.' },
+          { label: 'Key risks', message: 'What are the main risks for this token right now?' },
+          { label: 'Plan next step', message: 'What is the most sensible next step for me on this token?' },
+        ],
+        zh: [
+          { label: tokenLabel ? `分析 ${tokenLabel}` : '分析代币', message: tokenLabel ? `请结合当前页面信息分析 ${tokenLabel}。` : '请结合当前页面信息分析这个代币。' },
+          { label: '主要风险', message: '这个代币当前最需要注意的风险是什么？' },
+          { label: '下一步建议', message: '基于当前页面，你建议我的下一步动作是什么？' },
+        ],
+        ar: [
+          { label: tokenLabel ? `حلل ${tokenLabel}` : 'حلل الرمز', message: tokenLabel ? `حلل ${tokenLabel} بالاعتماد على معلومات الصفحة الحالية.` : 'حلل هذا الرمز بالاعتماد على معلومات الصفحة الحالية.' },
+          { label: 'المخاطر الرئيسية', message: 'ما هي أهم المخاطر لهذا الرمز الآن؟' },
+          { label: 'الخطوة التالية', message: 'ما هي الخطوة التالية الأنسب لي بخصوص هذا الرمز؟' },
+        ],
+      },
+      article: {
+        en: [
+          { label: 'Summarize article', message: 'Summarize this article into the most actionable points.' },
+          { label: 'Why it matters', message: 'Why does this article matter for my portfolio?' },
+          { label: 'What to verify', message: 'What claims in this article should I verify before acting?' },
+        ],
+        zh: [
+          { label: '总结文章', message: '把这篇文章总结成最有行动价值的几点。' },
+          { label: '和我有关吗', message: '这篇文章为什么和我的持仓有关？' },
+          { label: '先核实什么', message: '如果要据此行动，我应该先核实文章里的哪些点？' },
+        ],
+        ar: [
+          { label: 'لخص المقال', message: 'لخص هذا المقال إلى أهم النقاط القابلة للتنفيذ.' },
+          { label: 'لماذا يهمني', message: 'لماذا يهم هذا المقال محفظتي؟' },
+          { label: 'ما الذي أتحقق منه', message: 'ما الادعاءات التي يجب أن أتحقق منها قبل أن أتصرف؟' },
+        ],
+      },
+      market: {
+        en: [
+          { label: 'Explain this market', message: 'Explain the market data on this page in simple terms.' },
+          { label: 'Spot the risk', message: 'What risk signals stand out in this market right now?' },
+          { label: 'Find an angle', message: 'What trading angle is most interesting here?' },
+        ],
+        zh: [
+          { label: '解释市场', message: '用简单的话解释一下这个页面里的市场数据。' },
+          { label: '识别风险', message: '这个市场现在最明显的风险信号是什么？' },
+          { label: '找角度', message: '这里最值得关注的交易角度是什么？' },
+        ],
+        ar: [
+          { label: 'اشرح السوق', message: 'اشرح بيانات السوق في هذه الصفحة بطريقة بسيطة.' },
+          { label: 'حدد المخاطر', message: 'ما إشارات المخاطر الأوضح في هذا السوق الآن؟' },
+          { label: 'ابحث عن زاوية', message: 'ما الزاوية التداولية الأكثر إثارة هنا؟' },
+        ],
+      },
+    } as const;
+
+    const selected = options[currentPageKey]?.[pack] ?? options.home[pack];
+    return selected.map((option) => ({ ...option }));
+  }, [currentPageKey, i18n.language, i18n.resolvedLanguage, pageContext.tokenSymbol, routePreview?.symbol, tokenDetail?.symbol]);
+
   useEffect(() => {
     setPhase('closed');
     setActiveNudge(null);
     setMessages([]);
     setInput('');
     setLoading(false);
+    setContextOverrides({});
   }, [currentPageKey]);
 
   useEffect(() => {
@@ -240,17 +366,25 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   const openGenericChat = useCallback(() => {
     setPhase('chat');
     setActiveNudge(null);
+    setContextOverrides({});
     const helpPrompt = t(HELP_PROMPT_KEYS[currentPageKey] ?? HELP_PROMPT_KEYS.home);
     setMessages([
       {
         id: `greeting_${Date.now()}`,
         role: 'assistant',
         content: helpPrompt,
+        actions: [
+          {
+            kind: 'quick_replies',
+            id: generateChatActionId(),
+            options: buildStarterQuickReplies(),
+          },
+        ],
       },
     ]);
-  }, [currentPageKey, t]);
+  }, [buildStarterQuickReplies, currentPageKey, t]);
 
-  const buildPageContextPayload = useCallback((): Record<string, string> => {
+  const buildPageContextPayload = useCallback((requestOverrides?: AgentChatContextOverrides): Record<string, string> => {
     const pageCtx: Record<string, string> = {};
     const tokenSymbol = pageContext.tokenSymbol ?? tokenDetail?.symbol ?? routePreview?.symbol ?? '';
     const tokenName = tokenDetail?.name ?? routePreview?.name ?? '';
@@ -278,8 +412,20 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     if (pageContext.articleId) pageCtx.articleId = pageContext.articleId;
     if (pageContext.marketType) pageCtx.marketType = pageContext.marketType;
     if (pageContext.marketItemId) pageCtx.marketItemId = pageContext.marketItemId;
+
+    const mergedOverrides = {
+      ...contextOverrides,
+      ...(requestOverrides ?? {}),
+    };
+
+    for (const [key, value] of Object.entries(mergedOverrides)) {
+      const normalized = value.trim();
+      if (normalized) pageCtx[key] = normalized;
+    }
+
     return pageCtx;
   }, [
+    contextOverrides,
     currentPageKey,
     normalizedTokenChain,
     normalizedTokenContract,
@@ -424,6 +570,13 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
           if (action.type === 'transfer_preview') {
             return buildTransferActionCard(action);
           }
+          if (action.type === 'quick_replies') {
+            return {
+              kind: 'quick_replies' as const,
+              id: generateChatActionId(),
+              options: action.options,
+            };
+          }
           return null;
         }),
       );
@@ -526,11 +679,11 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   );
 
   const requestReply = useCallback(
-    async (apiMessages: AgentChatMessage[]) => {
+    async (apiMessages: AgentChatMessage[], requestContextOverrides?: AgentChatContextOverrides) => {
       return agentChat({
         sessionId,
         page: currentPageKey,
-        pageContext: buildPageContextPayload(),
+        pageContext: buildPageContextPayload(requestContextOverrides),
         messages: apiMessages,
       });
     },
@@ -582,7 +735,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   );
 
   const openTaskChat = useCallback(
-    async (prompt: string, intro: string) => {
+    async (prompt: string, intro: string, requestContextOverrides?: AgentChatContextOverrides) => {
       if (loading) return;
 
       setPhase('chat');
@@ -608,6 +761,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
             role: message.role,
             content: message.content,
           })),
+          requestContextOverrides,
         );
         const assistantMessage = await buildAssistantMessage(result);
         setMessages((prev) => [...prev, assistantMessage]);
@@ -634,13 +788,14 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     setMessages([]);
     setInput('');
     setLoading(false);
+    setContextOverrides(openRequest?.contextOverrides ?? {});
     if (entryNudge) {
       setActiveNudge(entryNudge);
       setPhase('panel');
       return;
     }
     if (openRequest?.prompt && openRequest.intro) {
-      void openTaskChat(openRequest.prompt, openRequest.intro);
+      void openTaskChat(openRequest.prompt, openRequest.intro, openRequest.contextOverrides);
       return;
     }
     openGenericChat();
@@ -653,8 +808,8 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     onClose?.();
   }, [onClose]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const sendChatText = useCallback(async (rawText: string) => {
+    const text = rawText.trim();
     if (!text || loading) return;
 
     const userMsg: ChatMessage = {
@@ -720,6 +875,10 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     t,
     currentPageKey,
   ]);
+
+  const handleSend = useCallback(async () => {
+    await sendChatText(input);
+  }, [input, sendChatText]);
 
   const renderTransferActionCard = useCallback(
     (action: TransferPreviewActionCard) => {
@@ -807,6 +966,31 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
       );
     },
     [confirmTransferAction, getSupportedChain, getTransferFeeText, retryTransferPreview, t],
+  );
+
+  const renderQuickRepliesActionCard = useCallback(
+    (action: QuickRepliesActionCard) => (
+      <div key={action.id} className="flex flex-wrap gap-2">
+        {action.options.map((option, index) => {
+          const message = option.message?.trim() || option.label.trim();
+          const label = option.label.trim();
+          if (!message || !label) return null;
+
+          return (
+            <button
+              key={`${action.id}_${index}`}
+              type="button"
+              className="btn btn-outline btn-sm min-h-0 rounded-full px-4"
+              onClick={() => void sendChatText(message)}
+              disabled={loading}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    ),
+    [loading, sendChatText],
   );
 
   const handleKeyDown = useCallback(
@@ -920,7 +1104,11 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
                 ) : null}
                 {msg.role === 'assistant' && msg.actions?.length ? (
                   <div className={msg.content ? 'mt-3 space-y-3' : 'space-y-3'}>
-                    {msg.actions.map((action) => isTransferActionCard(action) ? renderTransferActionCard(action) : null)}
+                    {msg.actions.map((action) => {
+                      if (isTransferActionCard(action)) return renderTransferActionCard(action);
+                      if (isQuickRepliesActionCard(action)) return renderQuickRepliesActionCard(action);
+                      return null;
+                    })}
                   </div>
                 ) : null}
               </div>

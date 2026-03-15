@@ -8,6 +8,14 @@ export type PageContext = {
   marketItemId?: string;
 };
 
+export type AgentChatContextOverrides = Record<string, string>;
+
+export type AgentChatOpenRequest = {
+  prompt?: string;
+  intro?: string;
+  contextOverrides?: AgentChatContextOverrides;
+};
+
 export type AgentMood = 'neutral' | 'watching' | 'thinking' | 'ready' | 'warning';
 
 export type AgentEntryState = 'idle' | 'observing' | 'thinking' | 'nudging' | 'engaged' | 'cooldown';

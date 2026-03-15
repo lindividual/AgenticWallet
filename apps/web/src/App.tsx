@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCanGoBack, useLocation, useMatch, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { AgentAssistant } from './components/AgentAssistant';
-import type { PageContext } from './agent/types';
+import type { AgentChatOpenRequest, PageContext } from './agent/types';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
@@ -82,9 +82,7 @@ export function App() {
   const [isMarketExiting, setIsMarketExiting] = useState(false);
   const [agentOpenRequest, setAgentOpenRequest] = useState<{
     key: number;
-    prompt?: string;
-    intro?: string;
-  }>({ key: 0 });
+  } & AgentChatOpenRequest>({ key: 0 });
   const marketExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     auth,
@@ -372,12 +370,13 @@ export function App() {
     );
   }
 
-  function handleAgentOpen(request?: { prompt?: string; intro?: string }) {
+  function handleAgentOpen(request?: AgentChatOpenRequest) {
     intervention.handleEntryOpen();
     setAgentOpenRequest((current) => ({
       key: current.key + 1,
       prompt: request?.prompt,
       intro: request?.intro,
+      contextOverrides: request?.contextOverrides,
     }));
   }
 
