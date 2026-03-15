@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Newspaper } from 'lucide-react';
+import { Bookmark, Newspaper, Pause, Play } from 'lucide-react';
 import {
   getAgentArticles,
+  getAgentArticleDetail,
   getAgentTodayDaily,
   getCoinDetailsBatch,
   getMarketWatchlist,
   getWalletPortfolio,
+  ingestAgentEvent,
+  type AgentArticle,
   type CoinDetail,
   type TopMarketAsset,
   type WalletPortfolioResponse,
@@ -22,6 +25,13 @@ import { SkeletonAssetListItem, SkeletonBlock } from '../Skeleton';
 import { buildChainAssetId } from '../../utils/assetIdentity';
 import { buildWalletAccountsFingerprint, normalizeContractForChain } from '../../utils/chainIdentity';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
+import {
+  markTopicArticleRead,
+  readTopicFeedCache,
+  type TopicFeedCacheValue,
+  writeTopicFeedCache,
+} from '../../utils/topicFeedCache';
+import { useToast } from '../../contexts/ToastContext';
 
 type HomeScreenProps = {
   auth: AuthState;
@@ -51,6 +61,12 @@ type WatchlistDisplayAsset = WatchlistAsset & {
 };
 
 type WatchlistCategory = 'crypto' | 'perps' | 'prediction';
+type ArticleEngagement = {
+  liked: boolean;
+  favorited: boolean;
+};
+
+const ARTICLE_ENGAGEMENT_STORAGE_KEY = 'agentic_wallet_article_engagement_v1';
 
 function isOpenableCryptoWatch(asset: WatchlistAsset): boolean {
   if (asset.watch_type !== 'crypto') return false;
@@ -122,13 +138,108 @@ function buildTopMarketAssetPreview(input: {
 }
 
 const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
+const TOPIC_FEED_PAGE_SIZE = 10;
+
+function readArticleEngagementMap(): Record<string, ArticleEngagement> {
+  try {
+    const raw = localStorage.getItem(ARTICLE_ENGAGEMENT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, ArticleEngagement>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveArticleEngagementMap(value: Record<string, ArticleEngagement>): void {
+  try {
+    localStorage.setItem(ARTICLE_ENGAGEMENT_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+function stripMarkdown(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]+`/g, ' ')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_~>-]/g, ' ')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatTopicGeneratedTime(value: string, locale: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return '';
+  const now = new Date();
+  const target = new Date(timestamp);
+  const diffMs = now.getTime() - target.getTime();
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+
+  if (diffMs < hourMs) {
+    const minutes = Math.max(1, Math.floor(Math.max(0, diffMs) / minuteMs));
+    if (locale.startsWith('zh')) return `${minutes}分钟前`;
+    if (locale.startsWith('ar')) return `منذ ${minutes} دقيقة`;
+    return `${minutes} min ago`;
+  }
+
+  if (diffMs < dayMs && now.toDateString() === target.toDateString()) {
+    return new Intl.DateTimeFormat(locale, {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(target);
+  }
+
+  if (now.getFullYear() === target.getFullYear()) {
+    return new Intl.DateTimeFormat(locale, {
+      month: 'numeric',
+      day: 'numeric',
+    }).format(target);
+  }
+
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).format(target);
+}
+
+function formatDailyTitleDate(value: string): string {
+  const normalized = value.trim();
+  const matched = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (matched) {
+    return `${matched[1].slice(-2)}-${matched[2]}-${matched[3]}`;
+  }
+  return normalized;
+}
+
+function mergeTopicArticles(articles: AgentArticle[]): AgentArticle[] {
+  const deduped = new Map<string, AgentArticle>();
+  for (const article of articles) {
+    if (!deduped.has(article.id)) deduped.set(article.id, article);
+  }
+  return Array.from(deduped.values());
+}
 
 export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeScreenProps) {
   const { t, i18n } = useTranslation();
+  const { showError, showInfo, showSuccess } = useToast();
+  const topicFeedUserId = auth.user.id;
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
   const walletFingerprint = buildWalletAccountsFingerprint(auth.wallet?.chainAccounts, auth.wallet?.address);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
+  const [cachedTopicFeed, setCachedTopicFeed] = useState<TopicFeedCacheValue | null>(null);
   const [watchlistCategory, setWatchlistCategory] = useState<WatchlistCategory>('crypto');
+  const [articleEngagementMap, setArticleEngagementMap] = useState<Record<string, ArticleEngagement>>(() => readArticleEngagementMap());
+  const [speakingArticleId, setSpeakingArticleId] = useState<string | null>(null);
+  const topicLoadMoreRef = useRef<HTMLDivElement | null>(null);
+  const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const { data: portfolio, isFetching: isPortfolioFetching, isPending: isPortfolioPending } = useQuery({
     queryKey: ['wallet-portfolio', walletFingerprint],
@@ -142,6 +253,19 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   useEffect(() => {
     setCachedPortfolio(null);
   }, [walletFingerprint]);
+
+  useEffect(() => {
+    setCachedTopicFeed(null);
+  }, [topicFeedUserId]);
+
+  useEffect(
+    () => () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!walletFingerprint) return;
@@ -212,12 +336,58 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
     },
   });
 
-  const { data: topicData, isLoading: isTopicLoading } = useQuery({
-    queryKey: ['home-agent-topic'],
-    queryFn: () => getAgentArticles({ type: 'topic', limit: 3 }),
+  const {
+    data: topicFeedData,
+    isLoading: isTopicLoading,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['home-agent-topic', topicFeedUserId],
+    queryFn: ({ pageParam }) => getAgentArticles({
+      type: 'topic',
+      limit: TOPIC_FEED_PAGE_SIZE,
+      offset: typeof pageParam === 'number' ? pageParam : 0,
+    }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.hasMore ? lastPage.nextOffset : undefined,
     staleTime: 45_000,
     refetchOnWindowFocus: true,
   });
+
+  useEffect(() => {
+    if (topicFeedData?.pages) {
+      const mergedArticles = mergeTopicArticles(topicFeedData.pages.flatMap((page) => page.articles));
+      const lastPage = topicFeedData.pages[topicFeedData.pages.length - 1];
+      const cacheValue: TopicFeedCacheValue = {
+        articles: mergedArticles,
+        hasMore: lastPage?.hasMore === true,
+        nextOffset: typeof lastPage?.nextOffset === 'number' ? lastPage.nextOffset : null,
+      };
+      setCachedTopicFeed(cacheValue);
+      void writeTopicFeedCache(topicFeedUserId, cacheValue);
+      return;
+    }
+    void readTopicFeedCache(topicFeedUserId).then((value) => {
+      if (!value) return;
+      setCachedTopicFeed(value);
+    });
+  }, [topicFeedData?.pages, topicFeedUserId]);
+
+  useEffect(() => {
+    const target = topicLoadMoreRef.current;
+    if (!target || !hasNextPage || isFetchingNextPage) return;
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (!entry?.isIntersecting) return;
+      void fetchNextPage();
+    }, {
+      rootMargin: '240px 0px',
+      threshold: 0.01,
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, topicFeedData?.pages]);
 
   const tokenDetailLookup = useMemo(() => {
     const byChainAssetId = new Map<string, CoinDetail>();
@@ -283,7 +453,94 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
   }, [tokenDetailLookup, watchlistCategory, watchlistData?.assets]);
   const daily = dailyToday?.article ?? null;
   const lastReadyDaily = dailyToday?.lastReadyArticle ?? null;
-  const topics = topicData?.articles ?? [];
+  const topics = topicFeedData?.pages
+    ? mergeTopicArticles(topicFeedData.pages.flatMap((page) => page.articles))
+    : (cachedTopicFeed?.articles ?? []);
+  const topicHasMore = topicFeedData?.pages
+    ? topicFeedData.pages[topicFeedData.pages.length - 1]?.hasMore === true
+    : cachedTopicFeed?.hasMore === true;
+
+  function patchArticleEngagement(articleId: string, next: Partial<ArticleEngagement>) {
+    setArticleEngagementMap((prev) => {
+      const merged = {
+        ...(prev[articleId] ?? { liked: false, favorited: false }),
+        ...next,
+      };
+      const map = {
+        ...prev,
+        [articleId]: merged,
+      };
+      saveArticleEngagementMap(map);
+      return map;
+    });
+  }
+
+  function handleOpenTopicArticle(articleId: string) {
+    void markTopicArticleRead(topicFeedUserId, articleId);
+    onOpenArticle(articleId);
+  }
+
+  function handleTopicKeyDown(event: React.KeyboardEvent<HTMLElement>, articleId: string) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    handleOpenTopicArticle(articleId);
+  }
+
+  async function handleToggleTopicSpeech(event: React.MouseEvent<HTMLButtonElement>, article: AgentArticle) {
+    event.stopPropagation();
+    if (!('speechSynthesis' in window)) {
+      showError(t('home.listenNotSupported'));
+      return;
+    }
+
+    if (speakingArticleId === article.id) {
+      window.speechSynthesis.cancel();
+      speechUtteranceRef.current = null;
+      setSpeakingArticleId(null);
+      showInfo(t('home.listenStopped'));
+      return;
+    }
+
+    try {
+      const detail = await getAgentArticleDetail(article.id);
+      const speechText = stripMarkdown(detail.markdown);
+      if (!speechText) {
+        showError(t('home.listenFailed'));
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(`${article.title}. ${speechText}`);
+      utterance.lang = i18n.resolvedLanguage ?? i18n.language;
+      utterance.rate = 1;
+      utterance.onend = () => {
+        setSpeakingArticleId((current) => (current === article.id ? null : current));
+        speechUtteranceRef.current = null;
+      };
+      utterance.onerror = () => {
+        setSpeakingArticleId((current) => (current === article.id ? null : current));
+        speechUtteranceRef.current = null;
+        showError(t('home.listenFailed'));
+      };
+
+      window.speechSynthesis.cancel();
+      speechUtteranceRef.current = utterance;
+      window.speechSynthesis.speak(utterance);
+      setSpeakingArticleId(article.id);
+      showSuccess(t('home.listenStarted'));
+    } catch {
+      showError(t('home.listenFailed'));
+    }
+  }
+
+  function handleToggleTopicFavorite(event: React.MouseEvent<HTMLButtonElement>, articleId: string) {
+    event.stopPropagation();
+    const engagement = articleEngagementMap[articleId] ?? { liked: false, favorited: false };
+    const nextFavorited = !engagement.favorited;
+    patchArticleEngagement(articleId, { favorited: nextFavorited });
+    if (nextFavorited) {
+      ingestAgentEvent('article_favorited', { articleId }).catch(() => undefined);
+    }
+  }
   const resolvedPortfolio = portfolio ?? cachedPortfolio;
   const totalBalance = resolvedPortfolio?.totalUsd ?? 0;
   const isBalanceLoading = Boolean(walletAddress) && !resolvedPortfolio && (isPortfolioPending || isPortfolioFetching);
@@ -300,6 +557,8 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
       : dailyToday?.status === 'stale'
         ? t('home.todayDailyStale')
         : t('home.todayDailyGenerating');
+  const dailyTitleDate = formatDailyTitleDate(dailyToday?.date ?? new Date().toISOString().slice(0, 10));
+  const dailyTitle = daily?.title ?? `UMI Crypto Daily ${dailyTitleDate}`;
 
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-105 flex-col gap-5 p-5 pb-28">
@@ -343,13 +602,10 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
             className="w-full cursor-pointer border-0 bg-transparent p-0 text-left"
             onClick={() => onOpenArticle(dailyArticleToOpen.id)}
           >
-            <div className="flex items-center gap-3">
-              <div className="shrink-0 text-base-content p-2" aria-hidden="true">
-                <Newspaper size={24} strokeWidth={2} />
-              </div>
+            <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
                 <p className="m-0 text-base font-semibold">
-                  {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
+                  {dailyTitle}
                 </p>
                 <p className="m-0 mt-1 overflow-hidden text-sm leading-snug text-base-content/75 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
                   {isDailyLoading && !daily && !lastReadyDaily ? (
@@ -362,16 +618,16 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                   )}
                 </p>
               </div>
+              <div className="shrink-0 p-2 text-base-content" aria-hidden="true">
+                <Newspaper size={24} strokeWidth={2} />
+              </div>
             </div>
           </button>
         ) : (
-          <div className="flex items-center gap-3">
-            <div className="shrink-0 text-base-content/60" aria-hidden="true">
-              <Newspaper size={32} strokeWidth={2} />
-            </div>
+          <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
               <p className="m-0 text-lg font-semibold">
-                {daily?.title ?? t('home.todayDailyTitle', { date: dailyToday?.date ?? new Date().toISOString().slice(0, 10) })}
+                {dailyTitle}
               </p>
               <p className="m-0 mt-1 overflow-hidden text-sm leading-snug text-base-content/75 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
                 {isDailyLoading && !daily && !lastReadyDaily ? (
@@ -383,6 +639,9 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
                   dailySummary
                 )}
               </p>
+            </div>
+            <div className="shrink-0 text-base-content/60" aria-hidden="true">
+              <Newspaper size={32} strokeWidth={2} />
             </div>
           </div>
         )}
@@ -500,17 +759,52 @@ export function HomeScreen({ auth, onOpenArticle, onOpenToken, onLogout }: HomeS
             </>
           )}
           {!isTopicLoading && topics.length === 0 && <p className="m-0 text-base text-base-content/70">{t('home.emptyTopics')}</p>}
-          {topics.map((topic) => (
-            <button
+          {topics.map((topic) => {
+            const engagement = articleEngagementMap[topic.id] ?? { liked: false, favorited: false };
+            const isSpeaking = speakingArticleId === topic.id;
+            return (
+            <article
               key={topic.id}
-              type="button"
-              className="w-full cursor-pointer border border-base-300 bg-base-200 p-3 text-start transition-colors hover:bg-base-300/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-              onClick={() => onOpenArticle(topic.id)}
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer border border-base-300 bg-base-200 p-3 text-start transition-colors hover:bg-base-300/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              onClick={() => handleOpenTopicArticle(topic.id)}
+              onKeyDown={(event) => handleTopicKeyDown(event, topic.id)}
             >
               <p className="m-0 text-base font-semibold">{topic.title}</p>
-              <p className="m-0 mt-1 text-sm text-base-content/70">{topic.summary}</p>
-            </button>
-          ))}
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className="m-0 text-sm text-base-content/60">
+                  {formatTopicGeneratedTime(topic.created_at, i18n.resolvedLanguage ?? i18n.language ?? 'en')}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs h-8 min-h-0 w-8 rounded-full border-0 p-0"
+                    aria-label={isSpeaking ? t('home.actionStopListen') : t('home.actionListen')}
+                    onClick={(event) => void handleToggleTopicSpeech(event, topic)}
+                  >
+                    {isSpeaking ? <Pause size={15} /> : <Play size={15} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-ghost btn-xs h-8 min-h-0 w-8 rounded-full border-0 p-0 ${engagement.favorited ? 'text-primary' : ''}`}
+                    aria-label={engagement.favorited ? t('home.actionFavorited') : t('home.actionFavorite')}
+                    onClick={(event) => handleToggleTopicFavorite(event, topic.id)}
+                  >
+                    <Bookmark size={15} fill={engagement.favorited ? 'currentColor' : 'none'} />
+                  </button>
+                </div>
+              </div>
+            </article>
+          );})}
+          {topics.length > 0 && topicHasMore && (
+            <div ref={topicLoadMoreRef} className="flex items-center justify-center py-4" aria-live="polite">
+              <span className="inline-flex items-center gap-2 text-sm text-base-content/60">
+                {(isFetchingNextPage || isTopicLoading) && <span className="loading loading-spinner loading-sm" aria-hidden="true" />}
+                {t('wallet.refreshing')}
+              </span>
+            </div>
+          )}
         </div>
       </section>
     </section>

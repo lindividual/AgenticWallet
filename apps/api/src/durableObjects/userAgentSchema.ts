@@ -2,6 +2,17 @@ type SqlStorage = {
   exec: (query: string, ...bindings: unknown[]) => { toArray(): unknown[] };
 };
 
+function ensureColumn(sql: SqlStorage, table: string, column: string, definition: string): void {
+  try {
+    sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.toLowerCase().includes('duplicate column')) {
+      throw error;
+    }
+  }
+}
+
 export function initializeAgentSchema(sql: SqlStorage): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS agent_state (
@@ -66,12 +77,14 @@ export function initializeAgentSchema(sql: SqlStorage): void {
       run_at TEXT NOT NULL,
       status TEXT NOT NULL,
       payload_json TEXT NOT NULL,
+      result_json TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
       job_key TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`,
   );
+  ensureColumn(sql, 'jobs', 'result_json', 'TEXT');
   sql.exec(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_job_key ON jobs(job_key) WHERE job_key IS NOT NULL',
   );
@@ -90,6 +103,20 @@ export function initializeAgentSchema(sql: SqlStorage): void {
       created_at TEXT NOT NULL,
       status TEXT NOT NULL
     )`,
+  );
+  sql.exec(
+    `CREATE TABLE IF NOT EXISTS user_topic_feed (
+      article_id TEXT PRIMARY KEY,
+      feed_rank INTEGER NOT NULL,
+      delivered_at TEXT NOT NULL,
+      generated_at TEXT NOT NULL
+    )`,
+  );
+  sql.exec(
+    'CREATE INDEX IF NOT EXISTS idx_user_topic_feed_rank ON user_topic_feed(feed_rank ASC)',
+  );
+  sql.exec(
+    'CREATE INDEX IF NOT EXISTS idx_user_topic_feed_generated_at ON user_topic_feed(generated_at DESC)',
   );
 
   sql.exec(

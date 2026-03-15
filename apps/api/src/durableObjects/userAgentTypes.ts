@@ -42,6 +42,7 @@ export type JobRow = {
   run_at: string;
   status: string;
   payload_json: string;
+  result_json: string | null;
   retry_count: number;
   job_key: string | null;
 };

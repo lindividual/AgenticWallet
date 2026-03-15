@@ -32,6 +32,7 @@ type WalletAssetDetailScreenProps = {
   chain: string;
   contract: string;
   onBack: () => void;
+  onOpenAgentChat: (request?: { prompt?: string; intro?: string }) => void;
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
@@ -270,7 +271,7 @@ function formatTaxPercent(value: number | null | undefined): string {
   })}%`;
 }
 
-export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: WalletAssetDetailScreenProps) {
+export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenAgentChat }: WalletAssetDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { showError, showSuccess } = useToast();
@@ -732,6 +733,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack }: Walle
             await navigator.clipboard.writeText(address);
           }}
           onClose={closeModal}
+          onOpenAgentChat={onOpenAgentChat}
           footerVisible={options.footerVisible}
           stageClassName={options.stageClassName}
         />

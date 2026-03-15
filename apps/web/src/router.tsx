@@ -47,12 +47,6 @@ const marketRoute = createRoute({
   component: App,
 });
 
-const agentOpsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/ops/agent',
-  component: App,
-});
-
 const routeTree = rootRoute.addChildren([
   homeRoute,
   tradeRoute,
@@ -61,7 +55,6 @@ const routeTree = rootRoute.addChildren([
   articleRoute,
   tokenRoute,
   marketRoute,
-  agentOpsRoute,
 ]);
 
 export const router = createRouter({

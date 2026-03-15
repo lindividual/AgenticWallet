@@ -6,7 +6,6 @@ import { AgentAssistant } from './components/AgentAssistant';
 import type { PageContext } from './agent/types';
 import { BottomTabBar, type AppTab } from './components/BottomTabBar';
 import { AuthScreen } from './components/screens/AuthScreen';
-import { AgentOpsScreen } from './components/screens/AgentOpsScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
 import { HomeScreen } from './components/screens/HomeScreen';
 import { MarketDetailScreen } from './components/screens/MarketDetailScreen';
@@ -39,7 +38,6 @@ export function App() {
   const tokenMatch = useMatch({ from: '/token/$chain/$contract', shouldThrow: false });
   const walletAssetMatch = useMatch({ from: '/wallet/asset/$chain/$contract', shouldThrow: false });
   const marketMatch = useMatch({ from: '/market/$marketType/$itemId', shouldThrow: false });
-  const agentOpsMatch = useMatch({ from: '/ops/agent', shouldThrow: false });
   const routeArticleId = articleMatch?.params.articleId ?? null;
   const isArticleRoute = Boolean(routeArticleId);
   const routeToken = tokenMatch?.params
@@ -63,7 +61,6 @@ export function App() {
       }
     : null;
   const isMarketRoute = Boolean(routeMarket?.marketType && routeMarket.itemId);
-  const isAgentOpsRoute = Boolean(agentOpsMatch);
 
   const [activeArticleId, setActiveArticleId] = useState<string | null>(routeArticleId);
   const [isArticleExiting, setIsArticleExiting] = useState(false);
@@ -83,7 +80,11 @@ export function App() {
       : null,
   );
   const [isMarketExiting, setIsMarketExiting] = useState(false);
-  const [agentOpenRequestKey, setAgentOpenRequestKey] = useState(0);
+  const [agentOpenRequest, setAgentOpenRequest] = useState<{
+    key: number;
+    prompt?: string;
+    intro?: string;
+  }>({ key: 0 });
   const marketExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     auth,
@@ -174,7 +175,7 @@ export function App() {
         : isWalletAssetRoute
           ? { page: 'wallet' }
           : { page: activeTab };
-  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute && !isAgentOpsRoute;
+  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
   const intervention = useAgentIntervention(agentPageContext, i18n.resolvedLanguage ?? i18n.language ?? null);
 
   if (!auth) {
@@ -212,11 +213,7 @@ export function App() {
       clearTimeout(articleExitTimerRef.current);
     }
     articleExitTimerRef.current = setTimeout(() => {
-      if (canGoBack) {
-        window.history.back();
-      } else {
-        void navigate({ to: '/' });
-      }
+      void navigate({ to: '/' });
       setIsArticleExiting(false);
       setActiveArticleId(null);
       articleExitTimerRef.current = null;
@@ -333,14 +330,6 @@ export function App() {
     }, WALLET_ASSET_EXIT_MS);
   }
 
-  function handleCloseAgentOps() {
-    if (canGoBack) {
-      window.history.back();
-      return;
-    }
-    void navigate({ to: '/' });
-  }
-
   function handleTabChange(tab: AppTab) {
     if (tab === 'home') {
       void navigate({ to: '/' });
@@ -373,12 +362,23 @@ export function App() {
         />
       );
     }
-    return <WalletScreen auth={authenticatedState} onLogout={handleLogout} onOpenAssetDetail={handleOpenWalletAsset} />;
+    return (
+      <WalletScreen
+        auth={authenticatedState}
+        onLogout={handleLogout}
+        onOpenAssetDetail={handleOpenWalletAsset}
+        onOpenAgentChat={handleAgentOpen}
+      />
+    );
   }
 
-  function handleAgentOpen() {
+  function handleAgentOpen(request?: { prompt?: string; intro?: string }) {
     intervention.handleEntryOpen();
-    setAgentOpenRequestKey((value) => value + 1);
+    setAgentOpenRequest((current) => ({
+      key: current.key + 1,
+      prompt: request?.prompt,
+      intro: request?.intro,
+    }));
   }
 
   return (
@@ -391,6 +391,7 @@ export function App() {
           <div className={isArticleExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
             <ArticleReaderScreen
               articleId={activeArticleId}
+              userId={authenticatedState.user.id}
               onBack={handleCloseArticle}
               onOpenToken={handleOpenTokenByRoute}
               onOpenMarketDetail={handleOpenMarketDetail}
@@ -411,6 +412,7 @@ export function App() {
               chain={activeWalletAssetRoute.chain}
               contract={activeWalletAssetRoute.contract}
               onBack={handleCloseWalletAsset}
+              onOpenAgentChat={handleAgentOpen}
             />
           </div>
         ) : isMarketRoute && activeMarketRoute ? (
@@ -419,14 +421,6 @@ export function App() {
               marketType={activeMarketRoute.marketType}
               itemId={activeMarketRoute.itemId}
               onBack={handleCloseMarket}
-            />
-          </div>
-        ) : isAgentOpsRoute ? (
-          <div className="app-page-slide-in">
-            <AgentOpsScreen
-              auth={authenticatedState}
-              onBack={handleCloseAgentOps}
-              onOpenArticle={handleOpenArticle}
             />
           </div>
         ) : (
@@ -447,7 +441,7 @@ export function App() {
         entryNudge={intervention.activeNudge}
         onClose={intervention.handleAssistantClosed}
         pageContext={agentPageContext}
-        openRequestKey={agentOpenRequestKey}
+        openRequest={agentOpenRequest}
       />
     </>
   );

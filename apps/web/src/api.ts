@@ -573,96 +573,6 @@ export type AgentTodayDailyResponse = {
   lastReadyArticle: AgentArticle | null;
 };
 
-export type AgentOpsEvent = {
-  id: string;
-  type: string;
-  occurredAt: string;
-  receivedAt: string;
-  dedupeKey: string | null;
-  payload: Record<string, unknown> | null;
-};
-
-export type AgentOpsJob = {
-  id: string;
-  type: 'daily_digest' | 'portfolio_snapshot';
-  runAt: string;
-  status: string;
-  retryCount: number;
-  jobKey: string | null;
-  createdAt: string;
-  updatedAt: string;
-  payload: Record<string, unknown> | null;
-};
-
-export type AgentOpsOverviewResponse = {
-  generatedAt: string;
-  llm: {
-    enabled: boolean;
-    provider: string;
-    model: string;
-    baseUrl: string;
-    fallbackEnabled: boolean;
-    fallbackProvider: string;
-    fallbackModel: string;
-    fallbackBaseUrl: string;
-  };
-  locale: {
-    preferred: string | null;
-    request: string | null;
-    effective: string | null;
-  };
-  activity: {
-    isActive: boolean;
-    activeUntil: string | null;
-    eventCount: number;
-    recentEvents: AgentOpsEvent[];
-  };
-  daily: AgentTodayDailyResponse;
-  jobs: {
-    counts: {
-      queued: number;
-      running: number;
-      succeeded: number;
-      failed: number;
-    };
-    nextQueuedRunAt: string | null;
-    recent: AgentOpsJob[];
-  };
-  recommendations: {
-    dirty: boolean;
-    lastRefreshedAt: string | null;
-    count: number;
-    items: AgentRecommendation[];
-  };
-  articles: {
-    items: AgentArticle[];
-  };
-  portfolio: {
-    latestHourlySnapshot: {
-      bucketHourUtc: string;
-      totalUsd: number;
-      holdingsCount: number;
-      asOf: string;
-      createdAt: string;
-    } | null;
-    latestDailySnapshot: {
-      bucketDateUtc: string;
-      totalUsd: number;
-      asOf: string;
-      createdAt: string;
-    } | null;
-    points24h: PortfolioSnapshotPoint[];
-  };
-  watchlist: {
-    count: number;
-    items: WatchlistAsset[];
-  };
-  transfers: {
-    count: number;
-    items: TransferRecord[];
-  };
-};
-
 export type AgentEventType =
   | 'asset_holding_snapshot'
   | 'asset_viewed'
@@ -1034,12 +944,17 @@ export async function runAgentRecommendations(): Promise<{
 export async function getAgentArticles(params?: {
   type?: 'daily' | 'topic';
   limit?: number;
-}): Promise<{ articles: AgentArticle[] }> {
+  offset?: number;
+}): Promise<{ articles: AgentArticle[]; hasMore: boolean; nextOffset: number | null }> {
   const query = new URLSearchParams();
   if (params?.type) query.set('type', params.type);
   if (params?.limit) query.set('limit', String(params.limit));
+  if (params?.offset) query.set('offset', String(params.offset));
   const suffix = query.toString();
-  return getJson<{ articles: AgentArticle[] }>(`/v1/agent/articles${suffix ? `?${suffix}` : ''}`, true);
+  return getJson<{ articles: AgentArticle[]; hasMore: boolean; nextOffset: number | null }>(
+    `/v1/agent/articles${suffix ? `?${suffix}` : ''}`,
+    true,
+  );
 }
 
 export async function getAgentArticleDetail(articleId: string): Promise<AgentArticleDetailResponse> {
@@ -1048,34 +963,6 @@ export async function getAgentArticleDetail(articleId: string): Promise<AgentArt
 
 export async function getAgentTodayDaily(): Promise<AgentTodayDailyResponse> {
   return getJson<AgentTodayDailyResponse>('/v1/agent/daily/today', true);
-}
-
-export async function getAgentOpsOverview(): Promise<AgentOpsOverviewResponse> {
-  return getJson<AgentOpsOverviewResponse>('/v1/agent/ops/overview', true);
-}
-
-export async function runAgentDailyDigest(): Promise<{ ok: true; jobId: string; deduped: boolean }> {
-  return postJson<{ ok: true; jobId: string; deduped: boolean }>('/v1/agent/jobs/daily-digest/run', {}, true);
-}
-
-export async function regenerateAgentDailyDigest(): Promise<{
-  ok: true;
-  deletedArticleIds: string[];
-  article: AgentArticle | null;
-}> {
-  return postJson<{
-    ok: true;
-    deletedArticleIds: string[];
-    article: AgentArticle | null;
-  }>('/v1/agent/jobs/daily-digest/regenerate', {}, true);
-}
-
-export async function runAgentPortfolioSnapshot(): Promise<{ ok: true; jobId: string; deduped: boolean }> {
-  return postJson<{ ok: true; jobId: string; deduped: boolean }>(
-    '/v1/agent/jobs/portfolio-snapshot/run',
-    {},
-    true,
-  );
 }
 
 export async function setAgentPreferredLocale(locale: string): Promise<{ ok: true }> {

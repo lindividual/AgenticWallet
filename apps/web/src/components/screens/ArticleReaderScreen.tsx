@@ -9,12 +9,14 @@ import {
   type TopMarketAsset,
 } from '../../api';
 import { buildChainAssetId } from '../../utils/assetIdentity';
+import { markTopicArticleRead } from '../../utils/topicFeedCache';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { useToast } from '../../contexts/ToastContext';
 import type { TradeMarketDetailType } from '../../utils/tradeMarketDetail';
 
 type ArticleReaderScreenProps = {
   articleId: string;
+  userId?: string;
   onBack: () => void;
   onOpenToken?: (chain: string, contract: string, tokenPreview?: TopMarketAsset) => void;
   onOpenMarketDetail?: (marketType: TradeMarketDetailType, itemId: string) => void;
@@ -109,6 +111,12 @@ function stripMarkdown(markdown: string): string {
     .trim();
 }
 
+function stripLeadingMarkdownH1(markdown: string): string {
+  const normalized = markdown.replace(/\r\n/g, '\n');
+  const withoutLeadingHeading = normalized.replace(/^\uFEFF?(?:\s*\n)*#(?!#)[ \t]+[^\n]+(?:\n+|$)/, '');
+  return withoutLeadingHeading.trimStart();
+}
+
 function normalizeSymbol(value: string | null | undefined): string {
   return (value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
@@ -151,7 +159,7 @@ function toTokenPreview(asset: AgentArticleRelatedAsset, chain: string, contract
   };
 }
 
-export function ArticleReaderScreen({ articleId, onBack, onOpenToken, onOpenMarketDetail }: ArticleReaderScreenProps) {
+export function ArticleReaderScreen({ articleId, userId, onBack, onOpenToken, onOpenMarketDetail }: ArticleReaderScreenProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess, showInfo } = useToast();
   const [engagementMap, setEngagementMap] = useState<Record<string, ArticleEngagement>>(() => readEngagementMap());
@@ -168,7 +176,8 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken, onOpenMark
   });
 
   const engagement = engagementMap[articleId] ?? { liked: false, favorited: false };
-  const speakText = useMemo(() => (data ? stripMarkdown(data.markdown) : ''), [data]);
+  const displayMarkdown = useMemo(() => (data ? stripLeadingMarkdownH1(data.markdown) : ''), [data]);
+  const speakText = useMemo(() => stripMarkdown(displayMarkdown), [displayMarkdown]);
 
   const relatedPills = useMemo<RelatedAssetPill[]>(() => {
     if (!data || data.relatedAssets.length === 0) return [];
@@ -206,7 +215,10 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken, onOpenMark
 
   useEffect(() => {
     ingestAgentEvent('article_read', { articleId }).catch(() => undefined);
-  }, [articleId]);
+    if (userId) {
+      void markTopicArticleRead(userId, articleId);
+    }
+  }, [articleId, userId]);
 
   useEffect(
     () => () => {
@@ -309,22 +321,10 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken, onOpenMark
     if (!asset.clickable) return;
     if (asset.marketType === 'perp' || asset.marketType === 'prediction') {
       if (!asset.marketItemId || !onOpenMarketDetail) return;
-      ingestAgentEvent('asset_viewed', {
-        asset: asset.symbol,
-        marketType: asset.marketType,
-        itemId: asset.marketItemId,
-        source: 'article_related',
-      }).catch(() => undefined);
       onOpenMarketDetail(asset.marketType, asset.marketItemId);
       return;
     }
     if (!asset.chain || !asset.contract || !onOpenToken) return;
-    ingestAgentEvent('asset_viewed', {
-      asset: asset.symbol,
-      chain: asset.chain,
-      contract: asset.contract,
-      source: 'article_related',
-    }).catch(() => undefined);
     onOpenToken(asset.chain, asset.contract, asset.tokenPreview ?? undefined);
   }
 
@@ -380,7 +380,7 @@ export function ArticleReaderScreen({ articleId, onBack, onOpenToken, onOpenMark
           </div>
 
           <div className="mt-4">
-            <MarkdownRenderer markdown={data.markdown} />
+            <MarkdownRenderer markdown={displayMarkdown} />
           </div>
         </article>
       )}

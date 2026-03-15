@@ -140,6 +140,22 @@ export type TopicSpecialGenerationResult = {
   generated: number;
   skipped: boolean;
   totalInSlot: number;
+  debug?: {
+    llm: TopicSpecialPreviewDebug['llm'];
+    sources: TopicSpecialPreviewDebug['sources'];
+    draft: TopicSpecialPreviewDebug['draft'];
+    editors: TopicSpecialPreviewDebug['editors'];
+    chief: TopicSpecialPreviewDebug['chief'];
+    articles: Array<{
+      topic: string;
+      topicSlug: string;
+      editorId: TopicSpecialEditorId;
+      editorLabel: string;
+      relatedAssets: string[];
+      sourceRefs: string[];
+      llm: TopicSpecialPreviewDebug['article'];
+    }>;
+  };
 };
 
 export type TopicSpecialPreviewResult = {
@@ -216,6 +232,8 @@ export type TopicSpecialPreviewDebug = {
     model: string | null;
     promptStats: PromptDebugStats | null;
     parsedDraftCount: number;
+    systemPrompt: string | null;
+    userPrompt: string | null;
     responseSnippet: string | null;
     error: ReturnType<typeof getLlmErrorInfo> | null;
   };
@@ -230,6 +248,8 @@ export type TopicSpecialPreviewDebug = {
     model: string | null;
     promptStats: PromptDebugStats | null;
     generatedDraftCount: number;
+    systemPrompt: string | null;
+    userPrompt: string | null;
     responseSnippet: string | null;
     error: ReturnType<typeof getLlmErrorInfo> | null;
   }>;
@@ -242,6 +262,8 @@ export type TopicSpecialPreviewDebug = {
     model: string | null;
     promptStats: PromptDebugStats | null;
     selectedDraftCount: number;
+    systemPrompt: string | null;
+    userPrompt: string | null;
     responseSnippet: string | null;
     error: ReturnType<typeof getLlmErrorInfo> | null;
   };
@@ -253,6 +275,8 @@ export type TopicSpecialPreviewDebug = {
     provider: string | null;
     model: string | null;
     promptStats: PromptDebugStats | null;
+    systemPrompt: string | null;
+    userPrompt: string | null;
     responseSnippet: string | null;
     markdownSnippet: string | null;
     error: ReturnType<typeof getLlmErrorInfo> | null;
@@ -260,6 +284,7 @@ export type TopicSpecialPreviewDebug = {
 };
 
 type TopicSpecialPreviewDebugCollector = TopicSpecialPreviewDebug;
+type TopicSpecialArticleDebugCollector = TopicSpecialPreviewDebug['article'];
 
 type TopicSpecialEditorDefinition = {
   id: TopicSpecialEditorId;
@@ -318,6 +343,29 @@ function buildEmptyTradeBrowseResponse(): {
   };
 }
 
+function captureDebugText(text: string | null | undefined, maxLength = 8000): string | null {
+  const normalized = text?.trim();
+  if (!normalized) return null;
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}\n\n...[truncated]` : normalized;
+}
+
+function createTopicArticleDebugCollector(): TopicSpecialPreviewDebug['article'] {
+  return {
+    mode: 'fallback',
+    fallbackReason: null,
+    requestId: null,
+    cfRay: null,
+    provider: null,
+    model: null,
+    promptStats: null,
+    systemPrompt: null,
+    userPrompt: null,
+    responseSnippet: null,
+    markdownSnippet: null,
+    error: null,
+  };
+}
+
 function buildTopicPreviewDebug(
   packet: TopicSpecialSourcePacket,
   llmStatus: ReturnType<typeof getLlmStatus>,
@@ -335,6 +383,8 @@ function buildTopicPreviewDebug(
       model: null,
       promptStats: null,
       generatedDraftCount: 0,
+      systemPrompt: null,
+      userPrompt: null,
       responseSnippet: null,
       error: null,
     },
@@ -374,6 +424,8 @@ function buildTopicPreviewDebug(
       model: null,
       promptStats: null,
       parsedDraftCount: 0,
+      systemPrompt: null,
+      userPrompt: null,
       responseSnippet: null,
       error: null,
     },
@@ -387,21 +439,12 @@ function buildTopicPreviewDebug(
       model: null,
       promptStats: null,
       selectedDraftCount: 0,
+      systemPrompt: null,
+      userPrompt: null,
       responseSnippet: null,
       error: null,
     },
-    article: {
-      mode: 'fallback',
-      fallbackReason: null,
-      requestId: null,
-      cfRay: null,
-      provider: null,
-      model: null,
-      promptStats: null,
-      responseSnippet: null,
-      markdownSnippet: null,
-      error: null,
-    },
+    article: createTopicArticleDebugCollector(),
   };
 }
 
@@ -521,6 +564,13 @@ export async function generateTopicSpecialBatchFromSourcePacket(
   }
 
   const llmStatus = getLlmStatus(env);
+  const debug = buildTopicPreviewDebug(
+    {
+      ...packet,
+      existingTopicsToday,
+    },
+    llmStatus,
+  );
   console.log('topic_special_batch_sources_loaded', {
     runId,
     slotKey,
@@ -554,7 +604,7 @@ export async function generateTopicSpecialBatchFromSourcePacket(
     perps: packet.perps,
     predictions: packet.predictions,
     existingTopicsToday,
-  });
+  }, debug);
 
   const existingSlugs = new Set(existingRows.map((row) => row.topic_slug));
   const candidateDrafts = drafts
@@ -628,6 +678,7 @@ export async function generateTopicSpecialBatchFromSourcePacket(
   const selectedDrafts = candidateDrafts.slice(0, targetNewCount);
 
   let generated = 0;
+  const articleDebugRuns: NonNullable<TopicSpecialGenerationResult['debug']>['articles'] = [];
   for (const [index, draft] of selectedDrafts.entries()) {
     const topicSlug = slugifyTopic(draft.topic);
     if (!topicSlug) continue;
@@ -660,6 +711,7 @@ export async function generateTopicSpecialBatchFromSourcePacket(
       predictions: packet.predictions,
     });
     const normalizedRefs = normalizeSourceRefs(draft.sourceRefs.length > 0 ? draft.sourceRefs : packet.sourceRefs);
+    const articleDebug = createTopicArticleDebugCollector();
     const markdown = await buildTopicArticleMarkdown(
       env,
       llmStatus,
@@ -680,7 +732,9 @@ export async function generateTopicSpecialBatchFromSourcePacket(
         predictions: packet.predictions,
         existingTopicsToday,
       },
+      articleDebug,
     );
+    articleDebug.markdownSnippet = captureDebugText(markdown, 6000);
     console.log('topic_special_article_generation_completed', {
       runId,
       slotKey,
@@ -722,6 +776,15 @@ export async function generateTopicSpecialBatchFromSourcePacket(
 
     generated += 1;
     existingSlugs.add(topicSlug);
+    articleDebugRuns.push({
+      topic: draft.topic,
+      topicSlug,
+      editorId: draft.editorId,
+      editorLabel: draft.editorLabel,
+      relatedAssets: normalizedAssets,
+      sourceRefs: normalizedRefs,
+      llm: articleDebug,
+    });
   }
 
   const totalInSlot = await countTopicsInSlot(env.DB, slotKey);
@@ -737,6 +800,14 @@ export async function generateTopicSpecialBatchFromSourcePacket(
     generated,
     skipped: generated === 0,
     totalInSlot,
+    debug: {
+      llm: debug.llm,
+      sources: debug.sources,
+      draft: debug.draft,
+      editors: debug.editors,
+      chief: debug.chief,
+      articles: articleDebugRuns,
+    },
   };
 }
 
@@ -880,7 +951,7 @@ export async function generateTopicSpecialPreviewFromSourcePacket(
       predictions: packet.predictions,
       existingTopicsToday,
     },
-    debug,
+    debug.article,
     options,
   );
   debug.article.markdownSnippet = markdown.slice(0, 800) || null;
@@ -1208,6 +1279,8 @@ async function buildTopicBeatDrafts(
     const promptStats = buildPromptDebugStats(systemPrompt, userPrompt);
     if (editorDebug) {
       editorDebug.promptStats = promptStats;
+      editorDebug.systemPrompt = captureDebugText(systemPrompt, 4000);
+      editorDebug.userPrompt = captureDebugText(userPrompt);
     }
     const retryAttempts = normalizeDebugRetryAttempts(options?.draftRetryAttempts, TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS);
     console.log('topic_special_editor_llm_request', {
@@ -1259,7 +1332,7 @@ async function buildTopicBeatDrafts(
       editorDebug.provider = llmResult.provider ?? llmStatus.provider ?? null;
       editorDebug.model = llmResult.model ?? llmStatus.model ?? null;
       editorDebug.generatedDraftCount = drafts.length;
-      editorDebug.responseSnippet = llmResult.text.slice(0, 1200) || null;
+      editorDebug.responseSnippet = captureDebugText(llmResult.text);
       editorDebug.error = null;
     }
     if (drafts.length > 0) {
@@ -1443,6 +1516,8 @@ async function buildChiefEditorSelection(
     const promptStats = buildPromptDebugStats(systemPrompt, userPrompt);
     if (debug) {
       debug.chief.promptStats = promptStats;
+      debug.chief.systemPrompt = captureDebugText(systemPrompt, 4000);
+      debug.chief.userPrompt = captureDebugText(userPrompt);
     }
     console.log('topic_special_chief_llm_request', {
       ...promptStats,
@@ -1477,7 +1552,7 @@ async function buildChiefEditorSelection(
       debug.chief.provider = llmResult.provider ?? llmStatus.provider ?? null;
       debug.chief.model = llmResult.model ?? llmStatus.model ?? null;
       debug.chief.selectedDraftCount = merged.length;
-      debug.chief.responseSnippet = llmResult.text.slice(0, 1200) || null;
+      debug.chief.responseSnippet = captureDebugText(llmResult.text);
       debug.chief.error = null;
     }
     if (merged.length > 0) {
@@ -1816,29 +1891,29 @@ async function buildTopicArticleMarkdown(
   env: Bindings,
   llmStatus: ReturnType<typeof getLlmStatus>,
   input: TopicArticleInput,
-  debug?: TopicSpecialPreviewDebugCollector,
+  debug?: TopicSpecialArticleDebugCollector,
   options?: TopicSpecialDebugOptions,
 ): Promise<string> {
   if (options?.forceArticleFallback === true) {
     if (debug) {
-      debug.article.mode = 'fallback';
-      debug.article.fallbackReason = 'forced_fallback';
-      debug.article.provider = llmStatus.provider || null;
-      debug.article.model = llmStatus.model || null;
-      debug.article.promptStats = null;
-      debug.article.error = null;
+      debug.mode = 'fallback';
+      debug.fallbackReason = 'forced_fallback';
+      debug.provider = llmStatus.provider || null;
+      debug.model = llmStatus.model || null;
+      debug.promptStats = null;
+      debug.error = null;
     }
     return buildFallbackTopicArticleMarkdown(input);
   }
 
   if (!llmStatus.enabled) {
     if (debug) {
-      debug.article.mode = 'fallback';
-      debug.article.fallbackReason = 'llm_disabled';
-      debug.article.provider = llmStatus.provider || null;
-      debug.article.model = llmStatus.model || null;
-      debug.article.promptStats = null;
-      debug.article.error = null;
+      debug.mode = 'fallback';
+      debug.fallbackReason = 'llm_disabled';
+      debug.provider = llmStatus.provider || null;
+      debug.model = llmStatus.model || null;
+      debug.promptStats = null;
+      debug.error = null;
     }
     console.warn('topic_special_article_llm_disabled_using_fallback', {
       slotKey: input.slotKey,
@@ -1869,7 +1944,9 @@ async function buildTopicArticleMarkdown(
     const userPrompt = buildTopicArticlePrompt(input);
     const promptStats = buildPromptDebugStats(systemPrompt, userPrompt);
     if (debug) {
-      debug.article.promptStats = promptStats;
+      debug.promptStats = promptStats;
+      debug.systemPrompt = captureDebugText(systemPrompt, 4000);
+      debug.userPrompt = captureDebugText(userPrompt);
     }
     console.log('topic_special_article_llm_request', {
       ...promptStats,
@@ -1920,24 +1997,24 @@ async function buildTopicArticleMarkdown(
       throw new Error('topic_special_article_empty_response');
     }
     if (debug) {
-      debug.article.mode = 'llm';
-      debug.article.fallbackReason = null;
-      debug.article.requestId = llmResult.requestId ?? null;
-      debug.article.cfRay = llmResult.cfRay ?? null;
-      debug.article.provider = llmResult.provider ?? llmStatus.provider ?? null;
-      debug.article.model = llmResult.model ?? llmStatus.model ?? null;
-      debug.article.responseSnippet = text.slice(0, 1200) || null;
-      debug.article.error = null;
+      debug.mode = 'llm';
+      debug.fallbackReason = null;
+      debug.requestId = llmResult.requestId ?? null;
+      debug.cfRay = llmResult.cfRay ?? null;
+      debug.provider = llmResult.provider ?? llmStatus.provider ?? null;
+      debug.model = llmResult.model ?? llmStatus.model ?? null;
+      debug.responseSnippet = captureDebugText(text);
+      debug.error = null;
     }
     return ensureRelatedAssetsSection(text, input.relatedAssets);
   } catch (error) {
     const llmError = getLlmErrorInfo(error);
     if (debug) {
-      debug.article.mode = 'fallback';
-      debug.article.fallbackReason = 'llm_error';
-      debug.article.provider = llmStatus.provider || null;
-      debug.article.model = llmStatus.model || null;
-      debug.article.error = llmError;
+      debug.mode = 'fallback';
+      debug.fallbackReason = 'llm_error';
+      debug.provider = llmStatus.provider || null;
+      debug.model = llmStatus.model || null;
+      debug.error = llmError;
     }
     console.error('topic_special_article_llm_failed', {
       ...llmError,

@@ -253,6 +253,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
   const [isAboutExpanded, setIsAboutExpanded] = useState(false);
   const [shouldShowAboutToggle, setShouldShowAboutToggle] = useState(false);
   const aboutRef = useRef<HTMLParagraphElement | null>(null);
+  const reportedAssetViewKeysRef = useRef<Set<string>>(new Set());
 
   const normalizedChain = chain.trim().toLowerCase();
   const normalizedContract = normalizeContractForChain(normalizedChain, contract);
@@ -385,15 +386,29 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
     enabled: shouldUseKlineChangeFallback,
   });
 
+  const assetViewDedupeKey = normalizedChain && normalizedContract
+    ? `asset_viewed:spot:${normalizedChain}:${normalizedContract}`
+    : null;
+  const assetViewLabel = (
+    preferredDetail?.symbol
+    ?? routePreview?.symbol
+    ?? preferredDetail?.name
+    ?? routePreview?.name
+    ?? ''
+  ).trim().toUpperCase();
+
   useEffect(() => {
+    if (!assetViewDedupeKey || !assetViewLabel) return;
+    if (reportedAssetViewKeysRef.current.has(assetViewDedupeKey)) return;
+    reportedAssetViewKeysRef.current.add(assetViewDedupeKey);
     ingestAgentEvent('asset_viewed', {
-      asset: (preferredDetail?.symbol ?? routePreview?.symbol)?.toUpperCase(),
+      asset: assetViewLabel,
       itemId: undefined,
       chain: normalizedChain,
       contract: normalizedContract,
       source: 'trade_detail',
-    }).catch(() => undefined);
-  }, [normalizedChain, normalizedContract, preferredDetail?.symbol, routePreview?.symbol]);
+    }, assetViewDedupeKey).catch(() => undefined);
+  }, [assetViewDedupeKey, assetViewLabel, normalizedChain, normalizedContract]);
 
   const chartCandles = useMemo<CandlePoint[]>(
     () => normalizeCandlesForLiveline(klineData),

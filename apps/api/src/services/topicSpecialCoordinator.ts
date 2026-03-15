@@ -15,6 +15,35 @@ export type TopicSpecialEnqueueResult = {
   status: 'queued' | 'staged' | 'running' | 'succeeded' | 'failed';
 };
 
+export type TopicSpecialOpsJob = {
+  id: string;
+  slotKey: string;
+  force: boolean;
+  trigger: string;
+  status: 'queued' | 'staged' | 'running' | 'succeeded' | 'failed';
+  retryCount: number;
+  runAt: string;
+  result: unknown | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+export type TopicSpecialOpsOverview = {
+  generatedAt: string;
+  counts: {
+    queued: number;
+    staged: number;
+    running: number;
+    succeeded: number;
+    failed: number;
+  };
+  activeSlotKeys: string[];
+  recentJobs: TopicSpecialOpsJob[];
+};
+
 type TopicSpecialRpcStub = DurableObjectStub & {
   enqueueGenerationRpc(input?: {
     force?: boolean;
@@ -33,6 +62,7 @@ type TopicSpecialRpcStub = DurableObjectStub & {
     packet: TopicSpecialSourcePacket;
     options?: { force?: boolean };
   }): Promise<TopicSpecialGenerationResult>;
+  getOpsDashboardRpc(input?: { limit?: number }): Promise<TopicSpecialOpsOverview>;
 };
 
 function getTopicSpecialStub(env: Bindings): TopicSpecialRpcStub {
@@ -94,4 +124,12 @@ export async function runTopicSpecialBatchViaDo(
       force: input?.force === true,
     },
   });
+}
+
+export async function getTopicSpecialOpsOverview(
+  env: Bindings,
+  input?: { limit?: number },
+): Promise<TopicSpecialOpsOverview> {
+  const stub = getTopicSpecialStub(env);
+  return stub.getOpsDashboardRpc(input);
 }

@@ -9,6 +9,12 @@ import {
   refreshRecommendationsContent,
 } from './userAgentContentService';
 import { generateWithLlm } from '../services/llm';
+import {
+  applyAgentPromptConfig,
+  applyAgentPromptSkills,
+  getAgentPromptConfig,
+  getAgentPromptSkills,
+} from '../services/agentPromptConfig';
 import type { Bindings, WalletProtocol, WalletSummary } from '../types';
 import {
   enqueueJob,
@@ -71,8 +77,9 @@ const ACTIVE_UNTIL_KEY = 'active_until';
 const RECOMMENDATION_STATE_KEY = 'recommendation_state';
 const HOURLY_SNAPSHOT_RETENTION_HOURS = 72;
 const DAILY_SNAPSHOT_RETENTION_DAYS = 180;
-const TOPIC_SPECIAL_FETCH_MULTIPLIER = 3;
-const TOPIC_SPECIAL_MIN_FETCH = 24;
+const TOPIC_FEED_LIMIT_MAX = 10;
+const TOPIC_FEED_RECENT_WINDOW_MS = 8 * 60 * 60 * 1000;
+const TOPIC_FEED_MATERIALIZE_BATCH_SIZE = 100;
 
 type AgentChatTransferAction = {
   type: 'transfer_preview';
@@ -127,6 +134,13 @@ type TopicSpecialArticleIndexRow = {
   related_assets_json: string;
   generated_at: string;
   status: string;
+};
+
+type TopicFeedRow = {
+  article_id: string;
+  feed_rank: number;
+  delivered_at: string;
+  generated_at: string;
 };
 
 type WalletChainAccountRow = {
@@ -318,24 +332,25 @@ export class UserAgentDO extends DurableObject<Bindings> {
     userId: string,
     options?: {
       limit?: number;
+      offset?: number;
       articleType?: string;
       createdAfter?: string | null;
       createdBefore?: string | null;
     },
-  ): Promise<{ articles: ArticleRow[] }> {
+  ): Promise<{ articles: ArticleRow[]; hasMore: boolean; nextOffset: number | null }> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
     await this.ensureTodayDailyReady();
     const limit = options?.limit ?? 20;
+    const offset = options?.offset ?? 0;
     const articleType = options?.articleType ?? null;
-    return {
-      articles: await this.getArticles(
-        limit,
-        articleType,
-        options?.createdAfter ?? null,
-        options?.createdBefore ?? null,
-      ),
-    };
+    return this.getArticles(
+      limit,
+      offset,
+      articleType,
+      options?.createdAfter ?? null,
+      options?.createdBefore ?? null,
+    );
   }
 
   async getArticleDetailRpc(
@@ -471,7 +486,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
         items: this.getRecommendations(options?.recommendationLimit ?? 6),
       },
       articles: {
-        items: await this.getArticles(options?.articleLimit ?? 6),
+        items: (await this.getArticles(options?.articleLimit ?? 6)).articles,
       },
       portfolio: {
         latest_hourly_snapshot: this.getLatestHourlyPortfolioSnapshot(),
@@ -699,7 +714,11 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ reply: string; sessionId: string; actions?: AgentChatAction[] }> {
     this.ensureOwner(userId);
 
-    const systemPrompt = this.buildChatSystemPrompt(request.page, request.pageContext ?? {});
+    const baseSystemPrompt = this.buildChatSystemPrompt(request.page, request.pageContext ?? {});
+    const promptConfig = await getAgentPromptConfig(this.env.DB);
+    const promptSkills = await getAgentPromptSkills(this.env.DB);
+    const configuredPrompt = applyAgentPromptConfig(baseSystemPrompt, promptConfig);
+    const systemPrompt = applyAgentPromptSkills(configuredPrompt, promptSkills);
     const llmMessages = [
       { role: 'system' as const, content: systemPrompt },
       ...request.messages.map((m) => ({
@@ -1275,6 +1294,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
           run_at,
           status,
           payload_json,
+          result_json,
           retry_count,
           job_key,
           created_at,
@@ -1570,25 +1590,33 @@ export class UserAgentDO extends DurableObject<Bindings> {
 
   private async getArticles(
     limit = 20,
+    offset = 0,
     articleType: string | null = null,
     createdAfter: string | null = null,
     createdBefore: string | null = null,
-  ): Promise<ArticleRow[]> {
+  ): Promise<{ articles: ArticleRow[]; hasMore: boolean; nextOffset: number | null }> {
     const safeLimit = sanitizeLimit(limit, 1, 100);
+    const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
     const normalizedType = articleType?.trim().toLowerCase() ?? null;
 
     if (normalizedType === 'topic') {
-      return this.getPersonalizedTopicArticles(safeLimit, createdAfter, createdBefore);
+      return this.getPersonalizedTopicArticles(safeLimit, safeOffset, createdAfter, createdBefore);
     }
 
     if (normalizedType) {
-      return this.getLocalArticles(safeLimit, normalizedType, createdAfter, createdBefore);
+      const localRows = this.getLocalArticles(safeLimit + 1, safeOffset, normalizedType, createdAfter, createdBefore);
+      const articles = localRows.slice(0, safeLimit);
+      return {
+        articles,
+        hasMore: localRows.length > safeLimit,
+        nextOffset: localRows.length > safeLimit ? safeOffset + articles.length : null,
+      };
     }
 
-    const mergeLimit = Math.min(100, Math.max(safeLimit * 2, 20));
+    const mergeLimit = Math.min(100, Math.max((safeLimit + safeOffset + 1) * 2, 20));
     const [localArticles, topicArticles] = await Promise.all([
-      Promise.resolve(this.getLocalArticles(mergeLimit, null, createdAfter, createdBefore)),
-      this.getPersonalizedTopicArticles(mergeLimit, createdAfter, createdBefore),
+      Promise.resolve(this.getLocalArticles(mergeLimit, 0, null, createdAfter, createdBefore)),
+      this.getPersonalizedTopicArticles(mergeLimit, 0, createdAfter, createdBefore).then((result) => result.articles),
     ]);
 
     const deduped = new Map<string, ArticleRow>();
@@ -1598,18 +1626,26 @@ export class UserAgentDO extends DurableObject<Bindings> {
       }
     }
 
-    return Array.from(deduped.values())
+    const mergedAll = Array.from(deduped.values())
       .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-      .slice(0, safeLimit);
+      .slice(safeOffset, safeOffset + safeLimit + 1);
+    const merged = mergedAll.slice(0, safeLimit);
+    return {
+      articles: merged,
+      hasMore: mergedAll.length > safeLimit,
+      nextOffset: mergedAll.length > safeLimit ? safeOffset + merged.length : null,
+    };
   }
 
   private getLocalArticles(
     limit = 20,
+    offset = 0,
     articleType: string | null = null,
     createdAfter: string | null = null,
     createdBefore: string | null = null,
   ): ArticleRow[] {
     const safeLimit = sanitizeLimit(limit, 1, 100);
+    const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
     const normalizedType = articleType?.trim();
     const conditions: string[] = [];
     const bindings: unknown[] = [];
@@ -1642,32 +1678,183 @@ export class UserAgentDO extends DurableObject<Bindings> {
          FROM article_index
          ${whereClause}
          ORDER BY created_at DESC
-         LIMIT ?`,
+         LIMIT ?
+         OFFSET ?`,
         ...bindings,
         safeLimit,
+        safeOffset,
       )
       .toArray() as ArticleRow[];
   }
 
   private async getPersonalizedTopicArticles(
     limit = 20,
+    offset = 0,
     createdAfter: string | null = null,
     createdBefore: string | null = null,
-  ): Promise<ArticleRow[]> {
-    if (!(await this.ensureTopicSpecialSchemaReady())) return [];
+  ): Promise<{ articles: ArticleRow[]; hasMore: boolean; nextOffset: number | null }> {
+    if (!(await this.ensureTopicSpecialSchemaReady())) {
+      return { articles: [], hasMore: false, nextOffset: null };
+    }
+    const safeLimit = Math.min(TOPIC_FEED_LIMIT_MAX, sanitizeLimit(limit, 1, TOPIC_FEED_LIMIT_MAX));
+    const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+    await this.materializeNewTopicFeedEntries();
+    return this.getFrozenTopicFeedArticles(safeLimit, safeOffset, createdAfter, createdBefore);
+  }
+
+  private async materializeNewTopicFeedEntries(): Promise<void> {
+    const latestDeliveredAt = this.getLatestDeliveredTopicGeneratedAt();
+    const recentCutoff = new Date(Date.now() - TOPIC_FEED_RECENT_WINDOW_MS).toISOString();
+    const latestNewRows = await this.listAllTopicSpecialRows({
+      generatedAfterExclusive: latestDeliveredAt,
+    });
+    const recentRows = latestNewRows.filter((row) => row.generated_at >= recentCutoff);
+    const olderRows = latestNewRows.filter((row) => row.generated_at < recentCutoff);
+    const selected = [
+      ...this.rankTopicRowsForUser(recentRows).map((item) => item.row),
+      ...olderRows,
+    ];
+
+    if (selected.length > 0) {
+      this.insertTopicFeedRows(selected);
+    }
+  }
+
+  private async getFrozenTopicFeedArticles(
+    limit: number,
+    offset: number,
+    createdAfter: string | null,
+    createdBefore: string | null,
+  ): Promise<{ articles: ArticleRow[]; hasMore: boolean; nextOffset: number | null }> {
+    const feedRows = this.getTopicFeedRows(limit + 1, offset, createdAfter, createdBefore);
+    if (feedRows.length === 0) {
+      return { articles: [], hasMore: false, nextOffset: null };
+    }
+
+    const topicRowsById = await this.getTopicSpecialRowsByIds(feedRows.map((row) => row.article_id));
+    const articles: ArticleRow[] = [];
+    for (const feedRow of feedRows.slice(0, limit)) {
+      const topicRow = topicRowsById.get(feedRow.article_id);
+      if (!topicRow) continue;
+      articles.push(this.toTopicArticleRow(topicRow, this.parseRelatedAssets(topicRow.related_assets_json)));
+    }
+    const hasMore = feedRows.length > limit;
+    return {
+      articles,
+      hasMore,
+      nextOffset: hasMore ? offset + articles.length : null,
+    };
+  }
+
+  private getLatestDeliveredTopicGeneratedAt(): string | null {
+    const row = this.ctx.storage.sql
+      .exec('SELECT MAX(generated_at) as generated_at FROM user_topic_feed')
+      .toArray()[0] as Record<string, unknown> | undefined;
+    return normalizeSqlString(row?.generated_at);
+  }
+
+  private getTopicFeedRows(
+    limit: number,
+    offset: number,
+    createdAfter: string | null,
+    createdBefore: string | null,
+  ): TopicFeedRow[] {
     const safeLimit = sanitizeLimit(limit, 1, 100);
-    const fetchLimit = Math.min(100, Math.max(safeLimit * TOPIC_SPECIAL_FETCH_MULTIPLIER, TOPIC_SPECIAL_MIN_FETCH));
+    const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+    const conditions: string[] = [];
+    const bindings: unknown[] = [];
+    if (createdAfter) {
+      conditions.push('generated_at >= ?');
+      bindings.push(createdAfter);
+    }
+    if (createdBefore) {
+      conditions.push('generated_at < ?');
+      bindings.push(createdBefore);
+    }
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    return this.ctx.storage.sql
+      .exec(
+        `SELECT
+          article_id,
+          feed_rank,
+          delivered_at,
+          generated_at
+         FROM user_topic_feed
+         ${whereClause}
+         ORDER BY feed_rank ASC
+         LIMIT ?
+         OFFSET ?`,
+        ...bindings,
+        safeLimit,
+        safeOffset,
+      )
+      .toArray() as TopicFeedRow[];
+  }
+
+  private insertTopicFeedRows(rows: TopicSpecialArticleIndexRow[]): void {
+    const uniqueRows = new Map<string, TopicSpecialArticleIndexRow>();
+    for (const row of rows) {
+      if (!uniqueRows.has(row.id)) uniqueRows.set(row.id, row);
+    }
+    const items = Array.from(uniqueRows.values());
+    if (items.length === 0) return;
+
+    const minRankRow = this.ctx.storage.sql
+      .exec('SELECT MIN(feed_rank) as min_rank FROM user_topic_feed')
+      .toArray()[0] as Record<string, unknown> | undefined;
+    const minRank = Number.isFinite(Number(minRankRow?.min_rank)) ? Number(minRankRow?.min_rank) : 1;
+    const startRank = minRank - items.length;
+    const deliveredAt = new Date().toISOString();
+
+    for (const [index, row] of items.entries()) {
+      this.ctx.storage.sql.exec(
+        `INSERT OR IGNORE INTO user_topic_feed (
+          article_id,
+          feed_rank,
+          delivered_at,
+          generated_at
+        ) VALUES (?, ?, ?, ?)`,
+        row.id,
+        startRank + index,
+        deliveredAt,
+        row.generated_at,
+      );
+    }
+  }
+
+  private async listTopicSpecialRows(
+    limit: number,
+    options?: {
+      createdAfter?: string | null;
+      createdBefore?: string | null;
+      generatedAfterExclusive?: string | null;
+      generatedAfterInclusive?: string | null;
+      generatedBeforeExclusive?: string | null;
+    },
+  ): Promise<TopicSpecialArticleIndexRow[]> {
     let rows: { results?: TopicSpecialArticleIndexRow[] };
     try {
       const conditions = [`status = 'ready'`];
       const bindings: unknown[] = [];
-      if (createdAfter) {
+      if (options?.createdAfter) {
         conditions.push('generated_at >= ?');
-        bindings.push(createdAfter);
+        bindings.push(options.createdAfter);
       }
-      if (createdBefore) {
+      if (options?.createdBefore) {
         conditions.push('generated_at < ?');
-        bindings.push(createdBefore);
+        bindings.push(options.createdBefore);
+      }
+      if (options?.generatedAfterExclusive) {
+        conditions.push('generated_at > ?');
+        bindings.push(options.generatedAfterExclusive);
+      }
+      if (options?.generatedAfterInclusive) {
+        conditions.push('generated_at >= ?');
+        bindings.push(options.generatedAfterInclusive);
+      }
+      if (options?.generatedBeforeExclusive) {
+        conditions.push('generated_at < ?');
+        bindings.push(options.generatedBeforeExclusive);
       }
       rows = await this.env.DB.prepare(
         `SELECT
@@ -1683,7 +1870,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
          ORDER BY generated_at DESC
          LIMIT ?`,
       )
-        .bind(...bindings, fetchLimit)
+        .bind(...bindings, Math.min(100, Math.max(1, limit)))
         .all<TopicSpecialArticleIndexRow>();
     } catch (error) {
       console.error('topic_special_query_failed', {
@@ -1691,10 +1878,72 @@ export class UserAgentDO extends DurableObject<Bindings> {
       });
       return [];
     }
+    return rows.results ?? [];
+  }
 
-    const topicRows = rows.results ?? [];
-    if (topicRows.length === 0) return [];
+  private async listAllTopicSpecialRows(options?: {
+    createdAfter?: string | null;
+    createdBefore?: string | null;
+    generatedAfterExclusive?: string | null;
+    generatedAfterInclusive?: string | null;
+    generatedBeforeExclusive?: string | null;
+  }): Promise<TopicSpecialArticleIndexRow[]> {
+    const output: TopicSpecialArticleIndexRow[] = [];
+    let cursorBefore = options?.createdBefore ?? options?.generatedBeforeExclusive ?? null;
 
+    while (true) {
+      const batch = await this.listTopicSpecialRows(TOPIC_FEED_MATERIALIZE_BATCH_SIZE, {
+        createdAfter: options?.createdAfter ?? null,
+        createdBefore: cursorBefore,
+        generatedAfterExclusive: options?.generatedAfterExclusive ?? null,
+        generatedAfterInclusive: options?.generatedAfterInclusive ?? null,
+      });
+      if (batch.length === 0) break;
+      output.push(...batch);
+      if (batch.length < TOPIC_FEED_MATERIALIZE_BATCH_SIZE) break;
+      const lastGeneratedAt = batch[batch.length - 1]?.generated_at ?? null;
+      if (!lastGeneratedAt || lastGeneratedAt === cursorBefore) break;
+      cursorBefore = lastGeneratedAt;
+    }
+
+    return output;
+  }
+
+  private async getTopicSpecialRowsByIds(articleIds: string[]): Promise<Map<string, TopicSpecialArticleIndexRow>> {
+    const uniqueIds = Array.from(new Set(articleIds.map((value) => value.trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return new Map();
+    try {
+      const placeholders = uniqueIds.map(() => '?').join(', ');
+      const result = await this.env.DB.prepare(
+        `SELECT
+           id,
+           title,
+           summary,
+           r2_key,
+           related_assets_json,
+           generated_at,
+           status
+         FROM topic_special_articles
+         WHERE status = 'ready'
+           AND id IN (${placeholders})`,
+      )
+        .bind(...uniqueIds)
+        .all<TopicSpecialArticleIndexRow>();
+      return new Map((result.results ?? []).map((row) => [row.id, row]));
+    } catch (error) {
+      console.error('topic_special_feed_detail_query_failed', {
+        message: error instanceof Error ? error.message : String(error),
+        articleIdCount: uniqueIds.length,
+      });
+      return new Map();
+    }
+  }
+
+  private rankTopicRowsForUser(rows: TopicSpecialArticleIndexRow[]): Array<{
+    row: TopicSpecialArticleIndexRow;
+    relatedAssets: string[];
+    rankScore: number;
+  }> {
     const eventAssets = this.getUserTopEventAssets(12);
     const eventWeight = new Map<string, number>();
     for (let index = 0; index < eventAssets.length; index += 1) {
@@ -1707,7 +1956,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     }
     const holdingAssets = new Set(this.getUserTopHoldingAssets(12));
 
-    const scored = topicRows.map((row, index) => {
+    const scored = rows.map((row, index) => {
       const relatedAssets = this.parseRelatedAssets(row.related_assets_json);
       const affinityScore = relatedAssets.reduce((score, asset) => {
         const eventScore = (eventWeight.get(asset) ?? 0) * 2;
@@ -1730,7 +1979,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       return Date.parse(b.row.generated_at) - Date.parse(a.row.generated_at);
     });
 
-    return scored.slice(0, safeLimit).map((item) => this.toTopicArticleRow(item.row, item.relatedAssets));
+    return scored;
   }
 
   private getUserTopEventAssets(limit = 12): string[] {
@@ -2268,21 +2517,19 @@ export class UserAgentDO extends DurableObject<Bindings> {
     });
   }
 
-  private async executeJob(jobType: JobType, payload: Record<string, unknown>): Promise<void> {
+  private async executeJob(jobType: JobType, payload: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     switch (jobType) {
       case 'daily_digest':
-        await this.generateDailyDigest(payload);
-        return;
+        return this.generateDailyDigest(payload);
       case 'portfolio_snapshot':
-        await this.capturePortfolioSnapshot();
-        return;
+        return this.capturePortfolioSnapshot();
       default:
         throw new Error(`unsupported_job_type_${jobType}`);
     }
   }
 
-  private async generateDailyDigest(_payload: Record<string, unknown>): Promise<void> {
-    await generateDailyDigestContent(_payload, {
+  private async generateDailyDigest(_payload: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+    return generateDailyDigestContent(_payload, {
       env: this.env,
       sql: this.ctx.storage.sql,
       getOwnerUserId: () => this.getOwnerUserId(),
@@ -2303,14 +2550,37 @@ export class UserAgentDO extends DurableObject<Bindings> {
     });
   }
 
-  private async capturePortfolioSnapshot(): Promise<void> {
+  private async capturePortfolioSnapshot(): Promise<Record<string, unknown>> {
     const wallet = this.getWalletSummary();
-    if (!wallet) return;
-    if (!this.isUserActive()) return;
+    const walletAddress = wallet?.address ?? wallet?.chainAccounts?.[0]?.address ?? null;
+    if (!wallet) {
+      return {
+        kind: 'portfolio_snapshot',
+        skipped: true,
+        reason: 'wallet_missing',
+        walletAddress,
+      };
+    }
+    if (!this.isUserActive()) {
+      return {
+        kind: 'portfolio_snapshot',
+        skipped: true,
+        reason: 'user_inactive',
+        walletAddress,
+      };
+    }
     const result = await fetchWalletPortfolio(this.env, wallet);
     this.savePortfolioSnapshot(result.asOf, result.totalUsd, result.holdings);
     this.markRecommendationsDirty();
     await this.ensurePortfolioSnapshotSchedule(result.asOf);
+    return {
+      kind: 'portfolio_snapshot',
+      skipped: false,
+      walletAddress,
+      asOf: result.asOf,
+      totalUsd: result.totalUsd,
+      holdingsCount: Array.isArray(result.holdings) ? result.holdings.length : 0,
+    };
   }
 
   private async getArticleMarkdown(articleId: string, r2Key: string): Promise<string> {

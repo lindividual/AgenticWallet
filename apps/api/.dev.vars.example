@@ -84,3 +84,8 @@ TRONSCAN_API_KEY=
 # Optional OpenNews / OpenTwitter data sources (from https://6551.io/mcp)
 OPENNEWS_TOKEN=
 TWITTER_TOKEN=
+
+# Optional admin API token for /v1/admin/* routes. Supports Authorization: Bearer <token>
+ADMIN_API_TOKEN=
+# Legacy alias kept for topic-special admin endpoints compatibility
+TOPIC_SPECIAL_ADMIN_TOKEN=

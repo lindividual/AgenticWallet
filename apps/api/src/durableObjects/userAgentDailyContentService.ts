@@ -110,7 +110,91 @@ type RiskSignal = {
   detail: string;
 };
 
-export async function generateDailyDigestContent(_payload: Record<string, unknown>, deps: ContentDeps): Promise<void> {
+type PromptDebugStats = {
+  systemChars: number;
+  userChars: number;
+  totalChars: number;
+  systemEstimatedTokens: number;
+  userEstimatedTokens: number;
+  totalEstimatedTokens: number;
+};
+
+export type DailyDigestJobResult = {
+  kind: 'daily_digest';
+  skipped: boolean;
+  dateKey: string;
+  articleId: string | null;
+  title: string | null;
+  summary: string | null;
+  debug: {
+    llm: {
+      enabled: boolean;
+      provider: string;
+      model: string;
+      baseUrl: string;
+      fallbackEnabled: boolean;
+      fallbackProvider: string;
+      fallbackModel: string;
+      fallbackBaseUrl: string;
+    };
+    sources: {
+      newsHeadlineCount: number;
+      userNewsCount: number;
+      marketNewsCount: number;
+      twitterCount: number;
+      marketAssetCount: number;
+      holdingsCount: number;
+      watchlistCount: number;
+    };
+    userContext: {
+      preferredLocale: string | null;
+      outputLanguage: string;
+      contextStrength: UserContextSignals['contextStrength'];
+      summary: string;
+      facts: string[];
+    };
+    generation: {
+      mode: 'llm' | 'fallback';
+      fallbackReason: 'already_exists' | 'llm_disabled' | 'llm_error' | null;
+      requestId: string | null;
+      cfRay: string | null;
+      provider: string | null;
+      model: string | null;
+      promptStats: PromptDebugStats | null;
+      systemPrompt: string | null;
+      userPrompt: string | null;
+      responseSnippet: string | null;
+      markdownSnippet: string | null;
+      error: ReturnType<typeof getLlmErrorInfo> | null;
+    };
+  };
+};
+
+function estimateTokenCount(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function captureDebugText(text: string | null | undefined, maxLength = 8000): string | null {
+  const normalized = text?.trim();
+  if (!normalized) return null;
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}\n\n...[truncated]` : normalized;
+}
+
+function buildPromptDebugStats(systemPrompt: string, userPrompt: string): PromptDebugStats {
+  return {
+    systemChars: systemPrompt.length,
+    userChars: userPrompt.length,
+    totalChars: systemPrompt.length + userPrompt.length,
+    systemEstimatedTokens: estimateTokenCount(systemPrompt),
+    userEstimatedTokens: estimateTokenCount(userPrompt),
+    totalEstimatedTokens: estimateTokenCount(`${systemPrompt}\n${userPrompt}`),
+  };
+}
+
+export async function generateDailyDigestContent(
+  _payload: Record<string, unknown>,
+  deps: ContentDeps,
+): Promise<DailyDigestJobResult> {
   const ownerUserId = deps.getOwnerUserId();
   if (!ownerUserId) {
     throw new Error('owner_user_not_initialized');
@@ -118,6 +202,9 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
 
   const now = new Date();
   const dateKey = isoDate(now);
+  const llmStatus = getLlmStatus(deps.env);
+  const preferredLocale = deps.getPreferredLocale?.() ?? null;
+  const language = resolveDailyLanguage(preferredLocale);
   const hasTodayArticle = deps.sql
     .exec(
       `SELECT id
@@ -131,7 +218,72 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     )
     .toArray()[0];
 
-  if (hasTodayArticle) return;
+  if (hasTodayArticle) {
+    const existingArticle = deps.sql
+      .exec(
+        `SELECT id, title, summary
+         FROM article_index
+         WHERE article_type = 'daily'
+           AND created_at >= ?
+           AND created_at < ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        `${dateKey}T00:00:00.000Z`,
+        `${tomorrowDate(dateKey)}T00:00:00.000Z`,
+      )
+      .toArray()[0] as Record<string, unknown> | undefined;
+
+    return {
+      kind: 'daily_digest',
+      skipped: true,
+      dateKey,
+      articleId: typeof existingArticle?.id === 'string' ? existingArticle.id : null,
+      title: typeof existingArticle?.title === 'string' ? existingArticle.title : null,
+      summary: typeof existingArticle?.summary === 'string' ? existingArticle.summary : null,
+      debug: {
+        llm: {
+          enabled: llmStatus.enabled,
+          provider: llmStatus.provider,
+          model: llmStatus.model,
+          baseUrl: llmStatus.baseUrl,
+          fallbackEnabled: llmStatus.fallbackEnabled,
+          fallbackProvider: llmStatus.fallbackProvider,
+          fallbackModel: llmStatus.fallbackModel,
+          fallbackBaseUrl: llmStatus.fallbackBaseUrl,
+        },
+        sources: {
+          newsHeadlineCount: 0,
+          userNewsCount: 0,
+          marketNewsCount: 0,
+          twitterCount: 0,
+          marketAssetCount: 0,
+          holdingsCount: 0,
+          watchlistCount: 0,
+        },
+        userContext: {
+          preferredLocale,
+          outputLanguage: language.outputLanguage,
+          contextStrength: 'weak',
+          summary: 'Daily digest already existed for this UTC date.',
+          facts: [],
+        },
+        generation: {
+          mode: 'fallback',
+          fallbackReason: 'already_exists',
+          requestId: null,
+          cfRay: null,
+          provider: llmStatus.provider || null,
+          model: llmStatus.model || null,
+          promptStats: null,
+          systemPrompt: null,
+          userPrompt: null,
+          responseSnippet: null,
+          markdownSnippet: null,
+          error: null,
+        },
+      },
+    };
+  }
 
   const recentEvents = deps.getLatestEvents(80);
   const eventSummary = summarizeEvents(recentEvents);
@@ -139,11 +291,8 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     .map((item) => item.symbol.trim().toUpperCase())
     .filter(Boolean);
   const preferredAssets = mergePreferredAssets(eventSummary.topAssets, watchlistSymbols, 10);
-  const preferredLocale = deps.getPreferredLocale?.() ?? null;
-  const language = resolveDailyLanguage(preferredLocale);
   const localeContext = buildLocaleContext(preferredLocale, language);
   const portfolioContext = buildPortfolioContext(deps.sql);
-  const llmStatus = getLlmStatus(deps.env);
   const supportedChains = getSupportedMarketChains();
   const holdings = getPortfolioHoldingsFromSnapshot(deps.sql);
   const topHoldingSymbols = holdings.slice(0, 8).map((item) => item.symbol);
@@ -210,6 +359,49 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     assetLookup,
   });
 
+  const debug: DailyDigestJobResult['debug'] = {
+    llm: {
+      enabled: llmStatus.enabled,
+      provider: llmStatus.provider,
+      model: llmStatus.model,
+      baseUrl: llmStatus.baseUrl,
+      fallbackEnabled: llmStatus.fallbackEnabled,
+      fallbackProvider: llmStatus.fallbackProvider,
+      fallbackModel: llmStatus.fallbackModel,
+      fallbackBaseUrl: llmStatus.fallbackBaseUrl,
+    },
+    sources: {
+      newsHeadlineCount: newsHeadlines.length,
+      userNewsCount: userNewsItems.length,
+      marketNewsCount: marketNewsItems.length,
+      twitterCount: twitterItems.length,
+      marketAssetCount: metadataAssets.length,
+      holdingsCount: holdings.length,
+      watchlistCount: watchlistSymbols.length,
+    },
+    userContext: {
+      preferredLocale,
+      outputLanguage: language.outputLanguage,
+      contextStrength: userSignals.contextStrength,
+      summary: userSignals.summary,
+      facts: userSignals.facts.slice(0, 8),
+    },
+    generation: {
+      mode: 'fallback',
+      fallbackReason: null,
+      requestId: null,
+      cfRay: null,
+      provider: null,
+      model: null,
+      promptStats: null,
+      systemPrompt: null,
+      userPrompt: null,
+      responseSnippet: null,
+      markdownSnippet: null,
+      error: null,
+    },
+  };
+
   let markdown = buildDailyDigestFallbackMarkdown({
     dateKey,
     language,
@@ -225,45 +417,68 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
   });
   if (llmStatus.enabled && metadataAssets.length > 0) {
     try {
+      const systemPrompt = buildDailyDigestSystemPrompt(language);
+      const userPrompt = buildDailyDigestUserPrompt(
+        dateKey,
+        ownerUserId,
+        eventSummary,
+        watchlistSymbols,
+        newsHeadlines,
+        portfolioContext,
+        language,
+        localeContext,
+        userNewsItems,
+        marketNewsItems,
+        twitterItems,
+        metadataAssets,
+        holdings,
+        userSignals,
+        opportunityCandidates,
+        riskSignals,
+      );
+      debug.generation.promptStats = buildPromptDebugStats(systemPrompt, userPrompt);
+      debug.generation.systemPrompt = captureDebugText(systemPrompt, 4000);
+      debug.generation.userPrompt = captureDebugText(userPrompt);
       const llmResult = await generateWithLlm(deps.env, {
         messages: [
           {
             role: 'system',
-            content: buildDailyDigestSystemPrompt(language),
+            content: systemPrompt,
           },
           {
             role: 'user',
-            content: buildDailyDigestUserPrompt(
-              dateKey,
-              ownerUserId,
-              eventSummary,
-              watchlistSymbols,
-              newsHeadlines,
-              portfolioContext,
-              language,
-              localeContext,
-              userNewsItems,
-              marketNewsItems,
-              twitterItems,
-              metadataAssets,
-              holdings,
-              userSignals,
-              opportunityCandidates,
-              riskSignals,
-            ),
+            content: userPrompt,
           },
         ],
         temperature: 0.5,
         maxTokens: 2000,
       });
       markdown = llmResult.text;
+      debug.generation.mode = 'llm';
+      debug.generation.fallbackReason = null;
+      debug.generation.requestId = llmResult.requestId ?? null;
+      debug.generation.cfRay = llmResult.cfRay ?? null;
+      debug.generation.provider = llmResult.provider ?? llmStatus.provider ?? null;
+      debug.generation.model = llmResult.model ?? llmStatus.model ?? null;
+      debug.generation.responseSnippet = captureDebugText(llmResult.text);
+      debug.generation.error = null;
     } catch (error) {
       const llmError = getLlmErrorInfo(error);
+      debug.generation.mode = 'fallback';
+      debug.generation.fallbackReason = 'llm_error';
+      debug.generation.provider = llmStatus.provider || null;
+      debug.generation.model = llmStatus.model || null;
+      debug.generation.error = llmError;
       console.error('daily_digest_llm_failed', {
         ...llmError,
         llm: llmStatus,
       });
     }
+  } else {
+    debug.generation.mode = 'fallback';
+    debug.generation.fallbackReason = llmStatus.enabled ? null : 'llm_disabled';
+    debug.generation.provider = llmStatus.provider || null;
+    debug.generation.model = llmStatus.model || null;
   }
 
   const title = buildDailyTitle(dateKey, language.localeCode);
@@ -293,6 +508,17 @@ export async function generateDailyDigestContent(_payload: Record<string, unknow
     createdAt,
     'ready',
   );
+
+  debug.generation.markdownSnippet = captureDebugText(markdown, 6000);
+  return {
+    kind: 'daily_digest',
+    skipped: false,
+    dateKey,
+    articleId,
+    title,
+    summary,
+    debug,
+  };
 }
 
 function buildDailyDigestSystemPrompt(language: DailyLanguage): string {

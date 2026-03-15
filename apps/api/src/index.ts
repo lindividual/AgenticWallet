@@ -15,7 +15,7 @@ app.use(
   cors({
     origin: '*',
     allowMethods: ['GET', 'POST', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'X-Topic-Special-Admin-Token'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Topic-Special-Admin-Token'],
   }),
 );
 

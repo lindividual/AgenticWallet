@@ -1,5 +1,4 @@
 import { Check } from 'lucide-react';
-import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
 
@@ -16,14 +15,7 @@ type SettingsDropdownProps = {
 export function SettingsDropdown({ onLogout }: SettingsDropdownProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
-  const navigate = useNavigate();
   const separator = <li aria-hidden="true" className="mx-3 my-2 h-px bg-base-300/70" />;
-  const language = i18n.resolvedLanguage ?? i18n.language ?? 'en';
-  const agentOpsLabel = language.startsWith('zh')
-    ? 'Agent 后台'
-    : language.startsWith('ar')
-      ? 'لوحة الوكيل'
-      : 'Agent Ops';
 
   return (
     <div className="dropdown dropdown-end">
@@ -87,16 +79,6 @@ export function SettingsDropdown({ onLogout }: SettingsDropdownProps) {
             </button>
           </li>
         ))}
-        {onLogout ? (
-          <>
-            {separator}
-            <li>
-              <button type="button" onClick={() => void navigate({ to: '/ops/agent' })}>
-                {agentOpsLabel}
-              </button>
-            </li>
-          </>
-        ) : null}
         {onLogout ? (
           <>
             {separator}

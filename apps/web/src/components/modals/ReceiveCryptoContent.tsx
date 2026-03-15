@@ -1,5 +1,5 @@
 import { useMemo, useState, type MouseEvent } from 'react';
-import { ArrowDownToLine, Copy, Info } from 'lucide-react';
+import { ArrowDownToLine, CircleHelp, Copy, Info } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import encodeQR from 'qr';
 import { AssetListItem } from '../AssetListItem';
@@ -24,6 +24,7 @@ type ReceiveCryptoContentProps = {
   onBack: () => void;
   onCopyAddress: (address: string) => void;
   onClose: () => void;
+  onOpenAgentChat?: (request?: { prompt?: string; intro?: string }) => void;
   footerVisible?: boolean;
   stageClassName?: string;
 };
@@ -101,6 +102,7 @@ export function ReceiveCryptoContent({
   onBack,
   onCopyAddress,
   onClose,
+  onOpenAgentChat,
   footerVisible = true,
   stageClassName,
 }: ReceiveCryptoContentProps) {
@@ -121,9 +123,6 @@ export function ReceiveCryptoContent({
     const bitcoinChains = supportedChains.filter((chain) => chain.protocol === 'btc');
     const evmNetworkLabel =
       evmChains.map((chain) => chain.name).join(' / ') || t('wallet.receiveAddressNetworkFallback', { network: 'EVM' });
-    const otherEvmChains = evmChains
-      .map((chain) => chain.name)
-      .filter((name) => name.trim() && name.trim().toLowerCase() !== 'ethereum');
     const svmAddress = chainAccounts.find((item) => item.protocol === 'svm')?.address?.trim() || '';
     const tronAddress = chainAccounts.find((item) => item.protocol === 'tvm')?.address?.trim() || '';
     const evmAddress = chainAccounts.find((item) => (item.protocol ?? 'evm') === 'evm')?.address?.trim() || walletAddress;
@@ -134,12 +133,9 @@ export function ReceiveCryptoContent({
         id: 'evm' as const,
         title: t('wallet.receiveAddressTypeEvm'),
         address: evmAddress,
-        addressLabel: t('wallet.receiveAddressOptionLabel', { chain: t('wallet.receiveAddressTypeEthereum') }),
+        addressLabel: t('wallet.receiveAddressTypeEvmLabel'),
         networkLabel: evmNetworkLabel,
-        helperText:
-          otherEvmChains.length > 0
-            ? t('wallet.receiveAddressSharedEvmNoticeWithNetworks', { networks: otherEvmChains.join(', ') })
-            : t('wallet.receiveAddressSharedEvmNotice'),
+        helperText: t('wallet.receiveAddressSharedEvmShortNotice'),
       },
       {
         id: 'tvm' as const,
@@ -206,14 +202,6 @@ export function ReceiveCryptoContent({
   return (
     <ModalContentScaffold
       title={step === 'type' ? t('wallet.receiveSelectAddressTypeTitle') : t('wallet.receiveTransferToAddressTitle')}
-      headerMeta={
-        step === 'type' ? (
-          <div className="space-y-1">
-            <p className="m-0 text-sm font-semibold text-base-content/80">{t('wallet.receiveAddressTypeHelpTitle')}</p>
-            <p className="m-0 text-sm leading-5 text-base-content/60">{t('wallet.receiveAddressTypeHelpBody')}</p>
-          </div>
-        ) : undefined
-      }
       bodyClassName={step === 'type' ? 'justify-center' : 'justify-start'}
       contentClassName="mt-6 flex min-h-0 flex-1 flex-col"
       stageClassName={stageClassName}
@@ -226,6 +214,29 @@ export function ReceiveCryptoContent({
     >
       {step === 'type' ? (
         <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            className="w-full cursor-pointer text-left"
+            onClick={handleButtonClick(() => {
+              onOpenAgentChat?.({
+                intro: t('wallet.receiveAddressGuideAgentIntro'),
+                prompt: t('wallet.receiveAddressGuideAgentPrompt'),
+              });
+            })}
+          >
+            <AssetListItem
+              className="rounded-2xl bg-base-200 py-3"
+              leftIcon={
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/12 text-primary">
+                  <CircleHelp size={22} aria-hidden />
+                </div>
+              }
+              leftPrimary={t('wallet.receiveAddressGuideOptionTitle')}
+              leftPrimaryClassName="text-lg"
+              leftSecondary={t('wallet.receiveAddressGuideOptionBody')}
+              leftSecondaryClassName="text-sm !text-base-content/70"
+            />
+          </button>
           {receiveOptions.map((option) => (
             <button
               key={option.id}

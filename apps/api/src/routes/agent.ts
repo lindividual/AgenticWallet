@@ -14,7 +14,20 @@ import {
   runUserAgentJobsNow,
   syncUserAgentPreferredLocale,
   syncUserAgentRequestLocale,
+  type AgentOpsOverview,
 } from '../services/agent';
+import {
+  getAdminUserAgentArticleDetail,
+  getAdminUserAgentDetail,
+  listAdminUserAgentSummaries,
+  listRecentTopicSpecialArticles,
+} from '../services/admin';
+import {
+  getAgentPromptConfig,
+  getAgentPromptSkills,
+  saveAgentPromptConfig,
+  saveAgentPromptSkills,
+} from '../services/agentPromptConfig';
 import { hydrateArticleRelatedAssets } from '../services/articleRelatedAssets';
 import { generateWithLlm, getLlmDebugStatus, getLlmErrorInfo, getLlmStatus } from '../services/llm';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
@@ -22,6 +35,7 @@ import { fetchOpenNewsCryptoNews, fetchOpenTwitterCryptoTweets, type NewsItem, t
 import {
   enqueueTopicSpecialGeneration,
   generateTopicSpecialPreviewViaDo,
+  getTopicSpecialOpsOverview,
   probeTopicSpecialDraftsViaDo,
   runTopicSpecialBatchViaDo,
 } from '../services/topicSpecialCoordinator';
@@ -62,16 +76,6 @@ function normalizeArticleTimeBound(raw: string | undefined, bound: 'from' | 'to'
   const parsedMs = Date.parse(normalized);
   if (!Number.isFinite(parsedMs)) return null;
   return new Date(parsedMs).toISOString();
-}
-
-function hasTopicSpecialAdminAccess(c: {
-  env: AppEnv['Bindings'];
-  req: { header: (name: string) => string | undefined };
-}): boolean {
-  const expected = c.env.TOPIC_SPECIAL_ADMIN_TOKEN?.trim();
-  if (!expected) return false;
-  const provided = (c.req.header('x-topic-special-admin-token') ?? '').trim();
-  return provided.length > 0 && provided === expected;
 }
 
 function estimatePromptTokens(text: string): number {
@@ -259,6 +263,108 @@ function safeJsonRecord(value: string): Record<string, unknown> | null {
   return parsed;
 }
 
+function safeJsonValue(value: string | null | undefined): unknown | null {
+  if (!value) return null;
+  return safeJsonParse<unknown>(value) ?? null;
+}
+
+function toApiAgentOpsOverview(overview: AgentOpsOverview, llm: ReturnType<typeof getLlmStatus>) {
+  return {
+    generatedAt: overview.generated_at,
+    llm,
+    locale: overview.locale,
+    activity: {
+      isActive: overview.activity.is_active,
+      activeUntil: overview.activity.active_until,
+      eventCount: overview.activity.event_count,
+      recentEvents: overview.activity.recent_events.map((event) => ({
+        id: event.id,
+        type: event.event_type,
+        occurredAt: event.occurred_at,
+        receivedAt: event.received_at,
+        dedupeKey: event.dedupe_key,
+        payload: safeJsonRecord(event.payload_json),
+      })),
+    },
+    daily: {
+      date: overview.daily.date,
+      status: overview.daily.status,
+      article: overview.daily.article ? toApiArticle(overview.daily.article) : null,
+      lastReadyArticle: overview.daily.last_ready_article ? toApiArticle(overview.daily.last_ready_article) : null,
+    },
+    jobs: {
+      counts: overview.jobs.counts,
+      nextQueuedRunAt: overview.jobs.next_queued_run_at,
+      recent: overview.jobs.recent.map((job) => ({
+        id: job.id,
+        type: job.job_type,
+        runAt: job.run_at,
+        status: job.status,
+        retryCount: job.retry_count,
+        jobKey: job.job_key,
+        createdAt: job.created_at,
+        updatedAt: job.updated_at,
+        payload: safeJsonRecord(job.payload_json),
+        result: safeJsonValue(job.result_json),
+      })),
+    },
+    recommendations: {
+      dirty: overview.recommendations.dirty,
+      lastRefreshedAt: overview.recommendations.last_refreshed_at,
+      count: overview.recommendations.count,
+      items: overview.recommendations.items.map((row) => ({
+        id: row.id,
+        kind: row.category,
+        title: row.asset_name,
+        content: row.reason,
+        asset: {
+          symbol: row.asset_symbol ?? row.asset_name,
+          chain: row.asset_chain,
+          contract: row.asset_contract,
+          name: row.asset_display_name ?? row.asset_name,
+          image: row.asset_image ?? null,
+          price_change_percentage_24h: row.asset_price_change_24h,
+        },
+        score: row.score,
+        created_at: row.generated_at,
+        valid_until: row.valid_until,
+        source: 'do',
+      })),
+    },
+    articles: {
+      items: overview.articles.items.map((row) => toApiArticle(row)),
+    },
+    portfolio: {
+      latestHourlySnapshot: overview.portfolio.latest_hourly_snapshot
+        ? {
+            bucketHourUtc: overview.portfolio.latest_hourly_snapshot.bucket_hour_utc,
+            totalUsd: overview.portfolio.latest_hourly_snapshot.total_usd,
+            holdingsCount: overview.portfolio.latest_hourly_snapshot.holdings_count,
+            asOf: overview.portfolio.latest_hourly_snapshot.as_of,
+            createdAt: overview.portfolio.latest_hourly_snapshot.created_at,
+          }
+        : null,
+      latestDailySnapshot: overview.portfolio.latest_daily_snapshot
+        ? {
+            bucketDateUtc: overview.portfolio.latest_daily_snapshot.bucket_date_utc,
+            totalUsd: overview.portfolio.latest_daily_snapshot.total_usd,
+            asOf: overview.portfolio.latest_daily_snapshot.as_of,
+            createdAt: overview.portfolio.latest_daily_snapshot.created_at,
+          }
+        : null,
+      points24h: overview.portfolio.points_24h,
+    },
+    watchlist: {
+      count: overview.watchlist.count,
+      items: overview.watchlist.items,
+    },
+    transfers: {
+      count: overview.transfers.count,
+      items: overview.transfers.items.map((row) => toApiTransfer(row)),
+    },
+  };
+}
+
 export function registerAgentRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/agent/events', async (c) => {
     const userId = c.get('userId');
@@ -327,9 +433,11 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
     const articleType = c.req.query('type') ?? undefined;
     const limitRaw = c.req.query('limit');
+    const offsetRaw = c.req.query('offset');
     const fromRaw = c.req.query('from');
     const toRaw = c.req.query('to');
     const limit = limitRaw ? Number(limitRaw) : 20;
+    const offset = offsetRaw ? Number(offsetRaw) : 0;
     const createdAfter = normalizeArticleTimeBound(fromRaw, 'from');
     const createdBefore = normalizeArticleTimeBound(toRaw, 'to');
     if (fromRaw && !createdAfter) {
@@ -341,15 +449,18 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
     if (createdAfter && createdBefore && Date.parse(createdAfter) >= Date.parse(createdBefore)) {
       return c.json({ error: 'invalid_range' }, 400);
     }
-    const articles = await listUserAgentArticles(c.env, userId, {
+    const articleResult = await listUserAgentArticles(c.env, userId, {
       articleType,
       limit: Number.isFinite(limit) ? limit : 20,
+      offset: Number.isFinite(offset) ? offset : 0,
       createdAfter,
       createdBefore,
     });
 
     return c.json({
-      articles: articles.map((row) => toApiArticle(row)),
+      articles: articleResult.articles.map((row) => toApiArticle(row)),
+      hasMore: articleResult.hasMore,
+      nextOffset: articleResult.nextOffset,
     });
   });
 
@@ -446,112 +557,159 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
       transferLimit: 8,
     });
 
-    return c.json({
-      generatedAt: overview.generated_at,
-      llm: getLlmStatus(c.env),
-      locale: overview.locale,
-      activity: {
-        isActive: overview.activity.is_active,
-        activeUntil: overview.activity.active_until,
-        eventCount: overview.activity.event_count,
-        recentEvents: overview.activity.recent_events.map((event) => ({
-          id: event.id,
-          type: event.event_type,
-          occurredAt: event.occurred_at,
-          receivedAt: event.received_at,
-          dedupeKey: event.dedupe_key,
-          payload: safeJsonRecord(event.payload_json),
-        })),
-      },
-      daily: {
-        date: overview.daily.date,
-        status: overview.daily.status,
-        article: overview.daily.article ? toApiArticle(overview.daily.article) : null,
-        lastReadyArticle: overview.daily.last_ready_article ? toApiArticle(overview.daily.last_ready_article) : null,
-      },
-      jobs: {
-        counts: overview.jobs.counts,
-        nextQueuedRunAt: overview.jobs.next_queued_run_at,
-        recent: overview.jobs.recent.map((job) => ({
-          id: job.id,
-          type: job.job_type,
-          runAt: job.run_at,
-          status: job.status,
-          retryCount: job.retry_count,
-          jobKey: job.job_key,
-          createdAt: job.created_at,
-          updatedAt: job.updated_at,
-          payload: safeJsonRecord(job.payload_json),
-        })),
-      },
-      recommendations: {
-        dirty: overview.recommendations.dirty,
-        lastRefreshedAt: overview.recommendations.last_refreshed_at,
-        count: overview.recommendations.count,
-        items: overview.recommendations.items.map((row) => ({
-          id: row.id,
-          kind: row.category,
-          title: row.asset_name,
-          content: row.reason,
-          asset: {
-            symbol: row.asset_symbol ?? row.asset_name,
-            chain: row.asset_chain,
-            contract: row.asset_contract,
-            name: row.asset_display_name ?? row.asset_name,
-            image: row.asset_image ?? null,
-            price_change_percentage_24h: row.asset_price_change_24h,
-          },
-          score: row.score,
-          created_at: row.generated_at,
-          valid_until: row.valid_until,
-          source: 'do',
-        })),
-      },
-      articles: {
-        items: overview.articles.items.map((row) => toApiArticle(row)),
-      },
-      portfolio: {
-        latestHourlySnapshot: overview.portfolio.latest_hourly_snapshot
-          ? {
-              bucketHourUtc: overview.portfolio.latest_hourly_snapshot.bucket_hour_utc,
-              totalUsd: overview.portfolio.latest_hourly_snapshot.total_usd,
-              holdingsCount: overview.portfolio.latest_hourly_snapshot.holdings_count,
-              asOf: overview.portfolio.latest_hourly_snapshot.as_of,
-              createdAt: overview.portfolio.latest_hourly_snapshot.created_at,
-            }
-          : null,
-        latestDailySnapshot: overview.portfolio.latest_daily_snapshot
-          ? {
-              bucketDateUtc: overview.portfolio.latest_daily_snapshot.bucket_date_utc,
-              totalUsd: overview.portfolio.latest_daily_snapshot.total_usd,
-              asOf: overview.portfolio.latest_daily_snapshot.as_of,
-              createdAt: overview.portfolio.latest_daily_snapshot.created_at,
-            }
-          : null,
-        points24h: overview.portfolio.points_24h,
-      },
-      watchlist: {
-        count: overview.watchlist.count,
-        items: overview.watchlist.items,
-      },
-      transfers: {
-        count: overview.transfers.count,
-        items: overview.transfers.items.map((row) => toApiTransfer(row)),
-      },
-    });
+    return c.json(toApiAgentOpsOverview(overview, getLlmStatus(c.env)));
   });
 
   app.get('/v1/agent/llm/status', async (c) => {
     return c.json(getLlmStatus(c.env));
   });
 
-  app.post('/v1/admin/llm/ping', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
+  app.get('/v1/admin/user-agents', async (c) => {
+    const limitRaw = Number(c.req.query('limit'));
+    const query = c.req.query('query') ?? '';
+    const result = await listAdminUserAgentSummaries(c.env, {
+      query,
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+    });
+    return c.json(result);
+  });
+
+  app.get('/v1/admin/agent/prompt-config', async (c) => {
+    const config = await getAgentPromptConfig(c.env.DB);
+    return c.json(config);
+  });
+
+  app.post('/v1/admin/agent/prompt-config', async (c) => {
+    const body = await c.req.json().catch(() => ({})) as {
+      basePromptText?: unknown;
+    };
+    const text = typeof body.basePromptText === 'string' ? body.basePromptText : '';
+
+    if (text.length > 20_000) {
+      return c.json({ error: 'prompt_too_large', message: 'basePromptText exceeds 20000 characters' }, 400);
     }
 
+    const config = await saveAgentPromptConfig(c.env.DB, {
+      basePromptText: text,
+    });
+    return c.json(config);
+  });
+
+  app.get('/v1/admin/agent/skills', async (c) => {
+    const skills = await getAgentPromptSkills(c.env.DB);
+    return c.json({ skills });
+  });
+
+  app.post('/v1/admin/agent/skills', async (c) => {
+    const body = await c.req.json().catch(() => ({})) as {
+      skills?: Array<{
+        slug?: unknown;
+        name?: unknown;
+        description?: unknown;
+        promptText?: unknown;
+        enabled?: unknown;
+        sortOrder?: unknown;
+      }>;
+    };
+
+    if (!Array.isArray(body.skills)) {
+      return c.json({ error: 'invalid_skills_payload' }, 400);
+    }
+
+    if (body.skills.length > 50) {
+      return c.json({ error: 'too_many_skills', message: 'skills exceeds 50 entries' }, 400);
+    }
+
+    const normalized = body.skills.map((skill, index) => ({
+      slug: typeof skill.slug === 'string' ? skill.slug : '',
+      name: typeof skill.name === 'string' ? skill.name : '',
+      description: typeof skill.description === 'string' ? skill.description : '',
+      promptText: typeof skill.promptText === 'string' ? skill.promptText : '',
+      enabled: skill.enabled === true,
+      sortOrder: typeof skill.sortOrder === 'number' ? skill.sortOrder : index,
+    }));
+
+    const duplicateSlug = (() => {
+      const seen = new Set<string>();
+      for (const skill of normalized) {
+        const slug = skill.slug.trim().toLowerCase();
+        if (!slug) continue;
+        if (seen.has(slug)) return slug;
+        seen.add(slug);
+      }
+      return null;
+    })();
+
+    if (duplicateSlug) {
+      return c.json({ error: 'duplicate_skill_slug', message: `duplicate slug: ${duplicateSlug}` }, 400);
+    }
+
+    const oversized = normalized.find((skill) => skill.promptText.length > 20_000);
+    if (oversized) {
+      return c.json({ error: 'skill_prompt_too_large', message: `skill prompt too large: ${oversized.slug || oversized.name}` }, 400);
+    }
+
+    const skills = await saveAgentPromptSkills(c.env.DB, normalized);
+    return c.json({ skills });
+  });
+
+  app.get('/v1/admin/user-agents/:userId', async (c) => {
+    try {
+      const detail = await getAdminUserAgentDetail(c.env, c.req.param('userId'));
+      return c.json({
+        user: detail.user,
+        wallet: detail.wallet,
+        overview: toApiAgentOpsOverview(detail.overview, getLlmStatus(c.env)),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'user_not_found') {
+        return c.json({ error: 'user_not_found' }, 404);
+      }
+      return c.json(
+        {
+          error: 'admin_user_agent_detail_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/v1/admin/user-agents/:userId/articles/:articleId', async (c) => {
+    const userId = c.req.param('userId');
+    const articleId = c.req.param('articleId');
+    const detail = await getAdminUserAgentArticleDetail(c.env, userId, articleId);
+    if (!detail) {
+      return c.json({ error: 'article_not_found' }, 404);
+    }
+
+    const relatedAssets = await hydrateArticleRelatedAssets(c.env, detail.relatedAssets ?? []);
+    return c.json({
+      article: {
+        ...toApiArticle(detail.article),
+      },
+      markdown: detail.markdown,
+      relatedAssets,
+    });
+  });
+
+  app.get('/v1/admin/topic-agent/overview', async (c) => {
+    const jobLimitRaw = Number(c.req.query('jobLimit'));
+    const articleLimitRaw = Number(c.req.query('articleLimit'));
+    const [ops, recentArticles] = await Promise.all([
+      getTopicSpecialOpsOverview(c.env, {
+        limit: Number.isFinite(jobLimitRaw) ? jobLimitRaw : undefined,
+      }),
+      listRecentTopicSpecialArticles(c.env, Number.isFinite(articleLimitRaw) ? articleLimitRaw : undefined),
+    ]);
+
+    return c.json({
+      ...ops,
+      recentArticles,
+    });
+  });
+
+  app.post('/v1/admin/llm/ping', async (c) => {
     const llm = await getLlmDebugStatus(c.env);
     if (!llm.enabled) {
       return c.json({ ok: false, llm, error: { message: 'llm_not_configured' } }, 503);
@@ -694,12 +852,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/llm/probe', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-
     const body: {
       preset?: 'tiny' | 'small_json' | 'large_json' | 'large_markdown';
       repeat?: number;
@@ -791,12 +943,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/llm/probe-with-topic-prefetch', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-
     const body: {
       preset?: 'tiny' | 'small_json' | 'large_json' | 'large_markdown';
       maxTokens?: number;
@@ -918,12 +1064,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/llm/probe-topic-draft', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
-
     const body = await c.req.json<{
       slotKey?: string;
       compactDraftPacket?: boolean;
@@ -998,11 +1138,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/topic-specials/run', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const body = await c.req.json<{ force?: boolean }>().catch(
       () =>
         ({
@@ -1025,7 +1160,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
       const message = error instanceof Error ? error.message : String(error);
       const details = getLlmErrorInfo(error);
       console.error('topic_special_admin_run_failed', {
-        userId,
+        authMode: 'admin_token',
         force: body.force === true,
         message,
         details,
@@ -1043,11 +1178,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/topic-specials/run-now', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const body = await c.req.json<{ force?: boolean; slotKey?: string }>().catch(
       () =>
         ({
@@ -1071,7 +1201,7 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
       const message = error instanceof Error ? error.message : String(error);
       const details = getLlmErrorInfo(error);
       console.error('topic_special_admin_run_now_failed', {
-        userId,
+        authMode: 'admin_token',
         force: body.force === true,
         slotKey: typeof body.slotKey === 'string' ? body.slotKey : undefined,
         message,
@@ -1090,11 +1220,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/topic-specials/r2-probe', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const key = `topic-special-probe/${new Date().toISOString()}.txt`;
     try {
       await c.env.AGENT_ARTICLES.put(key, 'ok');
@@ -1114,11 +1239,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/topic-specials/r2-probe-markdown', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const body = await c.req.json<{
       mode?: 'fixed' | 'preview';
       slotKey?: string;
@@ -1213,11 +1333,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/topic-specials/r2-probe-upload', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const body = await c.req.json<{
       markdown?: string;
       r2Key?: string;
@@ -1261,11 +1376,6 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
   });
 
   app.post('/v1/admin/topic-specials/preview', async (c) => {
-    const userId = c.get('userId');
-    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
-    if (!hasTopicSpecialAdminAccess(c)) {
-      return c.json({ error: 'forbidden' }, 403);
-    }
     const body = await c.req.json<{
       force?: boolean;
       slotKey?: string;

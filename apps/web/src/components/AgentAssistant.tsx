@@ -24,7 +24,11 @@ type AgentAssistantProps = {
   entryNudge?: AgentNudge | null;
   onClose?: () => void;
   pageContext: PageContext;
-  openRequestKey?: number;
+  openRequest?: {
+    key: number;
+    prompt?: string;
+    intro?: string;
+  };
 };
 
 type TransferPreviewActionState = 'quoting' | 'ready' | 'quoteError' | 'submitting' | 'submitError' | 'submitted';
@@ -141,7 +145,7 @@ function isTransferActionCard(action: ChatActionCard): action is TransferPreview
   return action.kind === 'transfer_preview';
 }
 
-export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRequestKey = 0 }: AgentAssistantProps) {
+export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRequest }: AgentAssistantProps) {
   const { i18n, t } = useTranslation();
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<'closed' | 'panel' | 'chat'>('closed');
@@ -624,8 +628,9 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   );
 
   useEffect(() => {
-    if (openRequestKey <= handledOpenRequestKeyRef.current) return;
-    handledOpenRequestKeyRef.current = openRequestKey;
+    const requestKey = openRequest?.key ?? 0;
+    if (requestKey <= handledOpenRequestKeyRef.current) return;
+    handledOpenRequestKeyRef.current = requestKey;
     setMessages([]);
     setInput('');
     setLoading(false);
@@ -634,8 +639,12 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
       setPhase('panel');
       return;
     }
+    if (openRequest?.prompt && openRequest.intro) {
+      void openTaskChat(openRequest.prompt, openRequest.intro);
+      return;
+    }
     openGenericChat();
-  }, [entryNudge, openGenericChat, openRequestKey]);
+  }, [entryNudge, openGenericChat, openRequest, openTaskChat]);
 
   const handleCloseChat = useCallback(() => {
     setPhase('closed');

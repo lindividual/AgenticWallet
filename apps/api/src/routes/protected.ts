@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { requireAuth } from '../middleware/auth';
+import { isAdminApiPath, requireAdminAuth, requireAuth } from '../middleware/auth';
 import { deleteSessionByToken } from '../services/session';
 import { getUserSummary } from '../services/user';
 import { tryEnsureWalletForUser } from '../services/wallet';
@@ -13,7 +13,15 @@ import { registerTransferRoutes } from './transfer';
 import { registerWalletRoutes } from './wallet';
 
 export function registerProtectedRoutes(app: Hono<AppEnv>): void {
-  app.use('/v1/*', requireAuth);
+  app.use('/v1/admin/*', requireAdminAuth);
+  app.use('/v1/*', async (c, next) => {
+    if (isAdminApiPath(c.req.path)) {
+      await next();
+      return;
+    }
+
+    await requireAuth(c, next);
+  });
 
   app.post('/v1/auth/logout', async (c) => {
     const token = c.get('sessionToken');

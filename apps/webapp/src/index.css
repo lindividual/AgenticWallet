@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: "light --default", "dark --prefersdark";
+}
+
+@theme {
+  --font-sans: 'Inter', 'General Sans', 'Noto Sans SC', 'PingFang SC', sans-serif;
+}
+
+:where(:root), [data-theme="light"] {
+  --color-primary: oklch(0% 0 0);
+  --color-primary-content: oklch(100% 0 0);
+}
+
+[data-theme="dark"] {
+  --color-primary: oklch(100% 0 0);
+  --color-primary-content: oklch(0% 0 0);
+}
+
+.btn {
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+@layer base {
+  html, body, #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+  }
+}

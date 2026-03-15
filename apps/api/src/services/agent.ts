@@ -45,6 +45,8 @@ type AgentRecommendationsResponse = {
 
 type AgentArticlesResponse = {
   articles: AgentArticle[];
+  hasMore: boolean;
+  nextOffset: number | null;
 };
 
 type AgentArticleDetailResponse = {
@@ -116,6 +118,7 @@ export type AgentOpsJob = {
   run_at: string;
   status: string;
   payload_json: string;
+  result_json: string | null;
   retry_count: number;
   job_key: string | null;
   created_at: string;
@@ -224,6 +227,7 @@ type UserAgentRpcStub = DurableObjectStub & {
     userId: string,
     options?: {
       limit?: number;
+      offset?: number;
       articleType?: string;
       createdAfter?: string | null;
       createdBefore?: string | null;
@@ -395,17 +399,26 @@ export async function listUserAgentArticles(
   userId: string,
   options?: {
     limit?: number;
+    offset?: number;
     articleType?: string;
     createdAfter?: string | null;
     createdBefore?: string | null;
   },
-): Promise<AgentArticle[]> {
+): Promise<AgentArticlesResponse> {
   const stub = getUserAgentStub(env, userId);
   try {
     const data = await stub.listArticlesRpc(userId, options);
-    return data.articles ?? [];
+    return {
+      articles: data.articles ?? [],
+      hasMore: data.hasMore === true,
+      nextOffset: typeof data.nextOffset === 'number' ? data.nextOffset : null,
+    };
   } catch {
-    return [];
+    return {
+      articles: [],
+      hasMore: false,
+      nextOffset: null,
+    };
   }
 }
 

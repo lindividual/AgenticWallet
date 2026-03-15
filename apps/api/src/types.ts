@@ -44,6 +44,7 @@ export type Bindings = {
   TRONSCAN_API_KEY?: string;
   OPENNEWS_TOKEN?: string;
   TWITTER_TOKEN?: string;
+  ADMIN_API_TOKEN?: string;
   TOPIC_SPECIAL_ADMIN_TOKEN?: string;
   TRADE_AGGREGATOR_BASE_URL?: string;
   TRADE_AGGREGATOR_API_KEY?: string;

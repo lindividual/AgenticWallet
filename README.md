@@ -21,6 +21,7 @@ Passkey-only login/register MVP for an agentic crypto wallet.
 ## Project Structure
 - `apps/api`: Worker API (also serves built frontend assets in production)
 - `apps/web`: React app
+- `apps/webapp`: 独立的 Agent 后台工程，构建后会挂到同域 `/ops/`
 
 ## App Config (配置文件)
 - Edit `apps/api/src/config/appConfig.ts` to control:
@@ -40,6 +41,7 @@ npm install
 ```bash
 cp apps/api/.dev.vars.example apps/api/.dev.vars
 cp apps/web/.env.example apps/web/.env
+cp apps/webapp/.env.example apps/webapp/.env
 ```
 - Update `apps/api/.dev.vars`:
   - `SIM_API_KEY`
@@ -47,6 +49,7 @@ cp apps/web/.env.example apps/web/.env
   - `COINGECKO_API_KEY` (optional, public free tier works without key)
   - `COINGECKO_API_BASE_URL` (optional, use `https://pro-api.coingecko.com/api/v3` for pro key)
   - `COINGECKO_USER_AGENT` (recommended, e.g. `AgenticWallet-MVP/0.1 (...)`)
+  - `ADMIN_API_TOKEN` (optional, enables `/v1/admin/*` management APIs without passkey/session)
   - `ETHEREUM_RPC_URL`
   - `BASE_RPC_URL`
   - `BNB_RPC_URL`
@@ -89,13 +92,33 @@ npm run dev:api
 npm run dev:web
 ```
 
+6. Build and open the admin console
+```bash
+npm run build:web
+npm run build:webapp
+npm run dev:api
+```
+
+Then open:
+- User app: `http://127.0.0.1:8787/`
+- Agent ops console: `http://127.0.0.1:8787/ops/`
+
+Notes:
+- `/ops/` now uses admin-token auth instead of passkey auth.
+- Set `ADMIN_API_TOKEN` in `apps/api/.dev.vars`, then paste the same token into the `/ops/` login screen.
+- The admin console currently has two views:
+  - `User Agent`: browse different users and inspect each user's useragent state.
+  - `Topic Agent`: inspect global topic-generation pipeline jobs and recent topic articles.
+- `/v1/admin/*` routes no longer reuse user session auth; they accept an admin token via `Authorization: Bearer <ADMIN_API_TOKEN>` (or legacy `X-Topic-Special-Admin-Token`).
+
 ## Single-Worker Deployment (API + Static Assets)
 1. Build frontend assets
 ```bash
 npm run build:web
+npm run build:webapp
 ```
 
-2. Deploy Worker (Hono API + `apps/web/dist` assets)
+2. Deploy Worker (Hono API + `apps/web/dist` assets, including `/ops/`)
 ```bash
 npm run deploy:worker
 ```

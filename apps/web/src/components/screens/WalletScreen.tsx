@@ -38,6 +38,7 @@ type WalletScreenProps = {
   auth: AuthState;
   onLogout: () => void;
   onOpenAssetDetail: (chain: string, contract: string) => void;
+  onOpenAgentChat: (request?: { prompt?: string; intro?: string }) => void;
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
@@ -239,7 +240,7 @@ function TokenAvatar({
   );
 }
 
-export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreenProps) {
+export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentChat }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
   const { showError, showSuccess } = useToast();
@@ -782,6 +783,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail }: WalletScreen
             void handleCopyAddress(address);
           }}
           onClose={closeActiveModal}
+          onOpenAgentChat={onOpenAgentChat}
           footerVisible={options.footerVisible}
           stageClassName={options.stageClassName}
         />

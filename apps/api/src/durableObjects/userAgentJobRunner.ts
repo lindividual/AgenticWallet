@@ -20,7 +20,7 @@ type AlarmStorage = {
 export async function runDueJobs(params: {
   sql: SqlStorage;
   alarmStorage: AlarmStorage;
-  executeJob: (jobType: JobType, payload: Record<string, unknown>) => Promise<void>;
+  executeJob: (jobType: JobType, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
 }): Promise<void> {
   const now = new Date();
   const dueJobs = params.sql
@@ -31,6 +31,7 @@ export async function runDueJobs(params: {
         run_at,
         status,
         payload_json,
+        result_json,
         retry_count,
         job_key
        FROM jobs
@@ -85,16 +86,18 @@ export async function enqueueJob(params: {
       run_at,
       status,
       payload_json,
+      result_json,
       retry_count,
       job_key,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     jobId,
     params.jobType,
     params.runAtIso,
     JOB_STATUS_QUEUED,
     JSON.stringify(params.payload),
+    null,
     0,
     normalizedJobKey,
     nowIso,
@@ -110,7 +113,7 @@ export async function enqueueJob(params: {
 
 async function runSingleJob(params: {
   sql: SqlStorage;
-  executeJob: (jobType: JobType, payload: Record<string, unknown>) => Promise<void>;
+  executeJob: (jobType: JobType, payload: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
   job: JobRow;
 }): Promise<void> {
   const startedAtMs = Date.now();
@@ -121,14 +124,20 @@ async function runSingleJob(params: {
     runAt: params.job.run_at,
     retryCount: params.job.retry_count,
   });
-  params.sql.exec('UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?', JOB_STATUS_RUNNING, nowIso, params.job.id);
+  params.sql.exec(
+    'UPDATE jobs SET status = ?, result_json = NULL, updated_at = ? WHERE id = ?',
+    JOB_STATUS_RUNNING,
+    nowIso,
+    params.job.id,
+  );
 
   try {
     const payload = safeJsonParse<Record<string, unknown>>(params.job.payload_json) ?? {};
-    await params.executeJob(params.job.job_type, payload);
+    const result = await params.executeJob(params.job.job_type, payload);
     params.sql.exec(
-      'UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?',
+      'UPDATE jobs SET status = ?, result_json = ?, updated_at = ? WHERE id = ?',
       JOB_STATUS_SUCCEEDED,
+      result ? JSON.stringify(result) : null,
       new Date().toISOString(),
       params.job.id,
     );

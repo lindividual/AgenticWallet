@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { CandlePoint, LivelinePoint } from 'liveline';
@@ -98,6 +98,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const { resolvedTheme } = useTheme();
   const { showError, showSuccess } = useToast();
   const queryClient = useQueryClient();
+  const reportedAssetViewKeysRef = useRef<Set<string>>(new Set());
   const normalizedType = normalizeTradeMarketDetailType(marketType) ?? 'perp';
   const normalizedItemId = itemId.trim();
   const [klinePeriod, setKlinePeriod] = useState<KlinePeriod>(() => (
@@ -248,15 +249,22 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     () => resolveThemeColor('--color-base-content', resolvedTheme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(0, 0, 0)'),
     [resolvedTheme],
   );
+  const assetViewDedupeKey = normalizedItemId
+    ? `asset_viewed:${normalizedType}:${normalizedItemId}`
+    : null;
+  const assetViewLabel = (displaySymbol || displayName).trim().toUpperCase();
 
   useEffect(() => {
+    if (!assetViewDedupeKey || !assetViewLabel) return;
+    if (reportedAssetViewKeysRef.current.has(assetViewDedupeKey)) return;
+    reportedAssetViewKeysRef.current.add(assetViewDedupeKey);
     ingestAgentEvent('asset_viewed', {
-      asset: (displaySymbol || displayName).toUpperCase(),
+      asset: assetViewLabel,
       itemId: normalizedItemId,
       marketType: normalizedType,
       source: 'trade_market_detail',
-    }).catch(() => undefined);
-  }, [displayName, displaySymbol, normalizedItemId, normalizedType]);
+    }, assetViewDedupeKey).catch(() => undefined);
+  }, [assetViewDedupeKey, assetViewLabel, normalizedItemId, normalizedType]);
 
   useEffect(() => {
     if (normalizedType !== 'prediction') {

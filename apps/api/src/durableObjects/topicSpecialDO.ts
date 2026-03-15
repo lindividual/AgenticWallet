@@ -14,6 +14,7 @@ import {
   type TopicSpecialSourcePacket,
 } from '../services/topicSpecials';
 import type { Bindings } from '../types';
+import type { TopicSpecialOpsOverview } from '../services/topicSpecialCoordinator';
 
 const JOB_STATUS_QUEUED = 'queued';
 const JOB_STATUS_STAGED = 'staged';
@@ -121,6 +122,61 @@ export class TopicSpecialSqliteDO extends DurableObject<Bindings> {
     options?: { force?: boolean };
   }): Promise<TopicSpecialGenerationResult> {
     return generateTopicSpecialBatchFromSourcePacket(this.env, input.packet, input.options);
+  }
+
+  async getOpsDashboardRpc(input?: { limit?: number }): Promise<TopicSpecialOpsOverview> {
+    const jobs = await this.listJobs();
+    const limit = clampOpsLimit(input?.limit);
+    const counts = {
+      queued: 0,
+      staged: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+    };
+
+    for (const job of jobs) {
+      if (job.status === JOB_STATUS_QUEUED) counts.queued += 1;
+      if (job.status === JOB_STATUS_STAGED) counts.staged += 1;
+      if (job.status === JOB_STATUS_RUNNING) counts.running += 1;
+      if (job.status === JOB_STATUS_SUCCEEDED) counts.succeeded += 1;
+      if (job.status === JOB_STATUS_FAILED) counts.failed += 1;
+    }
+
+    const activeSlotKeys = Array.from(
+      new Set(
+        jobs
+          .filter((job) =>
+            job.status === JOB_STATUS_QUEUED || job.status === JOB_STATUS_STAGED || job.status === JOB_STATUS_RUNNING)
+          .map((job) => job.slotKey),
+      ),
+    ).sort((a, b) => b.localeCompare(a));
+
+    const recentJobs = jobs
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit)
+      .map((job) => ({
+        id: job.id,
+        slotKey: job.slotKey,
+        force: job.force,
+        trigger: job.trigger,
+        status: job.status,
+        retryCount: job.retryCount,
+        runAt: job.runAt,
+        result: parseJobResult(job.resultJson),
+        errorMessage: job.errorMessage,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+      }));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      counts,
+      activeSlotKeys,
+      recentJobs,
+    };
   }
 
   async alarm(): Promise<void> {
@@ -377,4 +433,18 @@ function retryBackoffMs(retryCount: number): number {
   if (retryCount <= 1) return 30_000;
   if (retryCount === 2) return 2 * 60_000;
   return 5 * 60_000;
+}
+
+function parseJobResult(value: string | null): unknown | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function clampOpsLimit(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 12;
+  return Math.max(1, Math.min(30, Math.trunc(value as number)));
 }

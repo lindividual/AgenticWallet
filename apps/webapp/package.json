@@ -1,0 +1,28 @@
+{
+  "name": "@agentic-wallet/webapp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5180",
+    "build": "tsc -b && vite build && rm -rf ../web/dist/ops && mkdir -p ../web/dist/ops && cp -R dist/. ../web/dist/ops/"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "^13.2.2",
+    "@tanstack/react-query": "^5.90.2",
+    "lucide-react": "^0.575.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.24",
+    "daisyui": "^5.5.19",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.2.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.1"
+  }
+}
