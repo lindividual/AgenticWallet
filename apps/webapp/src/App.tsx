@@ -1395,8 +1395,8 @@ function TopicAgentPanel({
             </div>
           </SectionCard>
 
-          <SectionCard title="最近产出" subtitle="topic specials 文章">
-            <div className="grid gap-3 md:grid-cols-2">
+          <SectionCard title="最近产出" subtitle="topic specials 文章" bodyClassName="h-[36rem] overflow-y-auto pr-1">
+            <div className="flex flex-col gap-3">
               {overview.recentArticles.length > 0 ? (
                 overview.recentArticles.map((article) => (
                   <article key={article.id} className="rounded-[22px] border border-base-300/70 bg-base-200/45 p-4">

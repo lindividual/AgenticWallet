@@ -18,22 +18,53 @@ const DEFAULT_AGENT_PROMPT_CONFIG: AgentPromptConfig = {
   updatedAt: null,
 };
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingPromptConfigSchemaError(error: unknown, tableName: string): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes(`no such table: ${tableName}`) ||
+    (message.includes('no such column') && message.includes(tableName))
+  );
+}
+
 function normalizePromptText(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
 export async function getAgentPromptConfig(db: D1Database): Promise<AgentPromptConfig> {
-  const row = await db
-    .prepare(
-      `SELECT chat_system_prompt_mode, chat_system_prompt_text, updated_at
-         FROM agent_prompt_configs
-        WHERE id = 1`,
-    )
-    .first<{
-      chat_system_prompt_mode?: string | null;
-      chat_system_prompt_text?: string | null;
-      updated_at?: string | null;
-    }>();
+  let row:
+    | {
+        chat_system_prompt_mode?: string | null;
+        chat_system_prompt_text?: string | null;
+        updated_at?: string | null;
+      }
+    | null
+    | undefined;
+  try {
+    row = await db
+      .prepare(
+        `SELECT chat_system_prompt_mode, chat_system_prompt_text, updated_at
+           FROM agent_prompt_configs
+          WHERE id = 1`,
+      )
+      .first<{
+        chat_system_prompt_mode?: string | null;
+        chat_system_prompt_text?: string | null;
+        updated_at?: string | null;
+      }>();
+  } catch (error) {
+    if (!isMissingPromptConfigSchemaError(error, 'agent_prompt_configs')) {
+      throw error;
+    }
+    console.warn('agent_prompt_config_read_unavailable', {
+      table: 'agent_prompt_configs',
+      message: getErrorMessage(error),
+    });
+    return DEFAULT_AGENT_PROMPT_CONFIG;
+  }
 
   if (!row) return DEFAULT_AGENT_PROMPT_CONFIG;
   return {
@@ -43,13 +74,8 @@ export async function getAgentPromptConfig(db: D1Database): Promise<AgentPromptC
 }
 
 export async function getAgentPromptSkills(db: D1Database): Promise<AgentPromptSkill[]> {
-  const result = await db
-    .prepare(
-      `SELECT slug, name, description, prompt_text, enabled, sort_order, updated_at
-         FROM agent_prompt_skills
-        ORDER BY sort_order ASC, updated_at ASC, slug ASC`,
-    )
-    .all<{
+  let result: {
+    results?: Array<{
       slug?: string | null;
       name?: string | null;
       description?: string | null;
@@ -57,7 +83,34 @@ export async function getAgentPromptSkills(db: D1Database): Promise<AgentPromptS
       enabled?: number | null;
       sort_order?: number | null;
       updated_at?: string | null;
-    }>();
+    }>;
+  };
+  try {
+    result = await db
+      .prepare(
+        `SELECT slug, name, description, prompt_text, enabled, sort_order, updated_at
+           FROM agent_prompt_skills
+          ORDER BY sort_order ASC, updated_at ASC, slug ASC`,
+      )
+      .all<{
+        slug?: string | null;
+        name?: string | null;
+        description?: string | null;
+        prompt_text?: string | null;
+        enabled?: number | null;
+        sort_order?: number | null;
+        updated_at?: string | null;
+      }>();
+  } catch (error) {
+    if (!isMissingPromptConfigSchemaError(error, 'agent_prompt_skills')) {
+      throw error;
+    }
+    console.warn('agent_prompt_config_read_unavailable', {
+      table: 'agent_prompt_skills',
+      message: getErrorMessage(error),
+    });
+    return [];
+  }
 
   return (result.results ?? [])
     .map((row) => ({

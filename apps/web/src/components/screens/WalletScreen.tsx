@@ -32,6 +32,7 @@ import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
 import { buildChainAssetId } from '../../utils/assetIdentity';
 import { buildWalletAccountsFingerprint, normalizeContractForChain } from '../../utils/chainIdentity';
+import { formatChartTimeLabel } from '../../utils/kline';
 import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { getHiddenWalletAssetKeys } from '../../utils/walletHiddenAssets';
 
@@ -156,6 +157,12 @@ const BALANCE_CHART_PERIOD_OPTIONS: Array<{
   { value: '7d', labelKey: 'wallet.balanceChartPeriod7d' },
   { value: '30d', labelKey: 'wallet.balanceChartPeriod30d' },
 ];
+
+const BALANCE_CHART_BUCKET_SECONDS: Record<PortfolioSnapshotPeriod, number> = {
+  '24h': 3600,
+  '7d': 86_400,
+  '30d': 86_400,
+};
 
 function snapshotsToLivelinePoints(
   points: Array<{ ts: string; total_usd: number }> | undefined,
@@ -506,6 +513,8 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     const timeRange = chartLine[chartLine.length - 1].time - chartLine[0].time;
     return Math.max(timeRange, 3600);
   }, [chartLine]);
+
+  const chartBucketSeconds = BALANCE_CHART_BUCKET_SECONDS[balanceChartPeriod];
 
   const isChartLoading = isSnapshotLoading && chartLine.length === 0;
 
@@ -923,7 +932,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
               badge={false}
               window={chartWindow}
               formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
-              formatTime={() => ''}
+              formatTime={(time) => formatChartTimeLabel(time, i18n.language, chartBucketSeconds)}
               grid={false}
               scrub
               fill

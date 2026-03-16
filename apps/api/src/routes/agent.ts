@@ -534,6 +534,14 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
       });
       return c.json(result);
     } catch (error) {
+      console.error('agent_chat_failed', {
+        userId,
+        page: body.page,
+        sessionId: body.sessionId,
+        messageCount: body.messages.length,
+        message: error instanceof Error ? error.message : String(error),
+        details: getLlmErrorInfo(error),
+      });
       return c.json(
         {
           error: 'agent_chat_failed',

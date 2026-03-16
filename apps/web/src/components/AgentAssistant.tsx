@@ -1009,7 +1009,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     return (
       <div className="fixed inset-0 z-50 flex flex-col agent-chat-enter">
         <div className="flex-1 bg-black/20" onClick={handleCloseChat} />
-        <div className="agent-chat-sheet mx-auto flex w-full max-w-105 flex-col bg-base-100 shadow-2xl">
+        <div className="agent-chat-sheet mx-auto flex w-full flex-col bg-base-100 shadow-2xl">
           <div className="flex items-center justify-between border-b border-base-300 px-4 py-3">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
@@ -1061,7 +1061,7 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   return (
     <div className="fixed inset-0 z-50 flex flex-col agent-chat-enter">
       <div className="flex-1 bg-black/20" onClick={handleCloseChat} />
-      <div className="agent-chat-sheet mx-auto flex w-full max-w-105 flex-col bg-base-100 shadow-2xl">
+      <div className="agent-chat-sheet mx-auto flex w-full flex-col bg-base-100 shadow-2xl">
         <div className="flex items-center justify-between border-b border-base-300 px-4 py-3">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary">
@@ -1083,17 +1083,27 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`mb-3 flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`agent-chat-message-row ${
+                msg.role === 'user' ? 'agent-chat-message-row--user' : 'agent-chat-message-row--assistant'
+              }`}
             >
               {msg.role === 'assistant' && (
                 <div className="mr-2 mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary">
                   <Bot size={12} className="text-primary-content" />
                 </div>
               )}
-              <div className={`${msg.role === 'user' ? 'max-w-[80%]' : 'max-w-[88%]'}`}>
+              <div
+                className={`agent-chat-message-content ${
+                  msg.role === 'user'
+                    ? 'agent-chat-message-content--user'
+                    : 'agent-chat-message-content--assistant'
+                }`}
+              >
                 {msg.content ? (
                   <div
-                    className={`rounded-2xl px-3 py-2 text-sm leading-relaxed ${
+                    className={`agent-chat-bubble ${
+                      msg.role === 'user' ? 'agent-chat-bubble--user' : 'agent-chat-bubble--assistant'
+                    } ${
                       msg.role === 'user'
                         ? 'bg-primary text-primary-content'
                         : 'bg-base-200 text-base-content'
@@ -1115,11 +1125,11 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
             </div>
           ))}
           {loading && (
-            <div className="mb-3 flex justify-start">
+            <div className="agent-chat-message-row agent-chat-message-row--assistant">
               <div className="mr-2 mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary">
                 <Bot size={12} className="text-primary-content" />
               </div>
-              <div className="rounded-2xl bg-base-200 px-3 py-2 text-sm text-base-content/60">
+              <div className="agent-chat-bubble agent-chat-loading-bubble bg-base-200 text-base-content/60">
                 <span className="agent-thinking-dots">{t('agent.chatThinking')}</span>
               </div>
             </div>

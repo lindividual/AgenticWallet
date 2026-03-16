@@ -212,6 +212,7 @@
 .agent-chat-sheet {
   height: 80vh;
   max-height: 80dvh;
+  max-width: min(100%, 44rem);
 }
 
 @keyframes thinking-pulse {
@@ -221,6 +222,67 @@
 
 .agent-thinking-dots {
   animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+
+.agent-chat-message-row {
+  display: flex;
+  width: 100%;
+  margin-bottom: 0.75rem;
+}
+
+.agent-chat-message-row--assistant {
+  justify-content: flex-start;
+}
+
+.agent-chat-message-row--user {
+  justify-content: flex-end;
+}
+
+.agent-chat-message-content {
+  min-width: 0;
+}
+
+.agent-chat-message-content--assistant {
+  flex: 1 1 auto;
+  max-width: calc(100% - 2rem);
+}
+
+.agent-chat-message-content--user {
+  max-width: min(82%, 28rem);
+}
+
+.agent-chat-bubble {
+  border-radius: 1rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+.agent-chat-bubble--assistant,
+.agent-chat-loading-bubble {
+  width: min(100%, clamp(18rem, 78%, 38rem));
+}
+
+.agent-chat-bubble--user {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .agent-chat-sheet {
+    max-width: 100%;
+  }
+
+  .agent-chat-message-content--assistant,
+  .agent-chat-message-content--user {
+    max-width: 100%;
+  }
+
+  .agent-chat-bubble--assistant,
+  .agent-chat-loading-bubble {
+    width: min(100%, max(15rem, 84%));
+  }
 }
 
 .liquid-tab-bar {
