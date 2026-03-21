@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@biconomy/abstractjs": "^1.1.21",
+    "@nktkas/hyperliquid": "^0.32.1",
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",
     "@polymarket/clob-client": "^5.7.0",

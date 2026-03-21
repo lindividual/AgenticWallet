@@ -49,6 +49,9 @@ export type Bindings = {
   TRADE_AGGREGATOR_BASE_URL?: string;
   TRADE_AGGREGATOR_API_KEY?: string;
   TRADE_DEFAULT_SLIPPAGE_BPS?: string;
+  HYPERLIQUID_API_URL?: string;
+  HYPERLIQUID_TESTNET?: string;
+  HYPERLIQUID_DEFAULT_SLIPPAGE_BPS?: string;
   JUPITER_API_BASE_URL?: string;
   PREDICTION_CLOB_HOST?: string;
   PREDICTION_SIGNATURE_TYPE?: string;
@@ -195,6 +198,91 @@ export type TradeQuoteResponse = {
 
 export type TradeSubmitRequest = TradeQuoteRequest & {
   idempotencyKey?: string;
+};
+
+export type PerpsPositionSnapshot = {
+  coin: string;
+  size: string;
+  side: 'long' | 'short';
+  entryPrice: number | null;
+  markPrice: number | null;
+  positionValueUsd: number | null;
+  notionalUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  returnOnEquityPct: number | null;
+  liquidationPrice: number | null;
+  marginUsedUsd: number | null;
+  leverageType: 'cross' | 'isolated';
+  leverageValue: number | null;
+  maxLeverage: number | null;
+};
+
+export type PerpsOpenOrderSnapshot = {
+  coin: string;
+  side: 'long' | 'short';
+  limitPrice: number | null;
+  size: string;
+  originalSize: string;
+  orderId: number;
+  timestamp: number;
+  reduceOnly: boolean;
+};
+
+export type PerpsAccountSnapshot = {
+  available: boolean;
+  provider: 'hyperliquid';
+  userAddress: string | null;
+  balanceUsd: number | null;
+  withdrawableUsd: number | null;
+  marginUsedUsd: number | null;
+  totalPositionNotionalUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  openOrderCount: number;
+  positions: PerpsPositionSnapshot[];
+  openOrders: PerpsOpenOrderSnapshot[];
+  error: string | null;
+  updatedAt: string;
+};
+
+export type PerpsOrderRequest = {
+  coin: string;
+  side?: 'long' | 'short';
+  size: string;
+  orderType?: 'market' | 'limit';
+  limitPrice?: string;
+  reduceOnly?: boolean;
+  leverage?: number;
+  marginMode?: 'cross' | 'isolated';
+  slippageBps?: number;
+};
+
+export type PerpsOrderResponse = {
+  success: true;
+  coin: string;
+  side: 'long' | 'short';
+  size: string;
+  orderType: 'market' | 'limit';
+  limitPrice: string;
+  reduceOnly: boolean;
+  leverage: number | null;
+  marginMode: 'cross' | 'isolated';
+  orderId: number | null;
+  status: 'filled' | 'resting' | 'waitingForFill' | 'waitingForTrigger';
+  avgFillPrice: string | null;
+  totalFilledSize: string | null;
+  updatedAt: string;
+};
+
+export type PerpsCancelOrderRequest = {
+  coin: string;
+  orderId: number;
+};
+
+export type PerpsCancelOrderResponse = {
+  success: true;
+  coin: string;
+  orderId: number;
+  updatedAt: string;
 };
 
 export type PredictionBetRequest = {

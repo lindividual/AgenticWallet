@@ -139,6 +139,7 @@ type TradeBrowseShelfCacheEntry = {
   generatedAt: string;
   value: unknown;
 };
+type TradeBrowseBackgroundTaskScheduler = (task: Promise<unknown>) => void;
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const POLYMARKET_MARKETS_BASE_URL = 'https://gamma-api.polymarket.com/markets';
 const POLYMARKET_EVENTS_BASE_URL = 'https://gamma-api.polymarket.com/events';
@@ -310,15 +311,86 @@ async function writeTradeBrowseShelfToD1<K extends TradeBrowseShelfKey>(
     .run();
 }
 
+function setTradeBrowseShelfMemoryCache<K extends TradeBrowseShelfKey>(
+  shelfKey: K,
+  entry: { generatedAt: string; value: TradeBrowseShelfValueByKey[K] },
+  expiresAt: number,
+): void {
+  tradeBrowseShelfValueCache.set(shelfKey, {
+    expiresAt,
+    entry,
+  });
+}
+
+function refreshTradeBrowseShelf<K extends TradeBrowseShelfKey>(
+  env: Bindings,
+  shelfKey: K,
+  ttlMs: number,
+  fetcher: () => Promise<TradeBrowseShelfValueByKey[K]>,
+): Promise<TradeBrowseShelfCacheEntry> {
+  const existingInFlight = tradeBrowseShelfInFlight.get(shelfKey);
+  if (existingInFlight) return existingInFlight;
+
+  const task = (async () => {
+    const value = await fetcher();
+    const generatedAt = new Date().toISOString();
+    const entry = {
+      generatedAt,
+      value,
+    } satisfies { generatedAt: string; value: TradeBrowseShelfValueByKey[K] };
+
+    setTradeBrowseShelfMemoryCache(shelfKey, entry, Date.now() + ttlMs);
+    await writeTradeBrowseShelfToD1(env, shelfKey, value, generatedAt, ttlMs).catch(() => undefined);
+    return entry;
+  })().finally(() => {
+    tradeBrowseShelfInFlight.delete(shelfKey);
+  });
+
+  tradeBrowseShelfInFlight.set(shelfKey, task);
+  return task;
+}
+
+function queueTradeBrowseShelfRefresh<K extends TradeBrowseShelfKey>(
+  env: Bindings,
+  shelfKey: K,
+  ttlMs: number,
+  fetcher: () => Promise<TradeBrowseShelfValueByKey[K]>,
+  scheduleBackgroundTask?: TradeBrowseBackgroundTaskScheduler,
+): void {
+  const refreshTask = refreshTradeBrowseShelf(env, shelfKey, ttlMs, fetcher).catch((error) => {
+    console.warn('[trade-browse][refresh_failed_using_stale]', {
+      shelfKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  if (scheduleBackgroundTask) {
+    scheduleBackgroundTask(refreshTask);
+    return;
+  }
+
+  void refreshTask;
+}
+
 async function getCachedTradeBrowseShelf<K extends TradeBrowseShelfKey>(
   env: Bindings,
   shelfKey: K,
   ttlMs: number,
   fetcher: () => Promise<TradeBrowseShelfValueByKey[K]>,
+  fallbackValue: TradeBrowseShelfValueByKey[K],
+  scheduleBackgroundTask?: TradeBrowseBackgroundTaskScheduler,
 ): Promise<{ generatedAt: string; value: TradeBrowseShelfValueByKey[K] }> {
   const now = Date.now();
   const memoryCached = tradeBrowseShelfValueCache.get(shelfKey);
   if (memoryCached && memoryCached.expiresAt > now) {
+    return {
+      generatedAt: memoryCached.entry.generatedAt,
+      value: memoryCached.entry.value as TradeBrowseShelfValueByKey[K],
+    };
+  }
+
+  if (memoryCached) {
+    queueTradeBrowseShelfRefresh(env, shelfKey, ttlMs, fetcher, scheduleBackgroundTask);
     return {
       generatedAt: memoryCached.entry.generatedAt,
       value: memoryCached.entry.value as TradeBrowseShelfValueByKey[K],
@@ -334,43 +406,43 @@ async function getCachedTradeBrowseShelf<K extends TradeBrowseShelfKey>(
     };
   }
 
-  const task = (async () => {
-    const d1Cached = await readTradeBrowseShelfFromD1(env, shelfKey).catch(() => null);
-    if (d1Cached && !d1Cached.isExpired) {
-      const entry: TradeBrowseShelfCacheEntry = {
-        generatedAt: d1Cached.generatedAt,
-        value: d1Cached.value,
-      };
-      tradeBrowseShelfValueCache.set(shelfKey, {
-        expiresAt: Date.now() + ttlMs,
-        entry,
-      });
+  const d1Cached = await readTradeBrowseShelfFromD1(env, shelfKey).catch(() => null);
+  if (d1Cached) {
+    const entry = {
+      generatedAt: d1Cached.generatedAt,
+      value: d1Cached.value,
+    } satisfies { generatedAt: string; value: TradeBrowseShelfValueByKey[K] };
+
+    setTradeBrowseShelfMemoryCache(
+      shelfKey,
+      entry,
+      d1Cached.isExpired ? 0 : Date.now() + ttlMs,
+    );
+
+    if (!d1Cached.isExpired) {
       return entry;
     }
 
-    const value = await fetcher();
-    const generatedAt = new Date().toISOString();
-    const entry: TradeBrowseShelfCacheEntry = {
-      generatedAt,
-      value,
-    };
-
-    tradeBrowseShelfValueCache.set(shelfKey, {
-      expiresAt: Date.now() + ttlMs,
-      entry,
-    });
-    await writeTradeBrowseShelfToD1(env, shelfKey, value, generatedAt, ttlMs).catch(() => undefined);
+    queueTradeBrowseShelfRefresh(env, shelfKey, ttlMs, fetcher, scheduleBackgroundTask);
     return entry;
-  })().finally(() => {
-    tradeBrowseShelfInFlight.delete(shelfKey);
-  });
+  }
 
-  tradeBrowseShelfInFlight.set(shelfKey, task);
-  const entry = await task;
-  return {
-    generatedAt: entry.generatedAt,
-    value: entry.value as TradeBrowseShelfValueByKey[K],
-  };
+  try {
+    const entry = await refreshTradeBrowseShelf(env, shelfKey, ttlMs, fetcher);
+    return {
+      generatedAt: entry.generatedAt,
+      value: entry.value as TradeBrowseShelfValueByKey[K],
+    };
+  } catch (error) {
+    console.warn('[trade-browse][refresh_failed_without_stale]', {
+      shelfKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      generatedAt: new Date().toISOString(),
+      value: fallbackValue,
+    };
+  }
 }
 
 export function normalizeTradeMarketDetailType(value: unknown): TradeMarketDetailType | null {
@@ -1879,39 +1951,42 @@ export async function fetchTradeMarketKline(
   return [];
 }
 
-async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await fn();
-  } catch {
-    return fallback;
-  }
-}
-
-export async function fetchTradeBrowse(env: Bindings): Promise<TradeBrowseResponse> {
+export async function fetchTradeBrowse(
+  env: Bindings,
+  options?: { scheduleBackgroundTask?: TradeBrowseBackgroundTaskScheduler },
+): Promise<TradeBrowseResponse> {
   const [topMovers, trendings, perps, predictions] = await Promise.all([
     getCachedTradeBrowseShelf(
       env,
       'topMovers',
       TRADE_BROWSE_SHELF_TTL_MS.topMovers,
-      () => safeFetch(() => fetchTopMovers(env), []),
+      () => fetchTopMovers(env),
+      [],
+      options?.scheduleBackgroundTask,
     ),
     getCachedTradeBrowseShelf(
       env,
       'trendings',
       TRADE_BROWSE_SHELF_TTL_MS.trendings,
-      () => safeFetch(() => fetchTrendings(env), []),
+      () => fetchTrendings(env),
+      [],
+      options?.scheduleBackgroundTask,
     ),
     getCachedTradeBrowseShelf(
       env,
       'perps',
       TRADE_BROWSE_SHELF_TTL_MS.perps,
-      () => safeFetch(() => fetchPerps(env).then((items) => items.slice(0, 5)), []),
+      () => fetchPerps(env).then((items) => items.slice(0, 5)),
+      [],
+      options?.scheduleBackgroundTask,
     ),
     getCachedTradeBrowseShelf(
       env,
       'predictions',
       TRADE_BROWSE_SHELF_TTL_MS.predictions,
-      () => safeFetch(() => fetchPredictions(5), []),
+      () => fetchPredictions(5),
+      [],
+      options?.scheduleBackgroundTask,
     ),
   ]);
 

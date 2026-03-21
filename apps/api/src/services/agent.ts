@@ -10,7 +10,7 @@ type AgentEventIngestResult = {
   sequence: number;
 };
 
-type AgentJobType = 'daily_digest' | 'portfolio_snapshot';
+type AgentJobType = 'daily_digest' | 'portfolio_snapshot' | 'trade_shelf_refresh';
 
 export type AgentRecommendation = {
   id: string;
@@ -47,6 +47,40 @@ type AgentArticlesResponse = {
   articles: AgentArticle[];
   hasMore: boolean;
   nextOffset: number | null;
+};
+
+export type AgentTradeShelfResponse = {
+  generatedAt: string | null;
+  refreshState: {
+    dirty: boolean;
+    lastRefreshedAt: string | null;
+    needsRefresh: boolean;
+  };
+  sections: Array<{
+    id: 'holdings' | 'behavior' | 'fresh';
+    title: string;
+    items: Array<{
+      id: string;
+      kind: 'spot' | 'perp' | 'prediction';
+      itemId: string;
+      symbol: string;
+      title: string;
+      image: string | null;
+      chain: string | null;
+      contract: string | null;
+      currentPrice: number | null;
+      change24h: number | null;
+      probability: number | null;
+      volume24h: number | null;
+      reasonTag:
+        | 'Based on holdings'
+        | 'In your watchlist'
+        | 'Recently viewed'
+        | 'Recently traded'
+        | 'Trending now'
+        | 'Diversification';
+    }>;
+  }>;
 };
 
 type AgentArticleDetailResponse = {
@@ -233,6 +267,11 @@ type UserAgentRpcStub = DurableObjectStub & {
     userId: string,
     options?: { force?: boolean },
   ): Promise<{ ok: true; refreshed: boolean }>;
+  listTradeShelfRpc(userId: string): Promise<AgentTradeShelfResponse>;
+  refreshTradeShelfRpc(
+    userId: string,
+    options?: { force?: boolean },
+  ): Promise<{ ok: true; refreshed: boolean; shelf: AgentTradeShelfResponse }>;
   listArticlesRpc(
     userId: string,
     options?: {
@@ -402,6 +441,27 @@ export async function refreshUserAgentRecommendations(
   const stub = getUserAgentStub(env, userId);
   const data = await stub.refreshRecommendationsRpc(userId, options);
   return data.refreshed === true;
+}
+
+export async function getUserTradeShelf(
+  env: Bindings,
+  userId: string,
+): Promise<AgentTradeShelfResponse> {
+  const stub = getUserAgentStub(env, userId);
+  return stub.listTradeShelfRpc(userId);
+}
+
+export async function refreshUserTradeShelf(
+  env: Bindings,
+  userId: string,
+  options?: { force?: boolean },
+): Promise<{ refreshed: boolean; shelf: AgentTradeShelfResponse }> {
+  const stub = getUserAgentStub(env, userId);
+  const data = await stub.refreshTradeShelfRpc(userId, options);
+  return {
+    refreshed: data.refreshed === true,
+    shelf: data.shelf,
+  };
 }
 
 export async function listUserAgentArticles(

@@ -3,6 +3,7 @@ import {
   buildMergedPortfolioHoldings,
   fetchWalletPortfolio,
 } from '../services/market';
+import { getPerpsAccountSafe } from '../services/perps';
 import { listUserPortfolioSnapshots, saveUserPortfolioSnapshot } from '../services/agent';
 import { getPredictionAccountSafe } from '../services/prediction';
 import { ensureWalletForUser } from '../services/wallet';
@@ -31,8 +32,9 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       );
     }
     const holdings = result.holdings;
-    const [mergedHoldings, predictionAccount] = await Promise.all([
+    const [mergedHoldings, perpsAccount, predictionAccount] = await Promise.all([
       buildMergedPortfolioHoldings(c.env, holdings),
+      getPerpsAccountSafe(c.env, userId),
       getPredictionAccountSafe(c.env, userId, {
         signatureType: 'eoa',
       }),
@@ -50,6 +52,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       totalUsd,
       holdings,
       mergedHoldings,
+      perpsAccount,
       predictionAccount,
     });
   });

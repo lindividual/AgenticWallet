@@ -1,4 +1,4 @@
-export type JobType = 'daily_digest' | 'portfolio_snapshot';
+export type JobType = 'daily_digest' | 'portfolio_snapshot' | 'trade_shelf_refresh';
 
 export type EventRow = {
   id: string;
@@ -93,4 +93,78 @@ export type WatchlistAssetRow = {
   external_url: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type TradeShelfSectionId = 'holdings' | 'behavior' | 'fresh';
+
+export type TradeShelfItemKind = 'spot' | 'perp' | 'prediction';
+
+export type TradeShelfReasonTag =
+  | 'Based on holdings'
+  | 'In your watchlist'
+  | 'Recently viewed'
+  | 'Recently traded'
+  | 'Trending now'
+  | 'Diversification';
+
+export type TradeShelfStateRow = {
+  id: string;
+  dirty: number;
+  last_refreshed_at: string | null;
+  generated_at: string | null;
+  updated_at: string;
+};
+
+export type TradeShelfItemRow = {
+  id: string;
+  section_id: TradeShelfSectionId;
+  section_title: string;
+  item_rank: number;
+  item_kind: TradeShelfItemKind;
+  item_id: string;
+  symbol: string;
+  title: string;
+  image: string | null;
+  chain: string | null;
+  contract: string | null;
+  current_price: number | null;
+  change_24h: number | null;
+  probability: number | null;
+  volume_24h: number | null;
+  reason_tag: TradeShelfReasonTag;
+  score: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TradeShelfItem = {
+  id: string;
+  kind: TradeShelfItemKind;
+  itemId: string;
+  symbol: string;
+  title: string;
+  image: string | null;
+  chain: string | null;
+  contract: string | null;
+  currentPrice: number | null;
+  change24h: number | null;
+  probability: number | null;
+  volume24h: number | null;
+  reasonTag: TradeShelfReasonTag;
+};
+
+export type TradeShelfSection = {
+  id: TradeShelfSectionId;
+  title: string;
+  items: TradeShelfItem[];
+};
+
+export type TradeShelfResponse = {
+  generatedAt: string | null;
+  refreshState: {
+    dirty: boolean;
+    lastRefreshedAt: string | null;
+    needsRefresh: boolean;
+  };
+  sections: TradeShelfSection[];
 };

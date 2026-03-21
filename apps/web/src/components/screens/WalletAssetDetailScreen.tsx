@@ -14,7 +14,9 @@ import {
 } from '../../api';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { encodeTokenContractParam } from '../../utils/tokenRoute';
+import { buildTransferSelectableAsset } from '../../utils/transferAssets';
 import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
+import { buildChainAssetId } from '../../utils/assetIdentity';
 import { CachedIconImage } from '../CachedIconImage';
 import { Modal } from '../modals/Modal';
 import { ReceiveCryptoContent } from '../modals/ReceiveCryptoContent';
@@ -37,12 +39,6 @@ type WalletAssetDetailScreenProps = {
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
-type TransferPresetAsset = {
-  networkKey: string;
-  tokenAddress?: string;
-  tokenSymbol?: string;
-  tokenDecimals?: number;
-};
 
 const MODAL_CONTENT_SWITCH_MS = 280;
 
@@ -51,6 +47,18 @@ type WalletAssetHolding = {
   symbol: string;
   name: string;
   logo: string | null;
+  amountText: string;
+  amountValue: number;
+  valueUsd: number;
+  matchedChainAssetId: string | null;
+  variants: WalletAssetHoldingVariant[];
+};
+
+type WalletAssetHoldingVariant = {
+  chainAssetId: string;
+  chain: string;
+  networkKey: string;
+  contract: string;
   amountText: string;
   amountValue: number;
   valueUsd: number;
@@ -67,6 +75,11 @@ function normalizeLower(raw: string | null | undefined): string {
 
 function normalizeAssetId(raw: string | null | undefined): string | null {
   const value = normalizeLower(raw);
+  return value || null;
+}
+
+function normalizeChainAssetId(raw: string | null | undefined): string | null {
+  const value = normalizeText(raw);
   return value || null;
 }
 
@@ -149,6 +162,31 @@ function matchesAssetVariant(variant: SimEvmBalance, chain: string, contract: st
   return variantChain === normalizeLower(chain) && variantContract === normalizeContractForMatch(contract);
 }
 
+function buildHoldingVariant(variant: SimEvmBalance): WalletAssetHoldingVariant {
+  const enrichedVariant = variant as SimEvmBalance & {
+    market_chain?: string;
+    contract_key?: string;
+    chain_asset_id?: string;
+  };
+  const chain = normalizeLower(enrichedVariant.market_chain ?? enrichedVariant.chain);
+  const contract = normalizeText(enrichedVariant.contract_key ?? enrichedVariant.address);
+  const chainAssetId = normalizeChainAssetId(
+    enrichedVariant.chain_asset_id ?? buildChainAssetId(chain, contract),
+  ) ?? buildChainAssetId(chain, contract);
+  const amountValue = toDisplayAmount(variant.amount, variant.decimals);
+
+  return {
+    chainAssetId,
+    chain,
+    networkKey: normalizeText(variant.network_key) ?? '',
+    contract: contract ?? '',
+    amountText: formatDisplayAmount(amountValue),
+    amountValue,
+    valueUsd: Number(variant.value_usd ?? 0),
+    transferAsset: variant,
+  };
+}
+
 function resolveSelectedHolding(
   portfolio: WalletPortfolioResponse | null | undefined,
   chain: string,
@@ -160,7 +198,9 @@ function resolveSelectedHolding(
   for (const item of merged) {
     const variants = [...(item.variants ?? [])].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
     if (!variants.some((variant) => matchesAssetVariant(variant, chain, contract))) continue;
-    const primary = variants[0];
+    const holdingVariants = variants.map(buildHoldingVariant);
+    const matchedVariant = holdingVariants.find((variant) => matchesAssetVariant(variant.transferAsset, chain, contract)) ?? null;
+    const primary = matchedVariant?.transferAsset ?? variants[0];
     if (!primary) continue;
     const totalAmount = variants.reduce((sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals), 0);
     return {
@@ -177,7 +217,8 @@ function resolveSelectedHolding(
       amountText: formatDisplayAmount(totalAmount),
       amountValue: totalAmount,
       valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
-      transferAsset: primary,
+      matchedChainAssetId: matchedVariant?.chainAssetId ?? null,
+      variants: holdingVariants,
     };
   }
 
@@ -200,7 +241,9 @@ function resolveSelectedHolding(
   for (const group of grouped.values()) {
     const variants = [...group.variants].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
     if (!variants.some((variant) => matchesAssetVariant(variant, chain, contract))) continue;
-    const primary = variants[0];
+    const holdingVariants = variants.map(buildHoldingVariant);
+    const matchedVariant = holdingVariants.find((variant) => matchesAssetVariant(variant.transferAsset, chain, contract)) ?? null;
+    const primary = matchedVariant?.transferAsset ?? variants[0];
     if (!primary) continue;
     const totalAmount = variants.reduce((sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals), 0);
     return {
@@ -216,7 +259,8 @@ function resolveSelectedHolding(
       amountText: formatDisplayAmount(totalAmount),
       amountValue: totalAmount,
       valueUsd: group.totalValueUsd,
-      transferAsset: primary,
+      matchedChainAssetId: matchedVariant?.chainAssetId ?? null,
+      variants: holdingVariants,
     };
   }
 
@@ -285,7 +329,6 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
   const [tradeBackTarget, setTradeBackTarget] = useState<'topUp' | 'close'>('close');
-  const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
@@ -316,6 +359,11 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
+  const supportedChains = appConfig?.supportedChains ?? [];
+  const chainNameByNetworkKey = useMemo(
+    () => new Map(supportedChains.map((item) => [item.networkKey, item.name] as const)),
+    [supportedChains],
+  );
   const { data: portfolioData } = useQuery({
     queryKey: ['wallet-portfolio', walletFingerprint],
     queryFn: () => getWalletPortfolio(),
@@ -328,9 +376,32 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
     () => resolveSelectedHolding(portfolioData, normalizedChain, normalizedContract),
     [normalizedChain, normalizedContract, portfolioData],
   );
+  const [activeChainAssetId, setActiveChainAssetId] = useState<string | null>(null);
 
-  const detailChain = normalizeLower(selectedHolding?.transferAsset.chain ?? normalizedChain);
-  const detailContractCandidate = normalizeText(selectedHolding?.transferAsset.address ?? normalizedContract);
+  useEffect(() => {
+    if (!selectedHolding) {
+      setActiveChainAssetId(null);
+      return;
+    }
+    const nextActiveChainAssetId = selectedHolding.matchedChainAssetId ?? selectedHolding.variants[0]?.chainAssetId ?? null;
+    setActiveChainAssetId((current) => {
+      if (current && selectedHolding.variants.some((variant) => variant.chainAssetId === current)) {
+        return current;
+      }
+      return nextActiveChainAssetId;
+    });
+  }, [selectedHolding]);
+
+  const activeVariant = useMemo(
+    () => selectedHolding?.variants.find((variant) => variant.chainAssetId === activeChainAssetId)
+      ?? selectedHolding?.variants.find((variant) => variant.chainAssetId === selectedHolding.matchedChainAssetId)
+      ?? selectedHolding?.variants[0]
+      ?? null,
+    [activeChainAssetId, selectedHolding],
+  );
+
+  const detailChain = normalizeLower(activeVariant?.chain ?? normalizedChain);
+  const detailContractCandidate = normalizeText(activeVariant?.contract ?? normalizedContract);
   const detailContract = normalizeContractForMatch(detailContractCandidate) === 'native'
     ? ''
     : detailContractCandidate;
@@ -365,26 +436,26 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
     queryKey: [
       'transfer-history',
       50,
-      selectedHolding?.transferAsset.network_key ?? null,
-      selectedHolding ? normalizeContractForMatch(selectedHolding.transferAsset.address) : null,
+      activeVariant?.transferAsset.network_key ?? null,
+      activeVariant ? normalizeContractForMatch(activeVariant.transferAsset.address) : null,
       selectedHolding?.symbol ?? null,
     ],
     queryFn: () =>
       getTransferHistory({
         limit: 50,
-        networkKey: selectedHolding?.transferAsset.network_key,
-        chainId: selectedHolding?.transferAsset.chain_id ?? undefined,
+        networkKey: activeVariant?.transferAsset.network_key,
+        chainId: activeVariant?.transferAsset.chain_id ?? undefined,
         tokenAddress:
-          normalizeContractForMatch(selectedHolding?.transferAsset.address) === 'native'
+          normalizeContractForMatch(activeVariant?.transferAsset.address) === 'native'
             ? null
-            : normalizeText(selectedHolding?.transferAsset.address) || undefined,
+            : normalizeText(activeVariant?.transferAsset.address) || undefined,
         tokenSymbol: selectedHolding?.symbol || undefined,
         assetType:
-          normalizeContractForMatch(selectedHolding?.transferAsset.address) === 'native'
+          normalizeContractForMatch(activeVariant?.transferAsset.address) === 'native'
             ? 'native'
             : 'erc20',
       }),
-    enabled: Boolean(walletAddress && selectedHolding),
+    enabled: Boolean(walletAddress && selectedHolding && activeVariant),
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
@@ -405,7 +476,6 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
     [detail?.symbol, perpSearchResults, selectedHolding?.symbol],
   );
 
-  const supportedChains = appConfig?.supportedChains ?? [];
   const transferSupportedChains = useMemo(
     () => supportedChains.filter((item) => item.protocol === 'evm' || item.protocol === 'svm' || item.protocol === 'tvm' || item.protocol === 'btc'),
     [supportedChains],
@@ -417,8 +487,33 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
   const displaySymbol = (selectedHolding?.symbol ?? detail?.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
   const displayName = (selectedHolding?.name ?? detail?.name ?? '').trim() || t('wallet.token');
   const displayLogo = selectedHolding?.logo ?? resolveHoldingIcon(detail?.image);
+  const lockedTransferAsset = useMemo(
+    () => (
+      activeVariant && selectedHolding
+        ? buildTransferSelectableAsset(activeVariant.transferAsset as SimEvmBalance & { market_chain?: string; contract_key?: string }, {
+            assetId: selectedHolding.assetId,
+            symbol: selectedHolding.symbol,
+            name: selectedHolding.name,
+            logo: selectedHolding.logo,
+          })
+        : null
+    ),
+    [activeVariant, selectedHolding],
+  );
   const amountText = selectedHolding?.amountText ?? '--';
   const valueUsd = Number(selectedHolding?.valueUsd ?? 0);
+  const activeChainLabel = useMemo(() => {
+    if (!activeVariant) return normalizedChain.toUpperCase();
+    return chainNameByNetworkKey.get(activeVariant.networkKey)
+      ?? normalizeText(activeVariant.transferAsset.chain)?.toUpperCase()
+      ?? activeVariant.networkKey
+      ?? normalizedChain.toUpperCase();
+  }, [activeVariant, chainNameByNetworkKey, normalizedChain]);
+  const assetScopeLabel = selectedHolding
+    ? selectedHolding.variants.length > 1
+      ? t('wallet.assetDetailAcrossChains', { count: selectedHolding.variants.length })
+      : activeChainLabel
+    : null;
   const currentPrice = Number.isFinite(Number(detail?.currentPriceUsd))
     ? Number(detail?.currentPriceUsd)
     : selectedHolding && selectedHolding.amountValue > 0
@@ -427,19 +522,35 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
   const priceChangePct = Number.isFinite(Number(detail?.priceChange24h)) ? Number(detail?.priceChange24h) : null;
   const priceChangeClassName = toneClass(priceChangePct);
   const sparklinePath = useMemo(() => buildSparklinePath(klineData, 90, 28), [klineData]);
-  const supportedTradeNetworkKey = selectedHolding?.transferAsset.network_key ?? null;
-  const supportedTradeChain = selectedHolding?.transferAsset.chain_id ?? null;
+  const supportedTradeNetworkKey = activeVariant?.transferAsset.network_key ?? null;
+  const supportedTradeChain = activeVariant?.transferAsset.chain_id ?? null;
   const tradeTokenConfig = supportedTradeNetworkKey ? getTradeTokenConfig(supportedTradeNetworkKey) : null;
-  const tradeTokenAddress = normalizeText(selectedHolding?.transferAsset.address);
+  const tradeTokenAddress = normalizeText(activeVariant?.transferAsset.address);
   const canTradeToken = Boolean(
     supportedTradeChain
       && tradeTokenConfig
       && /^0x[a-fA-F0-9]{40}$/.test(tradeTokenAddress)
       && normalizeContractForMatch(tradeTokenAddress) !== 'native',
   );
-  const canTransferAsset = Boolean(selectedHolding);
+  const canTransferAsset = Boolean(lockedTransferAsset);
   const hasPerpCard = Boolean(
     matchedPerpMarket,
+  );
+  const chainBreakdownItems = useMemo(
+    () => (selectedHolding?.variants ?? []).map((variant) => {
+      const chainLabel = chainNameByNetworkKey.get(variant.networkKey)
+        ?? normalizeText(variant.transferAsset.chain)?.toUpperCase()
+        ?? variant.networkKey
+        ?? '--';
+      const share = valueUsd > 0 ? variant.valueUsd / valueUsd : 0;
+      return {
+        ...variant,
+        chainLabel,
+        share,
+        isActive: variant.chainAssetId === activeVariant?.chainAssetId,
+      };
+    }),
+    [activeVariant?.chainAssetId, chainNameByNetworkKey, selectedHolding?.variants, valueUsd],
   );
 
   const historyRows = useMemo(() => {
@@ -541,8 +652,8 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
   }, [securityAudit, t]);
 
   function openTokenDetail(): void {
-    const nextChain = normalizeText(selectedHolding?.transferAsset.chain ?? normalizedChain);
-    const nextContract = normalizeText(selectedHolding?.transferAsset.address ?? normalizedContract);
+    const nextChain = normalizeText(activeVariant?.chain ?? normalizedChain);
+    const nextContract = normalizeText(activeVariant?.contract ?? normalizedContract);
     void navigate({
       to: '/token/$chain/$contract',
       params: {
@@ -653,34 +764,13 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
   }
 
   function openTransferModal(): void {
-    const asset = selectedHolding?.transferAsset as (SimEvmBalance & { market_chain?: string }) | undefined;
-    const tokenAddress = normalizeText(asset?.address);
-    const normalizedChain = normalizeText(asset?.chain ?? asset?.market_chain);
-    const isValidTokenAddress = normalizedChain === 'tron'
-      ? /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(tokenAddress)
-      : /^0x[a-fA-F0-9]{40}$/.test(tokenAddress);
-    const isNative = normalizeContractForMatch(tokenAddress) === 'native';
-
-    setPresetTransferAsset(
-      asset
-        ? {
-            networkKey: asset.network_key,
-            ...(isValidTokenAddress && !isNative
-              ? {
-                  tokenAddress,
-                  tokenSymbol: asset.symbol,
-                  tokenDecimals: asset.decimals,
-                }
-              : {}),
-          }
-        : null,
-    );
+    if (!lockedTransferAsset) return;
     setTradePreset(null);
     showModal('transfer', snapshotRect(transferButtonRef.current));
   }
 
   function openTradeModal(): void {
-    if (!canTradeToken || !tradeTokenConfig || !supportedTradeNetworkKey || !selectedHolding) return;
+    if (!canTradeToken || !tradeTokenConfig || !supportedTradeNetworkKey || !activeVariant) return;
     setTradeBackTarget('close');
     setTradePreset({
       mode: 'buy',
@@ -689,7 +779,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
       buyToken: {
         address: tradeTokenAddress,
         symbol: displaySymbol,
-        decimals: selectedHolding.transferAsset.decimals,
+        decimals: activeVariant.transferAsset.decimals,
       },
       assetSymbolForEvent: displaySymbol,
     });
@@ -729,7 +819,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
           chainAccounts={auth.wallet?.chainAccounts}
           supportedChains={supportedChains}
           onBack={backToTopUp}
-          onCopyAddress={async (address) => {
+          onCopyAddress={async (address: string) => {
             if (!address) return;
             await navigator.clipboard.writeText(address);
           }}
@@ -744,7 +834,9 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
       return (
         <TransferContent
           active={activeModalContent === 'transfer'}
-          presetAsset={presetTransferAsset}
+          entryPoint="asset-detail"
+          availableAssets={lockedTransferAsset ? [lockedTransferAsset] : []}
+          lockedAsset={lockedTransferAsset}
           supportedChains={transferSupportedChains}
           onBack={closeModal}
           onClose={closeModal}
@@ -782,8 +874,8 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
   ];
 
   const tokenInfoSummary = detailContract
-    ? truncateMiddle(detailContract)
-    : `${normalizeText(selectedHolding?.transferAsset.chain).toUpperCase() || normalizedChain.toUpperCase()} · ${t('trade.nativeToken')}`;
+    ? `${activeChainLabel} · ${truncateMiddle(detailContract)}`
+    : `${activeChainLabel} · ${t('trade.nativeToken')}`;
 
   useEffect(
     () => () => {
@@ -838,8 +930,8 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
   }
 
   function handleDeleteToken(): void {
-    const hiddenChain = normalizeText(selectedHolding?.transferAsset.chain ?? normalizedChain);
-    const hiddenContract = normalizeText(selectedHolding?.transferAsset.address ?? normalizedContract);
+    const hiddenChain = normalizeText(activeVariant?.chain ?? normalizedChain);
+    const hiddenContract = normalizeText(activeVariant?.contract ?? normalizedContract);
     hideWalletAsset(walletAddress, hiddenChain, hiddenContract);
     setIsMoreMenuOpen(false);
     showSuccess(t('wallet.assetDetailTokenDeleted'));
@@ -924,7 +1016,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
                 className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-error hover:bg-error/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/30"
                 onClick={handleDeleteToken}
               >
-                <span>{t('wallet.assetDetailMenuDelete')}</span>
+                <span>{t('wallet.assetDetailMenuDeleteChain')}</span>
               </button>
             </div>
           ) : null}
@@ -936,6 +1028,9 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
         <p className="m-0 text-2xl leading-tight text-base-content/60">
           {selectedHolding ? formatUsdAdaptive(valueUsd, i18n.language) : '--'}
         </p>
+        {assetScopeLabel ? (
+          <p className="m-0 text-sm text-base-content/50">{assetScopeLabel}</p>
+        ) : null}
         <p className={`m-0 flex items-center gap-1 text-base font-medium ${priceChangeClassName}`}>
           <span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -975,6 +1070,52 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
           {t('wallet.trade')}
         </button>
       </section>
+
+      {chainBreakdownItems.length > 0 ? (
+        <article className="bg-base-200/40 p-3">
+          <div className="flex flex-col gap-1">
+            <p className="m-0 text-base font-medium">{t('wallet.assetDetailChainBreakdown')}</p>
+            <p className="m-0 text-sm text-base-content/60">{t('wallet.assetDetailCurrentChain')}: {activeChainLabel}</p>
+          </div>
+          <div className="mt-3 flex flex-col gap-2">
+            {chainBreakdownItems.map((variant) => (
+              <button
+                key={variant.chainAssetId}
+                type="button"
+                className={[
+                  'flex w-full items-center justify-between rounded-2xl border px-3 py-3 text-left transition-colors',
+                  variant.isActive
+                    ? 'border-primary/40 bg-base-100 shadow-sm'
+                    : 'border-base-300 bg-base-100/60 hover:bg-base-100',
+                ].join(' ')}
+                onClick={() => setActiveChainAssetId(variant.chainAssetId)}
+              >
+                <div className="min-w-0">
+                  <p className="m-0 flex items-center gap-2 text-sm font-semibold">
+                    <span className="truncate">{variant.chainLabel}</span>
+                    {variant.isActive ? (
+                      <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
+                        {t('wallet.assetDetailCurrentChainBadge')}
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="m-0 mt-1 text-sm text-base-content/60">
+                    {variant.amountText} {displaySymbol}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="m-0 text-sm font-semibold tabular-nums">
+                    {formatUsdAdaptive(variant.valueUsd, i18n.language)}
+                  </p>
+                  <p className="m-0 mt-1 text-xs text-base-content/50">
+                    {t('wallet.assetDetailChainShare', { share: `${Math.round(variant.share * 100)}%` })}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </article>
+      ) : null}
 
       {promoCards.length > 0 ? (
         <section className="grid grid-cols-2 gap-3">

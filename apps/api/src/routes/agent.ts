@@ -6,9 +6,11 @@ import {
   getUserAgentOpsOverview,
   getUserAgentArticleDetail,
   getUserTodayDaily,
+  getUserTradeShelf,
   ingestUserAgentEvent,
   listUserAgentArticles,
   listUserAgentRecommendations,
+  refreshUserTradeShelf,
   refreshUserAgentRecommendations,
   regenerateUserTodayDaily,
   runUserAgentJobsNow,
@@ -839,6 +841,35 @@ export function registerAgentRoutes(app: Hono<AppEnv>): void {
           ok: false,
           error: 'recommendations_refresh_failed',
           message: error instanceof Error ? error.message : 'unknown_error',
+        },
+        502,
+      );
+    }
+  });
+
+  app.post('/v1/agent/jobs/trade-shelf/run', async (c) => {
+    const userId = c.get('userId');
+    await syncUserAgentRequestLocale(c.env, userId, normalizePreferredLocale(c.req.header('accept-language')));
+    try {
+      const { refreshed, shelf } = await refreshUserTradeShelf(c.env, userId, { force: true });
+      return c.json({
+        ok: true,
+        refreshed,
+        shelf,
+      });
+    } catch (error) {
+      let shelf = null;
+      try {
+        shelf = await getUserTradeShelf(c.env, userId);
+      } catch {
+        shelf = null;
+      }
+      return c.json(
+        {
+          ok: false,
+          error: 'trade_shelf_refresh_failed',
+          message: error instanceof Error ? error.message : 'unknown_error',
+          shelf,
         },
         502,
       );

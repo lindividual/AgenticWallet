@@ -2,16 +2,18 @@ import { useEffect, useMemo, useRef, useState, type TouchEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
-  getAgentRecommendations,
-  getCoinDetailsBatch,
   getTradeBrowse,
-  runAgentRecommendations,
-  type CoinDetail,
+  getTradeShelf,
+  ingestAgentEvent,
+  runTradeShelfRefresh,
   type MarketSearchResult,
   type TopMarketAsset,
   type TradeBrowseMarketItem,
   type TradeBrowsePredictionItem,
   type TradeBrowseResponse,
+  type TradeShelfItem,
+  type TradeShelfReasonTag,
+  type TradeShelfSection,
 } from '../../api';
 import { CachedIconImage } from '../CachedIconImage';
 import { SkeletonBlock } from '../Skeleton';
@@ -34,16 +36,6 @@ const PULL_REFRESH_MAX_PX = 120;
 const MANUAL_REFRESH_COOLDOWN_MS = 5_000;
 const TRADE_BROWSE_CACHE_KEY = 'trade-browse:v2';
 const TRADE_BROWSE_CACHE_TTL_MS = 10 * 60 * 1000;
-
-type RecommendationDisplayAsset = {
-  id: string;
-  symbol: string;
-  name: string;
-  image: string | null;
-  priceChangePct: number | null;
-  currentPrice: number | null;
-  tokenPreview: TopMarketAsset | null;
-};
 
 function formatPct(value: number | null | undefined): string {
   if (!Number.isFinite(Number(value))) return '--';
@@ -68,33 +60,6 @@ function getLabelInitial(symbol: string, name: string): string {
   return label ? label[0].toUpperCase() : '?';
 }
 
-function normalizeLookupChain(raw: string | null | undefined): string | null {
-  const value = (raw ?? '').trim().toLowerCase();
-  if (!value || value.startsWith('watch:')) return null;
-  return value;
-}
-
-function pickPreferredSymbolDetail(
-  assets: CoinDetail[],
-  preferredChain: string | null,
-): CoinDetail | undefined {
-  if (assets.length === 0) return undefined;
-  const normalizedPreferred = (preferredChain ?? '').trim().toLowerCase();
-  const chainPriority = new Map<string, number>([
-    ['eth', 0],
-    ['base', 1],
-    ['bnb', 2],
-    ['tron', 3],
-  ]);
-  const sorted = [...assets].sort((a, b) => {
-    const aRank = chainPriority.get((a.chain ?? '').trim().toLowerCase()) ?? 9;
-    const bRank = chainPriority.get((b.chain ?? '').trim().toLowerCase()) ?? 9;
-    return aRank - bRank;
-  });
-  if (!normalizedPreferred) return sorted[0];
-  return sorted.find((asset) => (asset.chain ?? '').trim().toLowerCase() === normalizedPreferred) ?? sorted[0];
-}
-
 function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; contract: string } | null {
   const chain = normalizeMarketChain(item.chain);
   const contract = normalizeContractForChain(chain, item.contract);
@@ -110,7 +75,6 @@ function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; con
     }
   }
 
-  // Fallback for native majors when upstream payload is incomplete.
   const symbol = item.symbol.trim().toUpperCase();
   const id = item.id.trim().toLowerCase();
   const name = item.name.trim().toLowerCase();
@@ -118,6 +82,16 @@ function resolveRoutableToken(item: TradeBrowseMarketItem): { chain: string; con
   if (symbol === 'BNB' || id.includes('binancecoin') || name === 'bnb') return { chain: 'bnb', contract: '' };
   if (symbol === 'TRX' || id.includes('tron') || name === 'tron') return { chain: 'tron', contract: '' };
   if (symbol === 'SOL' || id.includes('solana') || name === 'solana') return { chain: 'sol', contract: '' };
+  return null;
+}
+
+function resolveRoutableShelfToken(item: TradeShelfItem): { chain: string; contract: string } | null {
+  const chain = normalizeMarketChain(item.chain);
+  const contract = normalizeContractForChain(chain, item.contract);
+  if (!chain || chain === 'unknown') return null;
+  if (contract === 'native') return { chain, contract: '' };
+  if (chain === 'sol' || chain === 'tron') return { chain, contract };
+  if (/^0x[a-f0-9]{40}$/.test(contract)) return { chain, contract };
   return null;
 }
 
@@ -140,6 +114,31 @@ function toTopMarketAsset(
     contract,
     symbol: item.symbol,
     name: item.name,
+    image: item.image,
+    current_price: item.currentPrice,
+    market_cap_rank: null,
+    market_cap: null,
+    price_change_percentage_24h: item.change24h,
+    turnover_24h: item.volume24h,
+    risk_level: null,
+  };
+}
+
+function toShelfTopMarketAsset(
+  item: TradeShelfItem,
+  route: { chain: string; contract: string },
+): TopMarketAsset {
+  const chain = route.chain;
+  const contract = route.contract;
+  const chainAssetId = buildChainAssetId(chain, contract);
+  return {
+    id: item.itemId,
+    asset_id: chainAssetId,
+    chain_asset_id: chainAssetId,
+    chain,
+    contract,
+    symbol: item.symbol,
+    name: item.title,
     image: item.image,
     current_price: item.currentPrice,
     market_cap_rank: null,
@@ -206,55 +205,53 @@ function IconAvatar({
   return fallback;
 }
 
+function getShelfKindLabel(kind: TradeShelfItem['kind'], t: ReturnType<typeof useTranslation>['t']): string {
+  if (kind === 'spot') return t('trade.kindSpot');
+  if (kind === 'perp') return t('trade.kindPerp');
+  return t('trade.kindPrediction');
+}
+
+function getReasonLabel(reasonTag: TradeShelfReasonTag, t: ReturnType<typeof useTranslation>['t']): string {
+  const keyByReason: Record<TradeShelfReasonTag, string> = {
+    'Based on holdings': 'trade.reasonBasedOnHoldings',
+    'In your watchlist': 'trade.reasonInWatchlist',
+    'Recently viewed': 'trade.reasonRecentlyViewed',
+    'Recently traded': 'trade.reasonRecentlyTraded',
+    'Trending now': 'trade.reasonTrendingNow',
+    Diversification: 'trade.reasonDiversification',
+  };
+  return t(keyByReason[reasonTag]);
+}
+
 export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: TradeScreenProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const pullStartYRef = useRef<number | null>(null);
   const lastManualRefreshAtRef = useRef(0);
-  const hasTriggeredRecommendationGenerationRef = useRef(false);
+  const reportedShelfSectionKeysRef = useRef(new Set<string>());
+  const triggeredSilentRefreshKeyRef = useRef<string | null>(null);
   const [pullDistance, setPullDistance] = useState(0);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const [cachedPayload, setCachedPayload] = useState<TradeBrowseResponse | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const { data: recommendationsData, isLoading: isRecommendationsLoading } = useQuery({
-    queryKey: ['home-agent-recommendations'],
-    queryFn: getAgentRecommendations,
+
+  const {
+    data: shelfData,
+    isLoading: isShelfLoading,
+  } = useQuery({
+    queryKey: ['trade-shelf'],
+    queryFn: getTradeShelf,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });
-  const generateRecommendationsMutation = useMutation({
-    mutationFn: runAgentRecommendations,
+
+  const refreshTradeShelfMutation = useMutation({
+    mutationFn: runTradeShelfRefresh,
     onSuccess: (data) => {
-      queryClient.setQueryData(['home-agent-recommendations'], {
-        recommendations: data.recommendations ?? [],
-      });
+      if (data.shelf) {
+        queryClient.setQueryData(['trade-shelf'], data.shelf);
+      }
     },
-  });
-
-  const recommendationLookups = useMemo(() => {
-    const output: Array<{ chain: string; contract: string }> = [];
-    const seen = new Set<string>();
-
-    for (const item of (recommendationsData?.recommendations ?? []).slice(0, 5)) {
-      const chain = normalizeLookupChain(item.asset?.chain ?? null);
-      if (!chain) continue;
-      const contract = normalizeContractForChain(chain, item.asset?.contract ?? null);
-      const key = buildChainAssetId(chain, contract);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      output.push({ chain, contract });
-    }
-
-    return output;
-  }, [recommendationsData?.recommendations]);
-
-  const { data: recommendationTokenDetails } = useQuery({
-    queryKey: ['trade-recommendation-token-details', recommendationLookups.map((item) => buildChainAssetId(item.chain, item.contract)).join(',')],
-    queryFn: () => getCoinDetailsBatch(recommendationLookups),
-    enabled: recommendationLookups.length > 0,
-    staleTime: 60_000,
-    refetchInterval: 90_000,
-    refetchOnWindowFocus: true,
   });
 
   const {
@@ -272,79 +269,8 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
   });
 
   const payload = data ?? cachedPayload;
-  const recommendationDetailLookup = useMemo(() => {
-    const byChainAssetId = new Map<string, CoinDetail>();
-    const bySymbol = new Map<string, CoinDetail[]>();
-    for (const item of recommendationTokenDetails ?? []) {
-      const detail = item.detail;
-      if (!detail) continue;
-      const chainAssetId = (detail.chain_asset_id || buildChainAssetId(detail.chain, detail.contract)).trim().toLowerCase();
-      if (chainAssetId && !byChainAssetId.has(chainAssetId)) byChainAssetId.set(chainAssetId, detail);
-      const symbol = (detail.symbol ?? '').trim().toUpperCase();
-      if (!symbol) continue;
-      const bucket = bySymbol.get(symbol);
-      if (bucket) {
-        bucket.push(detail);
-      } else {
-        bySymbol.set(symbol, [detail]);
-      }
-    }
-    return { byChainAssetId, bySymbol };
-  }, [recommendationTokenDetails]);
-
-  const recommendations = useMemo<RecommendationDisplayAsset[]>(() => {
-    const { byChainAssetId, bySymbol } = recommendationDetailLookup;
-    return (recommendationsData?.recommendations ?? [])
-      .slice(0, 5)
-      .map((item) => {
-        const assetMeta = item.asset;
-        const symbol = (assetMeta?.symbol ?? item.title ?? '').trim().toUpperCase();
-        const chain = normalizeLookupChain(assetMeta?.chain ?? null);
-        const contract = normalizeContractForChain(chain ?? '', assetMeta?.contract ?? null);
-        const exactKey = chain ? buildChainAssetId(chain, contract) : '';
-        const matched =
-          (exactKey ? byChainAssetId.get(exactKey) : undefined)
-          ?? (symbol ? pickPreferredSymbolDetail(bySymbol.get(symbol) ?? [], chain) : undefined);
-
-        const routeChain = matched?.chain ?? chain ?? null;
-        const routeContract = matched?.contract ?? (chain ? contract : null);
-        const displaySymbol = (matched?.symbol ?? symbol ?? '').toUpperCase();
-        const displayName = matched?.name ?? assetMeta?.name ?? item.title ?? displaySymbol;
-        const image = matched?.image ?? assetMeta?.image ?? null;
-        const currentPrice = matched?.currentPriceUsd ?? null;
-        const priceChangePct = matched?.priceChange24h ?? assetMeta?.price_change_percentage_24h ?? null;
-        const tokenPreview = routeChain && routeContract != null
-          ? {
-              id: buildChainAssetId(routeChain, routeContract),
-              asset_id: matched?.asset_id ?? buildChainAssetId(routeChain, routeContract),
-              chain_asset_id: buildChainAssetId(routeChain, routeContract),
-              chain: routeChain,
-              contract: routeContract,
-              symbol: displaySymbol,
-              name: displayName,
-              image,
-              current_price: currentPrice,
-              market_cap_rank: null,
-              market_cap: null,
-              price_change_percentage_24h: priceChangePct,
-              turnover_24h: null,
-              risk_level: null,
-            }
-          : null;
-
-        return {
-          id: item.id,
-          symbol: displaySymbol,
-          name: displayName,
-          image,
-          currentPrice,
-          priceChangePct,
-          tokenPreview,
-        };
-      })
-      .filter((item) => Boolean(item.symbol || item.name));
-  }, [recommendationDetailLookup, recommendationsData?.recommendations]);
-  const shouldShowRecommendationSection = recommendations.length > 0;
+  const hasDynamicShelf = (shelfData?.sections ?? []).some((section) => section.items.length > 0);
+  const dynamicSections = (shelfData?.sections ?? []).filter((section) => section.items.length > 0);
 
   const hasAnySectionData = useMemo(() => {
     if (!payload) return false;
@@ -354,7 +280,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
       || payload.predictions.length > 0;
   }, [payload]);
 
-  const shouldShowLoading = isLoading && !payload;
+  const shouldShowLoading = isLoading && !payload && isShelfLoading;
   const shouldShowError = isError && !payload;
 
   useEffect(() => {
@@ -376,18 +302,29 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
   }, [data]);
 
   useEffect(() => {
-    if (isRecommendationsLoading) return;
-    if ((recommendationsData?.recommendations?.length ?? 0) > 0) return;
-    if (generateRecommendationsMutation.isPending) return;
-    if (hasTriggeredRecommendationGenerationRef.current) return;
+    const shelfKey = `${shelfData?.generatedAt ?? 'empty'}:${shelfData?.refreshState.needsRefresh ? '1' : '0'}`;
+    if (!shelfData?.refreshState.needsRefresh) {
+      triggeredSilentRefreshKeyRef.current = null;
+      return;
+    }
+    if (refreshTradeShelfMutation.isPending) return;
+    if (triggeredSilentRefreshKeyRef.current === shelfKey) return;
+    triggeredSilentRefreshKeyRef.current = shelfKey;
+    refreshTradeShelfMutation.mutate();
+  }, [refreshTradeShelfMutation, shelfData?.generatedAt, shelfData?.refreshState.needsRefresh]);
 
-    hasTriggeredRecommendationGenerationRef.current = true;
-    generateRecommendationsMutation.mutate();
-  }, [
-    generateRecommendationsMutation,
-    isRecommendationsLoading,
-    recommendationsData?.recommendations?.length,
-  ]);
+  useEffect(() => {
+    for (const section of dynamicSections) {
+      const viewKey = `${shelfData?.generatedAt ?? 'unknown'}:${section.id}`;
+      if (reportedShelfSectionKeysRef.current.has(viewKey)) continue;
+      reportedShelfSectionKeysRef.current.add(viewKey);
+      ingestAgentEvent('trade_shelf_section_viewed', {
+        sectionId: section.id,
+        itemCount: section.items.length,
+        source: 'trade_shelf',
+      }, viewKey).catch(() => undefined);
+    }
+  }, [dynamicSections, shelfData?.generatedAt]);
 
   async function triggerPullRefresh(): Promise<void> {
     if (isFetching || isPullRefreshing) return;
@@ -396,7 +333,10 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
     lastManualRefreshAtRef.current = now;
     setIsPullRefreshing(true);
     try {
-      await refetch();
+      await Promise.allSettled([
+        refetch(),
+        refreshTradeShelfMutation.mutateAsync(),
+      ]);
     } finally {
       setIsPullRefreshing(false);
       setPullDistance(0);
@@ -439,6 +379,25 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
     onOpenToken(toTopMarketAsset(item, route), section);
   }
 
+  function handleOpenShelfItem(item: TradeShelfItem, sectionId: string): void {
+    ingestAgentEvent('trade_shelf_item_clicked', {
+      sectionId,
+      itemId: item.itemId,
+      kind: item.kind,
+      symbol: item.symbol,
+      source: 'trade_shelf',
+    }).catch(() => undefined);
+
+    if (item.kind === 'spot') {
+      const route = resolveRoutableShelfToken(item);
+      if (!route) return;
+      onOpenToken(toShelfTopMarketAsset(item, route), sectionId);
+      return;
+    }
+
+    onOpenMarketDetail(item.kind, item.itemId);
+  }
+
   function handleSearchSelect(item: MarketSearchResult): void {
     if (item.marketType === 'spot') {
       const chain = item.chain?.trim();
@@ -473,6 +432,55 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
 
   function toDetailItemId(item: { id: string }): string {
     return item.id;
+  }
+
+  function renderShelfCard(section: TradeShelfSection, item: TradeShelfItem) {
+    const changeClass = pctClassname(item.change24h);
+    const metricValue = item.kind === 'prediction'
+      ? item.probability != null
+        ? `${item.probability.toFixed(1)}%`
+        : '--'
+      : item.currentPrice != null
+        ? formatUsdAdaptive(item.currentPrice, i18n.language)
+        : '--';
+    const metricLabel = item.kind === 'prediction'
+      ? t('trade.probability')
+      : t('trade.currentPriceShort');
+    const secondary = item.kind === 'prediction'
+      ? `${t('trade.volumeShort')}: ${formatCompactUsd(item.volume24h, i18n.language)}`
+      : formatPct(item.change24h);
+
+    return (
+      <button
+        key={item.id}
+        type="button"
+        className="min-h-[12rem] min-w-[12rem] snap-start rounded-xl bg-base-200/35 p-3 text-left transition-colors hover:bg-base-200/70"
+        onClick={() => handleOpenShelfItem(item, section.id)}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <IconAvatar symbol={item.symbol} name={item.title} image={item.image} />
+          <span className="rounded-full bg-base-300 px-2 py-0.5 text-[11px] text-base-content/60">
+            {getShelfKindLabel(item.kind, t)}
+          </span>
+        </div>
+        <p className="m-0 mt-4 line-clamp-2 text-base font-semibold leading-snug">{item.title}</p>
+        <p className="m-0 mt-1 text-xs text-base-content/65">{item.symbol}</p>
+        <div className="mt-3">
+          <p className="m-0 text-sm text-base-content/65">{metricLabel}</p>
+          <p className={`m-0 mt-1 text-lg font-semibold ${item.kind === 'prediction' ? 'text-success' : changeClass}`}>
+            {metricValue}
+          </p>
+          <p className={`m-0 mt-1 text-sm ${item.kind === 'prediction' ? 'text-base-content/65' : changeClass}`}>
+            {secondary}
+          </p>
+        </div>
+        <div className="mt-4">
+          <span className="rounded-full bg-primary/12 px-2 py-1 text-[11px] font-medium text-primary">
+            {getReasonLabel(item.reasonTag, t)}
+          </span>
+        </div>
+      </button>
+    );
   }
 
   return (
@@ -522,52 +530,16 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
         </div>
       )}
 
-      {shouldShowRecommendationSection && (
-        <section className="flex flex-col gap-3">
-          <SectionTitle title={t('trade.forYou')} />
-          <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1">
-            {recommendations.map((item) => {
-              const tokenPreview = item.tokenPreview;
-              const changeClass = pctClassname(item.priceChangePct);
-              const cardContent = (
-                <>
-                  <div className="flex items-center justify-between">
-                    <IconAvatar symbol={item.symbol} name={item.name} image={item.image} />
-                    <span className="rounded-full bg-base-300 px-2 py-0.5 text-[11px] text-base-content/60">
-                      {item.symbol}
-                    </span>
-                  </div>
-                  <p className="m-0 mt-4 line-clamp-2 text-lg font-semibold leading-snug">{item.name}</p>
-                  <p className="m-0 mt-2 text-sm text-base-content/70">
-                    {item.currentPrice != null ? formatUsdAdaptive(item.currentPrice, i18n.language) : '--'}
-                  </p>
-                  <p className={`m-0 mt-1 text-lg font-semibold ${changeClass}`}>{formatPct(item.priceChangePct)}</p>
-                </>
-              );
-
-              if (!tokenPreview) {
-                return (
-                  <article
-                    key={item.id}
-                    className="min-h-[11.5rem] min-w-[11rem] snap-start rounded-xl bg-base-200/35 p-3"
-                  >
-                    {cardContent}
-                  </article>
-                );
-              }
-
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="min-h-[11.5rem] min-w-[11rem] snap-start rounded-xl bg-base-200/35 p-3 text-left transition-colors hover:bg-base-200/70"
-                  onClick={() => onOpenToken(tokenPreview, 'forYou')}
-                >
-                  {cardContent}
-                </button>
-              );
-            })}
-          </div>
+      {hasDynamicShelf && (
+        <section className="flex flex-col gap-4">
+          {dynamicSections.map((section) => (
+            <section key={section.id} className="flex flex-col gap-3">
+              <SectionTitle title={t(`trade.section.${section.id}`)} />
+              <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1">
+                {section.items.slice(0, 4).map((item) => renderShelfCard(section, item))}
+              </div>
+            </section>
+          ))}
         </section>
       )}
 
@@ -596,7 +568,7 @@ export function TradeScreen({ onOpenToken, onOpenMarketDetail, onLogout }: Trade
         </div>
       )}
 
-      {!shouldShowLoading && !shouldShowError && !hasAnySectionData && (
+      {!shouldShowLoading && !shouldShowError && !hasAnySectionData && !hasDynamicShelf && (
         <div className="rounded-xl bg-base-200 p-4 text-sm text-base-content/75">
           {t('trade.noSectionData')}
         </div>

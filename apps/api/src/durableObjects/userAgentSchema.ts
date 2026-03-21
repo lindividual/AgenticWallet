@@ -138,6 +138,46 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   );
 
   sql.exec(
+    `CREATE TABLE IF NOT EXISTS trade_shelf_state (
+      id TEXT PRIMARY KEY,
+      dirty INTEGER NOT NULL DEFAULT 1,
+      last_refreshed_at TEXT,
+      generated_at TEXT,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+
+  sql.exec(
+    `CREATE TABLE IF NOT EXISTS trade_shelf_items (
+      id TEXT PRIMARY KEY,
+      section_id TEXT NOT NULL,
+      section_title TEXT NOT NULL,
+      item_rank INTEGER NOT NULL,
+      item_kind TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      title TEXT NOT NULL,
+      image TEXT,
+      chain TEXT,
+      contract TEXT,
+      current_price REAL,
+      change_24h REAL,
+      probability REAL,
+      volume_24h REAL,
+      reason_tag TEXT NOT NULL,
+      score REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+  sql.exec(
+    'CREATE INDEX IF NOT EXISTS idx_trade_shelf_items_section_rank ON trade_shelf_items(section_id, item_rank ASC)',
+  );
+  sql.exec(
+    'CREATE INDEX IF NOT EXISTS idx_trade_shelf_items_updated_at ON trade_shelf_items(updated_at DESC)',
+  );
+
+  sql.exec(
     `CREATE TABLE IF NOT EXISTS portfolio_snapshots_hourly (
       bucket_hour_utc TEXT PRIMARY KEY,
       total_usd REAL NOT NULL,

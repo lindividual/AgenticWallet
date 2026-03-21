@@ -9,6 +9,8 @@ export const AGENT_EVENT_TYPES = [
   'article_read',
   'article_favorited',
   'page_dwell',
+  'trade_shelf_section_viewed',
+  'trade_shelf_item_clicked',
 ] as const;
 
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];

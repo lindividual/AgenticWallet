@@ -18,7 +18,13 @@ import {
   resolveCoinGeckoAssetIdForContract,
   syncCoinGeckoCoinListPlatforms,
 } from '../services/coingecko';
-import { listUserWatchlistAssets, removeUserWatchlistAsset, upsertUserWatchlistAsset } from '../services/agent';
+import {
+  getUserTradeShelf,
+  listUserWatchlistAssets,
+  refreshUserTradeShelf,
+  removeUserWatchlistAsset,
+  upsertUserWatchlistAsset,
+} from '../services/agent';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
 import { fetchSolanaTokenDetails } from '../services/solana';
 import {
@@ -402,7 +408,9 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
   });
 
   app.get('/v1/market/trade-browse', async (c) => {
-    const browse = await fetchTradeBrowse(c.env);
+    const browse = await fetchTradeBrowse(c.env, {
+      scheduleBackgroundTask: (task) => c.executionCtx.waitUntil(task),
+    });
     const assetIdMap = await buildCoinAssetIdMap(
       c.env,
       [...browse.topMovers, ...browse.trendings].map((item) => ({
@@ -417,6 +425,29 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       perps: browse.perps.map(stripLegacyIds),
       predictions: browse.predictions.map(stripLegacyIds),
     });
+  });
+
+  app.get('/v1/market/trade-shelf', async (c) => {
+    const userId = c.get('userId');
+
+    try {
+      let shelf = await getUserTradeShelf(c.env, userId);
+      const hasCachedSections = shelf.sections.some((section) => section.items.length > 0);
+
+      if (!hasCachedSections) {
+        const refreshed = await refreshUserTradeShelf(c.env, userId, { force: true });
+        shelf = refreshed.shelf;
+      } else if (shelf.refreshState.needsRefresh) {
+        c.executionCtx.waitUntil(
+          refreshUserTradeShelf(c.env, userId).catch(() => undefined),
+        );
+      }
+
+      return c.json(shelf);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'trade_shelf_failed';
+      return c.json({ error: message }, 502);
+    }
   });
 
   app.get('/v1/market/trade-detail', async (c) => {

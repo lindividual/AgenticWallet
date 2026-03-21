@@ -35,6 +35,7 @@ import {
   tomorrowDate,
 } from './userAgentHelpers';
 import { initializeAgentSchema } from './userAgentSchema';
+import { buildTradeShelfContent } from './userAgentTradeShelfService';
 import type {
   ArticleRow,
   EventRow,
@@ -42,6 +43,12 @@ import type {
   JobType,
   PortfolioSnapshotPoint,
   RecommendationRow,
+  TradeShelfItem,
+  TradeShelfItemRow,
+  TradeShelfResponse,
+  TradeShelfSection,
+  TradeShelfSectionId,
+  TradeShelfStateRow,
   TransferRow,
   TodayDailyStatus,
   WatchlistAssetRow,
@@ -75,6 +82,7 @@ const USER_LOCALE_KEY = 'user_locale';
 const REQUEST_LOCALE_KEY = 'request_locale';
 const ACTIVE_UNTIL_KEY = 'active_until';
 const RECOMMENDATION_STATE_KEY = 'recommendation_state';
+const TRADE_SHELF_STATE_ROW_ID = 'default';
 const HOURLY_SNAPSHOT_RETENTION_HOURS = 72;
 const DAILY_SNAPSHOT_RETENTION_DAYS = 180;
 const TOPIC_FEED_LIMIT_MAX = 10;
@@ -120,6 +128,7 @@ function extractJsonObject(text: string): string | null {
 const MAX_WATCHLIST_SIZE = 500;
 const ACTIVE_USER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const RECOMMENDATION_REFRESH_COOLDOWN_MS = 30 * 60 * 1000;
+const TRADE_SHELF_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 type WatchlistType = 'crypto' | 'perps' | 'prediction';
 
@@ -163,6 +172,12 @@ type WalletChainAccountRow = {
 type RecommendationState = {
   dirty?: boolean;
   lastRefreshedAt?: string | null;
+};
+
+type TradeShelfState = {
+  dirty: boolean;
+  lastRefreshedAt: string | null;
+  generatedAt: string | null;
 };
 
 type JobStatusCounts = {
@@ -258,6 +273,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }> {
     await this.ensureDailyDigestJobs();
     await this.ensurePortfolioSnapshotSchedule();
+    await this.ensureTradeShelfRefreshSchedule();
     return this.ingestEvent(event);
   }
 
@@ -276,6 +292,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   async getWalletRpc(userId: string): Promise<{ wallet: WalletSummary | null }> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
+    await this.ensureTradeShelfRefreshSchedule();
     const wallet = this.getWalletSummary();
     if (wallet) {
       await this.ensurePortfolioSnapshotSchedule();
@@ -288,6 +305,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const wallet = await this.ensureWallet();
     await this.ensureDailyDigestJobs();
     await this.ensurePortfolioSnapshotSchedule();
+    await this.ensureTradeShelfRefreshSchedule();
     return { wallet };
   }
 
@@ -303,6 +321,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.saveWallet(input.wallet, input.encryptedPrivateKey, input.encryptedProtocolKeys);
     await this.ensureDailyDigestJobs();
     await this.ensurePortfolioSnapshotSchedule();
+    await this.ensureTradeShelfRefreshSchedule();
     return { ok: true };
   }
 
@@ -311,6 +330,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const wallet = await this.ensureWalletWithPrivateKey();
     await this.ensureDailyDigestJobs();
     await this.ensurePortfolioSnapshotSchedule();
+    await this.ensureTradeShelfRefreshSchedule();
     return { wallet };
   }
 
@@ -338,6 +358,28 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return { ok: true, refreshed };
   }
 
+  async listTradeShelfRpc(userId: string): Promise<TradeShelfResponse> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    await this.ensureTradeShelfRefreshSchedule();
+    return this.getTradeShelfResponse();
+  }
+
+  async refreshTradeShelfRpc(
+    userId: string,
+    options?: { force?: boolean },
+  ): Promise<{ ok: true; refreshed: boolean; shelf: TradeShelfResponse }> {
+    this.ensureOwner(userId);
+    await this.ensureDailyDigestJobs();
+    await this.ensureTradeShelfRefreshSchedule();
+    const refreshed = await this.refreshTradeShelfIfNeeded(options?.force === true);
+    return {
+      ok: true,
+      refreshed,
+      shelf: this.getTradeShelfResponse(),
+    };
+  }
+
   async listArticlesRpc(
     userId: string,
     options?: {
@@ -350,6 +392,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ articles: ArticleRow[]; hasMore: boolean; nextOffset: number | null }> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
+    await this.ensureTradeShelfRefreshSchedule();
     await this.ensureTodayDailyReady();
     const limit = options?.limit ?? 20;
     const offset = options?.offset ?? 0;
@@ -417,6 +460,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ ok: true; jobId: string; deduped: boolean }> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
+    await this.ensureTradeShelfRefreshSchedule();
     const runAt = normalizeOccurredAt(options.runAt);
     const result = await this.enqueueJob(options.jobType, runAt, options.payload ?? {}, options.jobKey ?? null);
     return { ok: true, ...result };
@@ -425,6 +469,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   async runJobsNowRpc(userId: string): Promise<{ ok: true }> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
+    await this.ensureTradeShelfRefreshSchedule();
     await this.alarm();
     return { ok: true };
   }
@@ -435,6 +480,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     article: ArticleRow | null;
   }> {
     this.ensureOwner(userId);
+    await this.ensureTradeShelfRefreshSchedule();
     const dateKey = isoDate(new Date());
     const { deletedArticleIds, article } = await this.regenerateTodayDaily(dateKey, 'manual_regenerate');
     return {
@@ -457,6 +503,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<AgentOpsDashboardData> {
     this.ensureOwner(userId);
     await this.ensureDailyDigestJobs();
+    await this.ensureTradeShelfRefreshSchedule();
     await this.ensureTodayDailyReady();
 
     const now = new Date();
@@ -522,7 +569,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const asOf = normalizeOccurredAt(input.asOf);
     this.savePortfolioSnapshot(asOf, input.totalUsd, input.holdings ?? []);
     this.markRecommendationsDirty();
+    this.markTradeShelfDirty();
     await this.ensurePortfolioSnapshotSchedule(asOf);
+    await this.ensureTradeShelfRefreshSchedule(asOf);
     return { ok: true };
   }
 
@@ -701,6 +750,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ asset: WatchlistAssetRow }> {
     this.ensureOwner(userId);
     const asset = this.upsertWatchlistAsset(input);
+    this.markRecommendationsDirty();
+    this.markTradeShelfDirty();
+    await this.ensureTradeShelfRefreshSchedule();
     return { asset };
   }
 
@@ -710,6 +762,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ removed: boolean }> {
     this.ensureOwner(userId);
     const removed = this.removeWatchlistAsset(input.id ?? null, input.chain ?? null, input.contract ?? null);
+    this.markRecommendationsDirty();
+    this.markTradeShelfDirty();
+    await this.ensureTradeShelfRefreshSchedule();
     return { removed };
   }
 
@@ -835,8 +890,17 @@ export class UserAgentDO extends DurableObject<Bindings> {
     if (isRecommendationTriggerEvent(event.type)) {
       this.markRecommendationsDirty();
     }
+    if (
+      event.type === 'asset_viewed'
+      || event.type === 'asset_favorited'
+      || event.type === 'trade_buy'
+      || event.type === 'trade_sell'
+    ) {
+      this.markTradeShelfDirty();
+    }
     await this.ensureDailyDigestJobs();
     await this.ensurePortfolioSnapshotSchedule();
+    await this.ensureTradeShelfRefreshSchedule();
 
     return {
       ok: true,
@@ -1206,6 +1270,227 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.setRecommendationState({
       dirty: false,
       lastRefreshedAt: new Date().toISOString(),
+    });
+    return true;
+  }
+
+  private getTradeShelfState(): TradeShelfState {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          dirty,
+          last_refreshed_at,
+          generated_at,
+          updated_at
+         FROM trade_shelf_state
+         WHERE id = ?
+         LIMIT 1`,
+        TRADE_SHELF_STATE_ROW_ID,
+      )
+      .toArray()[0] as TradeShelfStateRow | undefined;
+
+    return {
+      dirty: Number(row?.dirty ?? 1) === 1,
+      lastRefreshedAt: normalizeSqlString(row?.last_refreshed_at),
+      generatedAt: normalizeSqlString(row?.generated_at),
+    };
+  }
+
+  private setTradeShelfState(next: TradeShelfState): void {
+    const now = new Date().toISOString();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO trade_shelf_state (
+        id,
+        dirty,
+        last_refreshed_at,
+        generated_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        dirty = excluded.dirty,
+        last_refreshed_at = excluded.last_refreshed_at,
+        generated_at = excluded.generated_at,
+        updated_at = excluded.updated_at`,
+      TRADE_SHELF_STATE_ROW_ID,
+      next.dirty ? 1 : 0,
+      next.lastRefreshedAt,
+      next.generatedAt,
+      now,
+    );
+  }
+
+  private markTradeShelfDirty(): void {
+    const state = this.getTradeShelfState();
+    this.setTradeShelfState({
+      ...state,
+      dirty: true,
+    });
+  }
+
+  private hasTradeShelfItems(): boolean {
+    const row = this.ctx.storage.sql
+      .exec('SELECT id FROM trade_shelf_items LIMIT 1')
+      .toArray()[0] as Record<string, unknown> | undefined;
+    return Boolean(normalizeSqlString(row?.id));
+  }
+
+  private getTradeShelfNeedsRefresh(state: TradeShelfState): boolean {
+    if (state.dirty) return true;
+    const lastRefreshedAtMs = state.lastRefreshedAt ? Date.parse(state.lastRefreshedAt) : Number.NaN;
+    if (!Number.isFinite(lastRefreshedAtMs)) return true;
+    return Date.now() - lastRefreshedAtMs >= TRADE_SHELF_REFRESH_INTERVAL_MS;
+  }
+
+  private getTradeShelfSections(): TradeShelfSection[] {
+    const rows = this.ctx.storage.sql
+      .exec(
+        `SELECT
+          id,
+          section_id,
+          section_title,
+          item_rank,
+          item_kind,
+          item_id,
+          symbol,
+          title,
+          image,
+          chain,
+          contract,
+          current_price,
+          change_24h,
+          probability,
+          volume_24h,
+          reason_tag,
+          score,
+          created_at,
+          updated_at
+         FROM trade_shelf_items
+         ORDER BY
+           CASE section_id
+             WHEN 'holdings' THEN 0
+             WHEN 'behavior' THEN 1
+             WHEN 'fresh' THEN 2
+             ELSE 9
+           END ASC,
+           item_rank ASC`,
+      )
+      .toArray() as TradeShelfItemRow[];
+
+    const sections = new Map<TradeShelfSectionId, TradeShelfSection>();
+    for (const row of rows) {
+      const sectionId = row.section_id;
+      if (!sections.has(sectionId)) {
+        sections.set(sectionId, {
+          id: sectionId,
+          title: row.section_title,
+          items: [],
+        });
+      }
+      sections.get(sectionId)?.items.push({
+        id: row.id,
+        kind: row.item_kind,
+        itemId: row.item_id,
+        symbol: row.symbol,
+        title: row.title,
+        image: row.image ?? null,
+        chain: row.chain ?? null,
+        contract: row.contract ?? null,
+        currentPrice: row.current_price ?? null,
+        change24h: row.change_24h ?? null,
+        probability: row.probability ?? null,
+        volume24h: row.volume_24h ?? null,
+        reasonTag: row.reason_tag,
+      } satisfies TradeShelfItem);
+    }
+
+    return ['holdings', 'behavior', 'fresh']
+      .map((sectionId) => sections.get(sectionId as TradeShelfSectionId))
+      .filter((section): section is TradeShelfSection => Boolean(section));
+  }
+
+  private replaceTradeShelfItems(generatedAt: string, sections: TradeShelfSection[]): void {
+    const now = new Date().toISOString();
+    this.ctx.storage.sql.exec('DELETE FROM trade_shelf_items');
+    for (const section of sections) {
+      for (let index = 0; index < section.items.length; index += 1) {
+        const item = section.items[index];
+        this.ctx.storage.sql.exec(
+          `INSERT INTO trade_shelf_items (
+            id,
+            section_id,
+            section_title,
+            item_rank,
+            item_kind,
+            item_id,
+            symbol,
+            title,
+            image,
+            chain,
+            contract,
+            current_price,
+            change_24h,
+            probability,
+            volume_24h,
+            reason_tag,
+            score,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          item.id,
+          section.id,
+          section.title,
+          index,
+          item.kind,
+          item.itemId,
+          item.symbol,
+          item.title,
+          item.image,
+          item.chain,
+          item.contract,
+          item.currentPrice,
+          item.change24h,
+          item.probability,
+          item.volume24h,
+          item.reasonTag,
+          0,
+          generatedAt,
+          now,
+        );
+      }
+    }
+  }
+
+  private getTradeShelfResponse(): TradeShelfResponse {
+    const state = this.getTradeShelfState();
+    return {
+      generatedAt: state.generatedAt,
+      refreshState: {
+        dirty: state.dirty,
+        lastRefreshedAt: state.lastRefreshedAt,
+        needsRefresh: this.getTradeShelfNeedsRefresh(state),
+      },
+      sections: this.getTradeShelfSections(),
+    };
+  }
+
+  private async refreshTradeShelfIfNeeded(force: boolean): Promise<boolean> {
+    const state = this.getTradeShelfState();
+    const hasShelfItems = this.hasTradeShelfItems();
+    if (!force && hasShelfItems && !this.getTradeShelfNeedsRefresh(state)) return false;
+
+    const { generatedAt, sections } = await buildTradeShelfContent({
+      env: this.env,
+      sql: this.ctx.storage.sql,
+      getOwnerUserId: () => this.getOwnerUserId(),
+      getLatestEvents: (limit = 20) => this.getLatestEvents(limit),
+      getWatchlistAssets: (limit = 20) => this.getWatchlistAssets(limit),
+    });
+    this.replaceTradeShelfItems(generatedAt, sections);
+    this.setTradeShelfState({
+      dirty: false,
+      lastRefreshedAt: new Date().toISOString(),
+      generatedAt,
     });
     return true;
   }
@@ -2345,6 +2630,24 @@ export class UserAgentDO extends DurableObject<Bindings> {
     await this.enqueueJob('portfolio_snapshot', nextRun.toISOString(), {}, jobKey);
   }
 
+  private async ensureTradeShelfRefreshSchedule(referenceIso?: string): Promise<void> {
+    if (!this.getOwnerUserId()) return;
+    if (!this.isUserActive(referenceIso)) return;
+
+    const referenceDate = referenceIso ? new Date(referenceIso) : new Date();
+    if (!Number.isFinite(referenceDate.getTime())) return;
+
+    const nextRun = new Date(referenceDate);
+    nextRun.setUTCMinutes(0, 0, 0);
+    const nextHour = nextRun.getUTCHours() - (nextRun.getUTCHours() % 4) + 4;
+    nextRun.setUTCHours(nextHour, 0, 0, 0);
+    if (nextRun.getTime() <= referenceDate.getTime()) {
+      nextRun.setUTCHours(nextRun.getUTCHours() + 4, 0, 0, 0);
+    }
+    const jobKey = `trade_shelf_refresh:${nextRun.toISOString().slice(0, 13)}`;
+    await this.enqueueJob('trade_shelf_refresh', nextRun.toISOString(), {}, jobKey);
+  }
+
   private hasTodayDailyArticle(now: Date): boolean {
     const today = isoDate(now);
     return Boolean(
@@ -2534,6 +2837,8 @@ export class UserAgentDO extends DurableObject<Bindings> {
         return this.generateDailyDigest(payload);
       case 'portfolio_snapshot':
         return this.capturePortfolioSnapshot();
+      case 'trade_shelf_refresh':
+        return this.refreshTradeShelf(payload);
       default:
         throw new Error(`unsupported_job_type_${jobType}`);
     }
@@ -2561,6 +2866,17 @@ export class UserAgentDO extends DurableObject<Bindings> {
     });
   }
 
+  private async refreshTradeShelf(_payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const refreshed = await this.refreshTradeShelfIfNeeded(true);
+    await this.ensureTradeShelfRefreshSchedule();
+    return {
+      kind: 'trade_shelf_refresh',
+      refreshed,
+      generatedAt: this.getTradeShelfState().generatedAt,
+      sectionCount: this.getTradeShelfSections().length,
+    };
+  }
+
   private async capturePortfolioSnapshot(): Promise<Record<string, unknown>> {
     const wallet = this.getWalletSummary();
     const walletAddress = wallet?.address ?? wallet?.chainAccounts?.[0]?.address ?? null;
@@ -2583,7 +2899,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
     const result = await fetchWalletPortfolio(this.env, wallet);
     this.savePortfolioSnapshot(result.asOf, result.totalUsd, result.holdings);
     this.markRecommendationsDirty();
+    this.markTradeShelfDirty();
     await this.ensurePortfolioSnapshotSchedule(result.asOf);
+    await this.ensureTradeShelfRefreshSchedule(result.asOf);
     return {
       kind: 'portfolio_snapshot',
       skipped: false,
@@ -2830,15 +3148,16 @@ export class UserAgentDO extends DurableObject<Bindings> {
       '- If asked about specific assets, provide general guidance (not financial advice).',
       '- If the user gives a short affirmative reply after you offered help on the token page, treat it as a request to analyze the current token immediately.',
       '- Return raw JSON only, with this exact top-level shape: {"reply":"string","actions":[]}. Do not wrap it in markdown fences.',
-      `- Supported transfer network keys: ${ETHEREUM_NETWORK_KEY} (Ethereum), ${BASE_NETWORK_KEY} (Base), ${BNB_NETWORK_KEY} (BNB Chain), ${SOLANA_NETWORK_KEY} (Solana), ${BITCOIN_NETWORK_KEY} (Bitcoin).`,
+      `- Supported transfer network keys: ${ETHEREUM_NETWORK_KEY} (Ethereum), ${BASE_NETWORK_KEY} (Base), ${BNB_NETWORK_KEY} (BNB Chain), ${TRON_NETWORK_KEY} (Tron), ${SOLANA_NETWORK_KEY} (Solana), ${BITCOIN_NETWORK_KEY} (Bitcoin).`,
       '- When it would help the user choose a next step, you may include one quick reply action like {"type":"quick_replies","options":[{"label":"Analyze risks","message":"Analyze the main risks of this token."},{"label":"Compare with BTC","message":"Compare this token with BTC."}]}.',
       '- Keep quick reply labels short, useful, and tappable. Prefer 2-4 options, and do not repeat the exact same wording as the reply sentence.',
       '- When you ask the user to choose from a small known set, include quick_replies instead of only listing the choices in plain text.',
-      '- When the user clearly wants to transfer funds and provides a supported network, a recipient address, and an amount, include one action like {"type":"transfer_preview","networkKey":"...","toAddress":"...","amount":"...","tokenSymbol":"ETH","tokenAddress":null,"tokenDecimals":null}.',
-      '- Only include a transfer_preview action when the details are explicit or clearly implied by the current page context.',
-      '- If the user refers to the current token on the token page, you may use the current token symbol and contract from context.',
+      '- Only include a transfer_preview action when the transfer recipient, network, asset, and amount are all explicit or clearly implied by the current page context.',
+      '- When transfer details are incomplete, ask for exactly one missing field at a time in this order: recipient address, then network, then asset, then amount.',
+      '- If the user refers to the current token on the token page, you may use the current token symbol and contract from context as the asset.',
       '- If the asset is the native asset for that network, set tokenAddress to null.',
-      '- Never invent recipient addresses, contract addresses, token decimals, or amounts. Ask a concise follow-up question when details are missing or ambiguous.',
+      '- When all required transfer details are present, include one action like {"type":"transfer_preview","networkKey":"...","toAddress":"...","amount":"...","tokenSymbol":"ETH","tokenAddress":null,"tokenDecimals":null}.',
+      '- Never invent recipient addresses, contract addresses, token decimals, amounts, or unsupported assets. Ask a concise follow-up question when details are missing or ambiguous.',
       '- If the user is choosing a receive address, only recommend chains that appear in the configured supported receive chains from context.',
       '- If the correct receive network is clear, provide the exact matching receive address from context instead of speaking abstractly.',
       '- If multiple receive addresses are available, explain which network maps to which address and do not say unsupported networks are safe.',

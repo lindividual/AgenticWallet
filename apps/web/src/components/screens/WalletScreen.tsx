@@ -33,6 +33,7 @@ import { SettingsDropdown } from '../SettingsDropdown';
 import { buildChainAssetId } from '../../utils/assetIdentity';
 import { buildWalletAccountsFingerprint, normalizeContractForChain } from '../../utils/chainIdentity';
 import { formatChartTimeLabel } from '../../utils/kline';
+import { buildTransferableAssets } from '../../utils/transferAssets';
 import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { getHiddenWalletAssetKeys } from '../../utils/walletHiddenAssets';
 
@@ -44,12 +45,6 @@ type WalletScreenProps = {
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
-type TransferPresetAsset = {
-  networkKey: string;
-  tokenAddress?: string;
-  tokenSymbol?: string;
-  tokenDecimals?: number;
-};
 
 const MODAL_CONTENT_SWITCH_MS = 280;
 
@@ -75,6 +70,7 @@ type WalletHoldingListItem = {
   symbol: string;
   name: string;
   logo: string | null;
+  chainSummary: string;
   valueUsd: number;
   amountText: string;
   priceChangePct: number | null;
@@ -260,7 +256,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const [modalTransitionKey, setModalTransitionKey] = useState(0);
   const [modalVisible, setModalVisible] = useState(false);
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
-  const [presetTransferAsset, setPresetTransferAsset] = useState<TransferPresetAsset | null>(null);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
   const [isStablesExpanded, setIsStablesExpanded] = useState(false);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
@@ -302,8 +297,15 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   });
 
   const portfolioData = data ?? cachedPortfolio;
+  const perpsAccount = portfolioData?.perpsAccount ?? null;
   const predictionAccount = portfolioData?.predictionAccount ?? null;
   const totalBalance = portfolioData?.totalUsd ?? 0;
+  const perpsAccountValue = perpsAccount?.available && Number.isFinite(Number(perpsAccount.balanceUsd))
+    ? formatUsdAdaptive(Number(perpsAccount.balanceUsd ?? 0), i18n.language)
+    : t('wallet.accountUnavailableValue');
+  const predictionAccountValue = predictionAccount?.available && Number.isFinite(Number(predictionAccount.balanceUsd))
+    ? formatUsdAdaptive(Number(predictionAccount.balanceUsd ?? 0), i18n.language)
+    : t('wallet.accountUnavailableValue');
   const supportedChains = appConfig?.supportedChains ?? [];
   const transferSupportedChains = useMemo(
     () => supportedChains.filter((chain) => chain.protocol === 'evm' || chain.protocol === 'svm' || chain.protocol === 'tvm' || chain.protocol === 'btc'),
@@ -316,6 +318,10 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const chainNameByNetworkKey = useMemo(
     () => new Map(supportedChains.map((chain) => [chain.networkKey, chain.name] as const)),
     [supportedChains],
+  );
+  const transferAvailableAssets = useMemo(
+    () => buildTransferableAssets(portfolioData, { hiddenAssetKeys }),
+    [hiddenAssetKeys, portfolioData],
   );
 
   useEffect(() => {
@@ -402,6 +408,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                 primary.url,
                 resolveAssetIdFallbackIcon(normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id), symbol),
               ),
+              chainSummary,
               valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
               amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
               priceChangePct: null as number | null,
@@ -474,6 +481,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
             primary.url,
             resolveAssetIdFallbackIcon(normalizeAssetId(primary.asset_id), symbol),
           ),
+          chainSummary,
           valueUsd: group.totalValueUsd,
           amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
           priceChangePct: null as number | null,
@@ -626,20 +634,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     [],
   );
 
-  async function handleCopyAddress(address = walletAddress) {
-    if (!address) {
-      showError(t('wallet.addressUnavailable'));
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(address);
-      showSuccess(t('wallet.addressCopied'));
-    } catch (err) {
-      showError(`${t('common.error')}: ${(err as Error).message}`);
-    }
-  }
-
   function showModal(originRect: RectSnapshot | null) {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
@@ -732,7 +726,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
 
   function openTransferModal() {
     setTradePreset(null);
-    setPresetTransferAsset(null);
     setActiveModalContent('transfer');
     showModal(snapshotRect(transferButtonRef.current));
   }
@@ -791,8 +784,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
           chainAccounts={auth.wallet?.chainAccounts}
           supportedChains={supportedChains}
           onBack={backToTopUp}
-          onCopyAddress={(address) => {
-            void handleCopyAddress(address);
+          onCopyAddress={async (address: string) => {
+            if (!address) return;
+            await navigator.clipboard.writeText(address);
           }}
           onClose={closeActiveModal}
           onOpenAgentChat={onOpenAgentChat}
@@ -805,7 +799,8 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
       return (
         <TransferContent
           active={activeModalContent === 'transfer'}
-          presetAsset={presetTransferAsset}
+          entryPoint="wallet"
+          availableAssets={transferAvailableAssets}
           supportedChains={transferSupportedChains}
           onBack={closeActiveModal}
           onClose={closeActiveModal}
@@ -982,10 +977,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
             {t('wallet.failedToLoadAssets', { message: (error as Error).message })}
           </div>
         )}
-        {!shouldShowLoading && !shouldShowError && holdings.length === 0 && (
-          <div className="bg-base-200 p-4 text-base">{t('wallet.noAssetsFound')}</div>
-        )}
-        {!shouldShowLoading && !shouldShowError && holdings.length > 0 && (
+        {!shouldShowLoading && !shouldShowError && (
           <div className="flex flex-col">
             <article className="border-b border-base-300 py-5">
               <div className="flex items-start justify-between gap-3">
@@ -1023,10 +1015,13 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                       )}
                       leftPrimary={asset.name || t('wallet.token')}
                       leftSecondary={`${asset.amountText} ${asset.symbol}`}
+                      leftTertiary={asset.chainSummary}
                       rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
                     />
                   ))}
                 </div>
+              ) : stableAndCryptos.stableHoldings.length === 0 ? (
+                <div className="mt-3 py-2 text-sm text-base-content/60">{t('wallet.noAssetsFound')}</div>
               ) : null}
             </article>
 
@@ -1064,6 +1059,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                       }
                       leftPrimary={asset.name || t('wallet.token')}
                       leftSecondary={`${asset.amountText} ${asset.symbol}`}
+                      leftTertiary={asset.chainSummary}
                       rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
                       rightSecondary={<span className={changeClassName}>{formatPct(resolvedPriceChangePct)}</span>}
                     />
@@ -1072,16 +1068,23 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
               </div>
             </article>
 
-            {predictionAccount?.available && predictionAccount.depositAddress ? (
-              <article className="border-b border-base-300 py-5">
-                <div className="flex flex-col gap-1">
-                  <h3 className="m-0 text-sm text-base-content">{t('wallet.predictionAccount')}</h3>
-                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                    {formatUsdAdaptive(Number(predictionAccount.balanceUsd ?? 0), i18n.language)}
-                  </p>
-                </div>
-              </article>
-            ) : null}
+            <article className="border-b border-base-300 py-5">
+              <div className="flex flex-col gap-1">
+                <h3 className="m-0 text-sm text-base-content">{t('wallet.perpsAccount')}</h3>
+                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                  {perpsAccountValue}
+                </p>
+              </div>
+            </article>
+
+            <article className="border-b border-base-300 py-5">
+              <div className="flex flex-col gap-1">
+                <h3 className="m-0 text-sm text-base-content">{t('wallet.predictionAccount')}</h3>
+                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                  {predictionAccountValue}
+                </p>
+              </div>
+            </article>
           </div>
         )}
       </section>

@@ -21,6 +21,12 @@ TRADE_AGGREGATOR_BASE_URL=
 TRADE_AGGREGATOR_API_KEY=
 # Optional default slippage in bps (1% = 100, defaults to 100)
 TRADE_DEFAULT_SLIPPAGE_BPS=100
+# Optional Hyperliquid API override (defaults to https://api.hyperliquid.xyz)
+HYPERLIQUID_API_URL=
+# Optional Hyperliquid testnet toggle
+HYPERLIQUID_TESTNET=false
+# Optional default slippage for Hyperliquid market orders in bps (defaults to 100)
+HYPERLIQUID_DEFAULT_SLIPPAGE_BPS=100
 # Optional Polymarket CLOB host (defaults to https://clob.polymarket.com)
 PREDICTION_CLOB_HOST=
 # Optional signature type for prediction trading (proxy|eoa|gnosis-safe, defaults to proxy)

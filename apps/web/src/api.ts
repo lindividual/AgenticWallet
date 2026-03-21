@@ -111,6 +111,7 @@ export type WalletPortfolioResponse = {
   totalUsd: number;
   holdings: SimEvmBalance[];
   mergedHoldings?: WalletMergedHolding[];
+  perpsAccount?: PerpsAccountSnapshot | null;
   predictionAccount?: PredictionAccountSnapshot | null;
 };
 
@@ -159,6 +160,91 @@ export type PredictionAccountSnapshot = {
   allowanceRaw: string | null;
   allowance: string | null;
   error: string | null;
+  updatedAt: string;
+};
+
+export type PerpsAccountSnapshot = {
+  available: boolean;
+  provider: 'hyperliquid';
+  userAddress: string | null;
+  balanceUsd: number | null;
+  withdrawableUsd: number | null;
+  marginUsedUsd: number | null;
+  totalPositionNotionalUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  openOrderCount: number;
+  positions: PerpsPositionSnapshot[];
+  openOrders: PerpsOpenOrderSnapshot[];
+  error: string | null;
+  updatedAt: string;
+};
+
+export type PerpsPositionSnapshot = {
+  coin: string;
+  size: string;
+  side: 'long' | 'short';
+  entryPrice: number | null;
+  markPrice: number | null;
+  positionValueUsd: number | null;
+  notionalUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  returnOnEquityPct: number | null;
+  liquidationPrice: number | null;
+  marginUsedUsd: number | null;
+  leverageType: 'cross' | 'isolated';
+  leverageValue: number | null;
+  maxLeverage: number | null;
+};
+
+export type PerpsOpenOrderSnapshot = {
+  coin: string;
+  side: 'long' | 'short';
+  limitPrice: number | null;
+  size: string;
+  originalSize: string;
+  orderId: number;
+  timestamp: number;
+  reduceOnly: boolean;
+};
+
+export type PerpsOrderRequest = {
+  coin: string;
+  side?: 'long' | 'short';
+  size: string;
+  orderType?: 'market' | 'limit';
+  limitPrice?: string;
+  reduceOnly?: boolean;
+  leverage?: number;
+  marginMode?: 'cross' | 'isolated';
+  slippageBps?: number;
+};
+
+export type PerpsOrderResponse = {
+  success: true;
+  coin: string;
+  side: 'long' | 'short';
+  size: string;
+  orderType: 'market' | 'limit';
+  limitPrice: string;
+  reduceOnly: boolean;
+  leverage: number | null;
+  marginMode: 'cross' | 'isolated';
+  orderId: number | null;
+  status: 'filled' | 'resting' | 'waitingForFill' | 'waitingForTrigger';
+  avgFillPrice: string | null;
+  totalFilledSize: string | null;
+  updatedAt: string;
+};
+
+export type PerpsCancelOrderRequest = {
+  coin: string;
+  orderId: number;
+};
+
+export type PerpsCancelOrderResponse = {
+  success: true;
+  coin: string;
+  orderId: number;
   updatedAt: string;
 };
 
@@ -499,6 +585,46 @@ export type TradeBrowseResponse = {
   predictions: TradeBrowsePredictionItem[];
 };
 
+export type TradeShelfReasonTag =
+  | 'Based on holdings'
+  | 'In your watchlist'
+  | 'Recently viewed'
+  | 'Recently traded'
+  | 'Trending now'
+  | 'Diversification';
+
+export type TradeShelfItem = {
+  id: string;
+  kind: 'spot' | 'perp' | 'prediction';
+  itemId: string;
+  symbol: string;
+  title: string;
+  image: string | null;
+  chain: string | null;
+  contract: string | null;
+  currentPrice: number | null;
+  change24h: number | null;
+  probability: number | null;
+  volume24h: number | null;
+  reasonTag: TradeShelfReasonTag;
+};
+
+export type TradeShelfSection = {
+  id: 'holdings' | 'behavior' | 'fresh';
+  title: string;
+  items: TradeShelfItem[];
+};
+
+export type TradeShelfResponse = {
+  generatedAt: string | null;
+  refreshState: {
+    dirty: boolean;
+    lastRefreshedAt: string | null;
+    needsRefresh: boolean;
+  };
+  sections: TradeShelfSection[];
+};
+
 export type TradeMarketDetailType = 'perp' | 'prediction';
 export type AssetClass = 'crypto' | 'event_outcome' | 'fiat' | 'index';
 
@@ -581,7 +707,9 @@ export type AgentEventType =
   | 'trade_sell'
   | 'article_read'
   | 'article_favorited'
-  | 'page_dwell';
+  | 'page_dwell'
+  | 'trade_shelf_section_viewed'
+  | 'trade_shelf_item_clicked';
 
 export async function postJson<T>(path: string, body: unknown, withAuth = false): Promise<T> {
   const token = getToken();
@@ -665,6 +793,18 @@ export async function submitTrade(
   request: TradeQuoteRequest & { idempotencyKey?: string },
 ): Promise<TradeSubmitResponse> {
   return postJson<TradeSubmitResponse>('/v1/trade/submit', request, true);
+}
+
+export async function getPerpsAccount(): Promise<PerpsAccountSnapshot> {
+  return getJson<PerpsAccountSnapshot>('/v1/perps/account', true);
+}
+
+export async function submitPerpsOrder(request: PerpsOrderRequest): Promise<PerpsOrderResponse> {
+  return postJson<PerpsOrderResponse>('/v1/perps/order', request, true);
+}
+
+export async function cancelPerpsOrder(request: PerpsCancelOrderRequest): Promise<PerpsCancelOrderResponse> {
+  return postJson<PerpsCancelOrderResponse>('/v1/perps/cancel', request, true);
 }
 
 export async function getPredictionAccount(params?: {
@@ -854,6 +994,10 @@ export async function getTradeBrowse(): Promise<TradeBrowseResponse> {
   return getJson<TradeBrowseResponse>('/v1/market/trade-browse', true);
 }
 
+export async function getTradeShelf(): Promise<TradeShelfResponse> {
+  return getJson<TradeShelfResponse>('/v1/market/trade-shelf', true);
+}
+
 export async function getMarketWatchlist(params?: {
   limit?: number;
 }): Promise<{ assets: WatchlistAsset[] }> {
@@ -939,6 +1083,18 @@ export async function runAgentRecommendations(): Promise<{
     refreshed: boolean;
     recommendations: AgentRecommendation[];
   }>('/v1/agent/jobs/recommendations/run', {}, true);
+}
+
+export async function runTradeShelfRefresh(): Promise<{
+  ok: boolean;
+  refreshed: boolean;
+  shelf: TradeShelfResponse | null;
+}> {
+  return postJson<{
+    ok: boolean;
+    refreshed: boolean;
+    shelf: TradeShelfResponse | null;
+  }>('/v1/agent/jobs/trade-shelf/run', {}, true);
 }
 
 export async function getAgentArticles(params?: {

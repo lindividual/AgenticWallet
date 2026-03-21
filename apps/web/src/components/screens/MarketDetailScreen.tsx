@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
   addMarketWatchlistAsset,
+  cancelPerpsOrder,
+  getPerpsAccount,
   getMarketWatchlist,
   getPredictionEventDetail,
   getPredictionEventKline,
@@ -11,14 +13,18 @@ import {
   getTradeMarketKline,
   ingestAgentEvent,
   removeMarketWatchlistAsset,
+  submitPerpsOrder,
   submitPredictionBet,
   type KlinePeriod,
+  type PerpsOpenOrderSnapshot,
+  type PerpsPositionSnapshot,
   type PredictionEventOutcome,
   type PredictionEventSeries,
   type TradeBrowseMarketItem,
 } from '../../api';
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { formatUsdAdaptive } from '../../utils/currency';
 import {
   computeAdaptiveChartWindowSeconds,
   normalizeCandlesForLiveline,
@@ -110,6 +116,12 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const [predictionBetAmount, setPredictionBetAmount] = useState('5');
   const [pendingPredictionOptionId, setPendingPredictionOptionId] = useState<string | null>(null);
   const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
+  const [perpsSide, setPerpsSide] = useState<'long' | 'short'>('long');
+  const [perpsSize, setPerpsSize] = useState('');
+  const [perpsLeverage, setPerpsLeverage] = useState('3');
+  const [perpsReduceOnly, setPerpsReduceOnly] = useState(false);
+  const [pendingPerpsSubmit, setPendingPerpsSubmit] = useState(false);
+  const [pendingPerpsCancelOrderId, setPendingPerpsCancelOrderId] = useState<number | null>(null);
 
   const { data: detailItem, isLoading: isDetailLoading } = useQuery({
     queryKey: ['trade-market-detail', normalizedType, normalizedItemId],
@@ -131,6 +143,13 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     queryKey: ['market-watchlist', 200],
     queryFn: () => getMarketWatchlist({ limit: 200 }),
     staleTime: 15_000,
+  });
+  const { data: perpsAccount, isFetching: isPerpsAccountFetching } = useQuery({
+    queryKey: ['perps-account'],
+    queryFn: () => getPerpsAccount(),
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+    enabled: normalizedType === 'perp',
   });
 
   const activeMarketItem = normalizedType === 'prediction' ? null : (detailItem as TradeBrowseMarketItem | null);
@@ -165,6 +184,16 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const displayMetaValue = activeMarketItem?.metaValue ?? null;
   const displayChain = activeMarketItem?.chain ?? null;
   const displayContract = activeMarketItem?.contract ?? null;
+  const activePerpsPosition = useMemo<PerpsPositionSnapshot | null>(() => {
+    const symbol = (activeMarketItem?.symbol ?? '').trim().toUpperCase();
+    if (!symbol) return null;
+    return perpsAccount?.positions.find((item) => item.coin.trim().toUpperCase() === symbol) ?? null;
+  }, [activeMarketItem?.symbol, perpsAccount?.positions]);
+  const activePerpsOrders = useMemo<PerpsOpenOrderSnapshot[]>(() => {
+    const symbol = (activeMarketItem?.symbol ?? '').trim().toUpperCase();
+    if (!symbol) return [];
+    return (perpsAccount?.openOrders ?? []).filter((item) => item.coin.trim().toUpperCase() === symbol);
+  }, [activeMarketItem?.symbol, perpsAccount?.openOrders]);
   const predictionDescription = activePredictionItem?.description ?? null;
   const predictionEndDate = activePredictionItem?.endDate ?? null;
   const hasKlineSupport = normalizedType === 'prediction'
@@ -253,6 +282,14 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     ? `asset_viewed:${normalizedType}:${normalizedItemId}`
     : null;
   const assetViewLabel = (displaySymbol || displayName).trim().toUpperCase();
+
+  useEffect(() => {
+    if (normalizedType !== 'perp') return;
+    setPerpsReduceOnly(false);
+    setPerpsSize('');
+    setPendingPerpsSubmit(false);
+    setPendingPerpsCancelOrderId(null);
+  }, [normalizedItemId, normalizedType]);
 
   useEffect(() => {
     if (!assetViewDedupeKey || !assetViewLabel) return;
@@ -398,6 +435,71 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     }
   }
 
+  async function submitPerpsMarketOrder(): Promise<void> {
+    if (pendingPerpsSubmit) return;
+    const coin = (activeMarketItem?.symbol ?? '').trim().toUpperCase();
+    if (!coin) {
+      showError(t('trade.loadFailed', { message: 'perp_market_unavailable' }));
+      return;
+    }
+    if (!perpsSize.trim()) {
+      showError(t('trade.perpsSizeInvalid'));
+      return;
+    }
+
+    const leverage = Number(perpsLeverage);
+    setPendingPerpsSubmit(true);
+    try {
+      const result = await submitPerpsOrder({
+        coin,
+        side: perpsSide,
+        size: perpsSize.trim(),
+        orderType: 'market',
+        reduceOnly: perpsReduceOnly,
+        leverage: Number.isFinite(leverage) ? leverage : undefined,
+        marginMode: activePerpsPosition?.leverageType === 'isolated' ? 'isolated' : 'cross',
+      });
+      ingestAgentEvent(perpsSide === 'long' ? 'trade_buy' : 'trade_sell', {
+        asset: coin,
+        itemId: normalizedItemId,
+        marketType: normalizedType,
+        source: 'trade_market_detail_perps',
+        orderId: result.orderId,
+      }).catch(() => undefined);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['perps-account'] }),
+        queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] }),
+      ]);
+      showSuccess(t('trade.perpsOrderSuccess'));
+      setPerpsSize('');
+      setPerpsReduceOnly(false);
+    } catch (error) {
+      showError(`${t('trade.perpsOrderFailed')}: ${(error as Error).message}`);
+    } finally {
+      setPendingPerpsSubmit(false);
+    }
+  }
+
+  async function handleCancelPerpsOrder(orderId: number): Promise<void> {
+    if (pendingPerpsCancelOrderId != null || !activeMarketItem?.symbol) return;
+    setPendingPerpsCancelOrderId(orderId);
+    try {
+      await cancelPerpsOrder({
+        coin: activeMarketItem.symbol,
+        orderId,
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['perps-account'] }),
+        queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] }),
+      ]);
+      showSuccess(t('trade.perpsCancelSuccess'));
+    } catch (error) {
+      showError(`${t('trade.perpsCancelFailed')}: ${(error as Error).message}`);
+    } finally {
+      setPendingPerpsCancelOrderId(null);
+    }
+  }
+
   const klinePeriodButtons = (
     <>
       {(normalizedType === 'prediction' ? PREDICTION_KLINE_PERIOD_OPTIONS : KLINE_PERIOD_OPTIONS).map((option) => (
@@ -511,6 +613,161 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
           locale={i18n.language}
         />
       )}
+
+      {normalizedType === 'perp' && activeMarketItem ? (
+        <section className="rounded-3xl border border-base-300 bg-base-100 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="m-0 text-lg font-semibold">{t('trade.perpsTradePanelTitle')}</h3>
+              <p className="m-0 mt-1 text-sm text-base-content/60">
+                {perpsAccount?.available ? t('trade.perpsTradePanelHint') : t('trade.perpsUnavailableHint')}
+              </p>
+            </div>
+            {isPerpsAccountFetching ? <span className="loading loading-spinner loading-sm" /> : null}
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl border border-base-300/80 bg-base-200/40 p-3">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.perpsAccountEquity')}</p>
+              <p className="m-0 mt-1 text-base font-semibold">
+                {perpsAccount?.available
+                  ? formatUsdAdaptive(Number(perpsAccount.balanceUsd ?? 0), i18n.language)
+                  : t('wallet.accountUnavailableValue')}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-base-300/80 bg-base-200/40 p-3">
+              <p className="m-0 text-xs text-base-content/60">{t('trade.perpsWithdrawable')}</p>
+              <p className="m-0 mt-1 text-base font-semibold">
+                {perpsAccount?.available
+                  ? formatUsdAdaptive(Number(perpsAccount.withdrawableUsd ?? 0), i18n.language)
+                  : t('wallet.accountUnavailableValue')}
+              </p>
+            </div>
+          </div>
+
+          {activePerpsPosition ? (
+            <div className="mt-4 rounded-2xl border border-base-300/80 bg-base-200/30 p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">{t('trade.perpsCurrentPosition')}</span>
+                <span className={activePerpsPosition.side === 'long' ? 'text-success' : 'text-error'}>
+                  {activePerpsPosition.side === 'long' ? t('trade.perpsLong') : t('trade.perpsShort')}
+                </span>
+              </div>
+              <p className="m-0 mt-2 text-base-content/70">
+                {activePerpsPosition.size} {activePerpsPosition.coin}
+                {' · '}
+                {formatUsdAdaptive(Number(activePerpsPosition.notionalUsd ?? 0), i18n.language)}
+              </p>
+              <p className="m-0 mt-1 text-base-content/70">
+                {t('trade.perpsUnrealizedPnl')}
+                {': '}
+                {formatUsdAdaptive(Number(activePerpsPosition.unrealizedPnlUsd ?? 0), i18n.language)}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              className={`btn ${perpsSide === 'long' ? 'btn-success' : 'btn-outline'}`}
+              onClick={() => setPerpsSide('long')}
+              disabled={pendingPerpsSubmit}
+            >
+              {t('trade.perpsLong')}
+            </button>
+            <button
+              type="button"
+              className={`btn ${perpsSide === 'short' ? 'btn-error' : 'btn-outline'}`}
+              onClick={() => setPerpsSide('short')}
+              disabled={pendingPerpsSubmit}
+            >
+              {t('trade.perpsShort')}
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-2">
+              <span className="text-sm text-base-content/70">{t('trade.perpsOrderSize', { symbol: activeMarketItem.symbol })}</span>
+              <input
+                className="input input-bordered w-full"
+                placeholder="0.01"
+                value={perpsSize}
+                inputMode="decimal"
+                onChange={(event) => setPerpsSize(event.target.value)}
+                disabled={pendingPerpsSubmit}
+              />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-sm text-base-content/70">{t('trade.perpsLeverage')}</span>
+              <input
+                className="input input-bordered w-full"
+                placeholder="3"
+                value={perpsLeverage}
+                inputMode="numeric"
+                onChange={(event) => setPerpsLeverage(event.target.value)}
+                disabled={pendingPerpsSubmit}
+              />
+            </label>
+          </div>
+
+          <label className="mt-3 inline-flex items-center gap-2 text-sm text-base-content/75">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-sm"
+              checked={perpsReduceOnly}
+              onChange={(event) => setPerpsReduceOnly(event.target.checked)}
+              disabled={pendingPerpsSubmit}
+            />
+            {t('trade.perpsReduceOnly')}
+          </label>
+
+          <button
+            type="button"
+            className="btn btn-primary mt-4 w-full"
+            onClick={() => void submitPerpsMarketOrder()}
+            disabled={pendingPerpsSubmit || !perpsAccount?.available}
+          >
+            {pendingPerpsSubmit ? <span className="loading loading-spinner loading-sm" /> : null}
+            {perpsReduceOnly ? t('trade.perpsReducePosition') : t('trade.perpsPlaceOrder')}
+          </button>
+
+          {activePerpsOrders.length > 0 ? (
+            <div className="mt-5">
+              <h4 className="m-0 text-sm font-medium text-base-content/75">{t('trade.perpsOpenOrders')}</h4>
+              <div className="mt-3 flex flex-col gap-2">
+                {activePerpsOrders.map((order) => (
+                  <div key={order.orderId} className="flex items-center justify-between gap-3 rounded-2xl border border-base-300/80 px-3 py-3 text-sm">
+                    <div className="min-w-0">
+                      <p className="m-0 font-medium">
+                        {order.side === 'long' ? t('trade.perpsLong') : t('trade.perpsShort')}
+                        {' · '}
+                        {order.size} {order.coin}
+                      </p>
+                      <p className="m-0 mt-1 text-base-content/60">
+                        {t('trade.perpsLimitPrice')}
+                        {': '}
+                        {order.limitPrice == null ? '--' : order.limitPrice}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void handleCancelPerpsOrder(order.orderId)}
+                      disabled={pendingPerpsCancelOrderId === order.orderId}
+                    >
+                      {pendingPerpsCancelOrderId === order.orderId ? (
+                        <span className="loading loading-spinner loading-xs" />
+                      ) : (
+                        t('trade.remove')
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <MarketInfoSection
         isLoading={isSummaryLoading}
