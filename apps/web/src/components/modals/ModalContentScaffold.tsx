@@ -33,8 +33,8 @@ export function ModalContentScaffold({
   children,
 }: ModalContentScaffoldProps) {
   return (
-    <div className="flex min-h-full flex-col">
-      <div className={`flex min-h-0 flex-1 flex-col ${bodyClassName} ${stageClassName}`.trim()}>
+    <div className="flex min-h-full w-full flex-col">
+      <div className={`flex min-h-0 w-full flex-1 flex-col ${bodyClassName} ${stageClassName}`.trim()}>
         <header>
           <h2 className="m-0 text-4xl font-bold tracking-tight">{title}</h2>
           {headerMeta ? <div className="mt-3">{headerMeta}</div> : null}

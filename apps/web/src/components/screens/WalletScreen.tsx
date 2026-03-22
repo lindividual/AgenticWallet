@@ -70,7 +70,6 @@ type WalletHoldingListItem = {
   symbol: string;
   name: string;
   logo: string | null;
-  chainSummary: string;
   valueUsd: number;
   amountText: string;
   priceChangePct: number | null;
@@ -380,10 +379,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                 .filter(Boolean),
             ),
           ];
-          const chainSummary =
-            chainLabels.length > 1
-              ? t('wallet.multiChainCount', { count: chainLabels.length })
-              : t('wallet.singleChainLabel', { chain: chainLabels[0] ?? '--' });
           const symbol = (item.symbol ?? primary.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
           const name = (item.name ?? primary.name ?? t('wallet.token')).trim();
           const chainAssetId = normalizeChainAssetId(
@@ -408,7 +403,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                 primary.url,
                 resolveAssetIdFallbackIcon(normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id), symbol),
               ),
-              chainSummary,
               valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
               amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
               priceChangePct: null as number | null,
@@ -456,10 +450,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
               .filter(Boolean),
           ),
         ];
-        const chainSummary =
-          chainLabels.length > 1
-            ? t('wallet.multiChainCount', { count: chainLabels.length })
-            : t('wallet.singleChainLabel', { chain: chainLabels[0] ?? '--' });
         const symbol = (primary.symbol ?? primary.name ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
         const name = (primary.name ?? t('wallet.token')).trim();
         const chainAssetId = normalizeChainAssetId(
@@ -481,7 +471,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
             primary.url,
             resolveAssetIdFallbackIcon(normalizeAssetId(primary.asset_id), symbol),
           ),
-          chainSummary,
           valueUsd: group.totalValueUsd,
           amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
           priceChangePct: null as number | null,
@@ -1015,7 +1004,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                       )}
                       leftPrimary={asset.name || t('wallet.token')}
                       leftSecondary={`${asset.amountText} ${asset.symbol}`}
-                      leftTertiary={asset.chainSummary}
                       rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
                     />
                   ))}
@@ -1054,7 +1042,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                       }
                       leftPrimary={asset.name || t('wallet.token')}
                       leftSecondary={`${asset.amountText} ${asset.symbol}`}
-                      leftTertiary={asset.chainSummary}
                       rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
                       rightSecondary={<span className={changeClassName}>{formatPct(resolvedPriceChangePct)}</span>}
                     />
@@ -1088,14 +1075,14 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         <Modal visible={modalVisible} originRect={modalOriginRect} onClose={closeActiveModal}>
           <div className="relative flex-1 overflow-hidden">
             {exitingModalContent ? (
-              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0">
+              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0 w-full">
                 {renderModalPane(exitingModalContent, {
                   footerVisible: false,
                   stageClassName: getStageClassName('exit'),
                 })}
               </div>
             ) : null}
-            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0">
+            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0 w-full">
               {renderModalPane(activeModalContent, {
                 footerVisible: true,
                 stageClassName: exitingModalContent ? getStageClassName('enter') : undefined,
