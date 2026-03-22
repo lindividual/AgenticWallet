@@ -13,9 +13,9 @@ Passkey-only login/register MVP for an agentic crypto wallet.
 - Session token issued by Worker
 - User wallet bootstrap on first registration:
   - server-generated EOA key, encrypted-at-rest
-  - EOA address reused across Ethereum/Base/BNB
+  - EOA address reused across Ethereum/Base/BNB/Arbitrum/Optimism/Polygon
   - EIP-7702 orchestration via `@biconomy/abstractjs` for gasless-capable flows
-- Supported chains API: Ethereum, Base, BNB Chain
+- Supported chains API: Ethereum, Base, BNB Chain, Arbitrum, Optimism, Polygon, Tron, Solana, Bitcoin
 - Agent recommendation API stub
 
 ## Project Structure
@@ -53,6 +53,9 @@ cp apps/webapp/.env.example apps/webapp/.env
   - `ETHEREUM_RPC_URL`
   - `BASE_RPC_URL`
   - `BNB_RPC_URL`
+  - `ARBITRUM_RPC_URL`
+  - `OPTIMISM_RPC_URL`
+  - `POLYGON_RPC_URL`
 - Optional LLM settings:
   - Direct Gemini call on Cloudflare AI Gateway:
     - `LLM_PROVIDER=gemini`

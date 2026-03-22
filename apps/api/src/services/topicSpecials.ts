@@ -24,6 +24,11 @@ const TOPIC_SPECIAL_INTER_ARTICLE_DELAY_MS = 750;
 const TOPIC_SPECIAL_MAX_SPOT_REFS = 4;
 const TOPIC_SPECIAL_MAX_PERP_REFS = 2;
 const TOPIC_SPECIAL_MAX_PREDICTION_REFS = 2;
+const TOPIC_SPECIAL_HISTORY_LOOKBACK_DAYS = 5;
+const TOPIC_SPECIAL_HISTORY_LIMIT = 48;
+const TOPIC_SPECIAL_STRICT_COOLDOWN_HOURS = 36;
+const TOPIC_SPECIAL_ASSET_COOLDOWN_HOURS = 24;
+const TOPIC_STABLE_ASSETS = new Set(['USDT', 'USDC', 'DAI', 'FDUSD', 'TUSD', 'USDE', 'USDD', 'USDP', 'PYUSD', 'FRAX']);
 const TOPIC_PREDICTION_STOPWORDS = new Set([
   'about',
   'after',
@@ -95,6 +100,17 @@ type TopicDraft = {
   editorScore: number;
   chiefScore: number | null;
   chiefReason: string | null;
+};
+
+type TopicRecentArticleMemory = {
+  topicSlug: string;
+  title: string;
+  summary: string;
+  generatedAt: string;
+  relatedAssets: string[];
+  sourceRefs: string[];
+  storyKey: string | null;
+  assetFamily: string;
 };
 
 type PromptDebugStats = {
@@ -296,7 +312,7 @@ const TOPIC_SPECIAL_EDITOR_DEFINITIONS: TopicSpecialEditorDefinition[] = [
   {
     id: 'majors',
     label: 'Majors Editor',
-    summary: 'Owns BTC, ETH, SOL, stablecoins, ETF, macro, and broad market regime topics.',
+    summary: 'Owns market breadth, stablecoin liquidity, ETF and macro regime, plus leadership rotation across majors and alt leaders.',
   },
   {
     id: 'meme',
@@ -311,7 +327,7 @@ const TOPIC_SPECIAL_EDITOR_DEFINITIONS: TopicSpecialEditorDefinition[] = [
   {
     id: 'prediction',
     label: 'Prediction Editor',
-    summary: 'Owns event markets, odds repricing, and narrative timing topics.',
+    summary: 'Owns event markets, catalyst repricing, regulatory timing, and narrative inflection topics.',
   },
 ];
 
@@ -480,7 +496,7 @@ export async function fetchTopicSpecialSourcePacket(
   ]);
 
   const sourceRefs = buildSourceReferences(newsItems, twitterItems, rssHeadlines);
-  const defaultAssets = buildDefaultAssetPool(marketAssets, newsItems, memeHeatItems);
+  const defaultAssets = buildDefaultAssetPool(marketAssets, newsItems, memeHeatItems, tradeBrowse.perps);
 
   return {
     slotKey,
@@ -1165,6 +1181,48 @@ async function listTopicTitlesForDate(db: D1Database, dateKey: string): Promise<
   ).slice(0, 12);
 }
 
+async function listRecentTopicArticleMemories(
+  db: D1Database,
+  options?: { lookbackDays?: number; limit?: number },
+): Promise<TopicRecentArticleMemory[]> {
+  const lookbackDays = Math.max(1, Math.trunc(options?.lookbackDays ?? TOPIC_SPECIAL_HISTORY_LOOKBACK_DAYS));
+  const limit = Math.max(1, Math.trunc(options?.limit ?? TOPIC_SPECIAL_HISTORY_LIMIT));
+  const cutoffIso = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
+  const result = await db
+    .prepare(
+      `SELECT topic_slug, title, summary, related_assets_json, source_refs_json, generated_at
+       FROM topic_special_articles
+       WHERE generated_at >= ?
+       ORDER BY generated_at DESC
+       LIMIT ?`,
+    )
+    .bind(cutoffIso, limit)
+    .all<{
+      topic_slug: string;
+      title: string;
+      summary: string;
+      related_assets_json: string;
+      source_refs_json: string;
+      generated_at: string;
+    }>();
+
+  return (result.results ?? []).map((row) => {
+    const relatedAssets = sanitizeAssetSymbols(parseStoredStringArray(row.related_assets_json));
+    const sourceRefs = normalizeSourceRefs(parseStoredStringArray(row.source_refs_json));
+    const storyKey = deriveStoryKeyFromParts(row.title, row.summary, sourceRefs);
+    return {
+      topicSlug: row.topic_slug,
+      title: sanitizeTitle(row.title),
+      summary: truncateSummary(row.summary),
+      generatedAt: row.generated_at,
+      relatedAssets,
+      sourceRefs,
+      storyKey,
+      assetFamily: buildAssetFamilySignature(relatedAssets),
+    };
+  });
+}
+
 export function getTopicSpecialSlotKey(date: Date): string {
   const year = date.getUTCFullYear();
   const month = `${date.getUTCMonth() + 1}`.padStart(2, '0');
@@ -1195,6 +1253,7 @@ async function buildTopicDrafts(
   options?: TopicSpecialDebugOptions,
 ): Promise<TopicDraft[]> {
   const candidateDrafts: TopicDraft[] = [];
+  const recentHistory = await listRecentTopicArticleMemories(env.DB);
   for (const [index, editor] of TOPIC_SPECIAL_EDITOR_DEFINITIONS.entries()) {
     const editorDrafts = await buildTopicBeatDrafts(env, llmStatus, editor, input, debug, options);
     candidateDrafts.push(...editorDrafts);
@@ -1203,12 +1262,13 @@ async function buildTopicDrafts(
     }
   }
 
-  const dedupedCandidates = dedupeTopicDrafts(candidateDrafts, input.existingTopicsToday);
+  const dedupedCandidates = dedupeTopicDrafts(candidateDrafts, input.existingTopicsToday, recentHistory);
   const uniqueStoryCandidates = enforceUniqueStoryDrafts(dedupedCandidates, 'editor');
-  const shortlisted = enforceUniqueStoryDrafts(
+  const chiefSelected = enforceUniqueStoryDrafts(
     await buildChiefEditorSelection(env, llmStatus, input, uniqueStoryCandidates, debug),
     'chief',
   );
+  const shortlisted = selectDiverseTopicDrafts(chiefSelected, recentHistory, TOPIC_SPECIAL_MAX_COUNT_PER_SLOT);
 
   if (debug) {
     const firstLlmEditor = TOPIC_SPECIAL_EDITOR_DEFINITIONS
@@ -1240,7 +1300,11 @@ async function buildTopicDrafts(
     return shortlisted.slice(0, TOPIC_SPECIAL_MAX_COUNT_PER_SLOT);
   }
 
-  return buildFallbackTopicDrafts(input).slice(0, TOPIC_SPECIAL_MAX_COUNT_PER_SLOT);
+  return selectDiverseTopicDrafts(
+    buildFallbackTopicDrafts(input),
+    recentHistory,
+    TOPIC_SPECIAL_MAX_COUNT_PER_SLOT,
+  ).slice(0, TOPIC_SPECIAL_MAX_COUNT_PER_SLOT);
 }
 
 async function buildTopicBeatDrafts(
@@ -1386,6 +1450,7 @@ function buildTopicBeatEditorPrompt(
     '',
     'Editorial rules:',
     '- Avoid repeating or lightly renaming topics already covered today.',
+    '- Do not default to BTC or ETH unless the packet shows they are the clearest expression of the story.',
     '- Avoid sponsored tone, hype, and generic macro filler.',
     '- Use only evidence supported by the research packet.',
     '- A brief can stay fully inside its category; do not force cross-category framing.',
@@ -1509,6 +1574,7 @@ async function buildChiefEditorSelection(
       'You are the chief editor for a crypto wallet publication.',
       'Your job is to choose the strongest slate from the beat-editor briefs.',
       'Balance quality, novelty, evidence density, and coverage across desks.',
+      'Prefer a slate that covers multiple market lenses instead of clustering around BTC/ETH unless the evidence is overwhelmingly concentrated there.',
       'Prefer one strong brief per desk before taking a second brief from the same desk, unless quality clearly justifies it.',
       'Output strict JSON array only.',
     ].join(' ');
@@ -1611,6 +1677,7 @@ function buildChiefEditorPrompt(
     '',
     'Selection rules:',
     '- Prefer one strong brief per desk before doubling up on the same desk.',
+    '- Prefer coverage breadth across market regime, rotation, leverage, sentiment, and catalysts.',
     '- Keep only briefs with a clear trigger, evidence trail, and concrete reason to read now.',
     '- Avoid generic market filler and redundant macro angles.',
     '',
@@ -1763,9 +1830,16 @@ function enforceUniqueStoryDrafts(candidates: TopicDraft[], stage: 'editor' | 'c
   return output;
 }
 
-function dedupeTopicDrafts(candidates: TopicDraft[], existingTopicsToday: string[]): TopicDraft[] {
+function dedupeTopicDrafts(
+  candidates: TopicDraft[],
+  existingTopicsToday: string[],
+  recentHistory: TopicRecentArticleMemory[],
+): TopicDraft[] {
   const output: TopicDraft[] = [];
-  const seenTopics = new Set(existingTopicsToday.map((topic) => slugifyTopic(topic)).filter(Boolean));
+  const seenTopics = new Set([
+    ...existingTopicsToday.map((topic) => slugifyTopic(topic)).filter(Boolean),
+    ...recentHistory.map((item) => item.topicSlug).filter(Boolean),
+  ]);
   for (const candidate of candidates) {
     const slug = slugifyTopic(candidate.topic);
     if (!slug || seenTopics.has(slug)) continue;
@@ -1778,17 +1852,35 @@ function dedupeTopicDrafts(candidates: TopicDraft[], existingTopicsToday: string
   return output;
 }
 
+function selectDiverseTopicDrafts(
+  candidates: TopicDraft[],
+  recentHistory: TopicRecentArticleMemory[],
+  limit: number,
+): TopicDraft[] {
+  if (candidates.length <= 1) return candidates.slice(0, limit);
+
+  const cooledCandidates = applyRecentTopicCooldown(candidates, recentHistory);
+  const pool = cooledCandidates.length > 0 ? cooledCandidates : candidates;
+  const output: TopicDraft[] = [];
+  const remaining = pool.slice();
+
+  while (remaining.length > 0 && output.length < limit) {
+    remaining.sort((left, right) => scoreDraftForSelection(right, output, recentHistory) - scoreDraftForSelection(left, output, recentHistory));
+    const next = remaining.shift();
+    if (!next) break;
+    output.push(next);
+  }
+
+  return output;
+}
+
 function scoreDraftForStoryUniqueness(draft: TopicDraft, stage: 'editor' | 'chief'): number {
   const stageScore = stage === 'chief' ? (draft.chiefScore ?? draft.editorScore) : draft.editorScore;
   return stageScore * 3 + draft.sourceRefs.length * 8 + draft.relatedAssets.length * 2;
 }
 
 function deriveDraftStoryKey(draft: TopicDraft): string | null {
-  const refKeys = buildDraftRefKeys(draft);
-  if (refKeys.length > 0) return refKeys[0] ?? null;
-  const tokens = buildStoryTokens(`${draft.topic} ${draft.summary}`);
-  if (tokens.length === 0) return null;
-  return tokens.slice(0, 8).join('-');
+  return deriveStoryKeyFromParts(draft.topic, draft.summary, draft.sourceRefs);
 }
 
 function draftsShareStory(left: TopicDraft, right: TopicDraft): boolean {
@@ -1814,6 +1906,15 @@ function buildDraftRefKeys(draft: TopicDraft): string[] {
   return normalizeSourceRefs(draft.sourceRefs)
     .map((line) => buildReferenceStoryKey(line))
     .filter(Boolean);
+}
+
+function deriveStoryKeyFromParts(title: string, summary: string, sourceRefs: string[]): string | null {
+  const refKeys = normalizeSourceRefs(sourceRefs)
+    .map((line) => buildReferenceStoryKey(line))
+    .filter(Boolean);
+  if (refKeys.length > 0) return refKeys[0] ?? null;
+  const tokens = buildStoryTokens(`${title} ${summary}`);
+  return tokens.length > 0 ? tokens.slice(0, 8).join('-') : null;
 }
 
 function buildReferenceStoryKey(line: string): string {
@@ -1860,8 +1961,96 @@ function scoreDraftForChiefFallback(draft: TopicDraft): number {
     draft.editorScore * 3
     + draft.sourceRefs.length * 8
     + draft.relatedAssets.length * 2
-    + (draft.editorId === 'majors' ? 2 : 0)
   );
+}
+
+function applyRecentTopicCooldown(candidates: TopicDraft[], recentHistory: TopicRecentArticleMemory[]): TopicDraft[] {
+  const filtered = candidates.filter((draft) => !recentHistory.some((item) => shouldCooldownDraft(draft, item)));
+  return filtered.length > 0 ? filtered : candidates;
+}
+
+function scoreDraftForSelection(
+  draft: TopicDraft,
+  selected: TopicDraft[],
+  recentHistory: TopicRecentArticleMemory[],
+): number {
+  let score = (draft.chiefScore ?? draft.editorScore) * 4 + draft.sourceRefs.length * 10 + draft.relatedAssets.length * 3;
+  const recentPenalty = calculateRecentHistoryPenalty(draft, recentHistory);
+  score -= recentPenalty;
+
+  const draftFamily = buildAssetFamilySignature(draft.relatedAssets);
+  const selectedFamilies = new Set(selected.map((item) => buildAssetFamilySignature(item.relatedAssets)).filter(Boolean));
+  if (draftFamily && selectedFamilies.has(draftFamily)) score -= 24;
+
+  const selectedDeskCount = selected.filter((item) => item.editorId === draft.editorId).length;
+  score -= selectedDeskCount * 18;
+
+  const sharedAssets = selected.reduce((count, item) => count + countSharedAssets(draft.relatedAssets, item.relatedAssets), 0);
+  score -= sharedAssets * 6;
+
+  return score;
+}
+
+function calculateRecentHistoryPenalty(draft: TopicDraft, recentHistory: TopicRecentArticleMemory[]): number {
+  let penalty = 0;
+  for (const item of recentHistory) {
+    const sharedAssets = countSharedAssets(draft.relatedAssets, item.relatedAssets);
+    const titleSimilarity = jaccardSimilarity(
+      new Set(buildStoryTokens(`${draft.topic} ${draft.summary}`)),
+      new Set(buildStoryTokens(`${item.title} ${item.summary}`)),
+    );
+    const refSimilarity = bestReferenceSimilarity(draft.sourceRefs, item.sourceRefs);
+    if (sharedAssets >= 2 && (titleSimilarity >= 0.35 || refSimilarity >= 0.45)) {
+      penalty += 48;
+      continue;
+    }
+    if (buildAssetFamilySignature(draft.relatedAssets) === item.assetFamily && sharedAssets >= 1) {
+      penalty += 18;
+    }
+  }
+  return penalty;
+}
+
+function shouldCooldownDraft(draft: TopicDraft, recent: TopicRecentArticleMemory): boolean {
+  const ageHours = getAgeHours(recent.generatedAt);
+  const sharedAssets = countSharedAssets(draft.relatedAssets, recent.relatedAssets);
+  const draftStoryKey = draft.storyKey ?? deriveDraftStoryKey(draft);
+  const titleSimilarity = jaccardSimilarity(
+    new Set(buildStoryTokens(`${draft.topic} ${draft.summary}`)),
+    new Set(buildStoryTokens(`${recent.title} ${recent.summary}`)),
+  );
+  const refSimilarity = bestReferenceSimilarity(draft.sourceRefs, recent.sourceRefs);
+  const sameAssetFamily = buildAssetFamilySignature(draft.relatedAssets) === recent.assetFamily;
+  if (ageHours <= TOPIC_SPECIAL_STRICT_COOLDOWN_HOURS) {
+    if (draftStoryKey && recent.storyKey && draftStoryKey === recent.storyKey) return true;
+    if (sharedAssets >= 2 && (titleSimilarity >= 0.32 || refSimilarity >= 0.42)) return true;
+  }
+  if (ageHours <= TOPIC_SPECIAL_ASSET_COOLDOWN_HOURS) {
+    if (sameAssetFamily && sharedAssets >= 1 && titleSimilarity >= 0.2) return true;
+  }
+  return false;
+}
+
+function getAgeHours(isoTimestamp: string): number {
+  const parsed = Date.parse(isoTimestamp);
+  if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, (Date.now() - parsed) / (60 * 60 * 1000));
+}
+
+function countSharedAssets(left: string[], right: string[]): number {
+  const rightSet = new Set(sanitizeAssetSymbols(right));
+  let count = 0;
+  for (const asset of sanitizeAssetSymbols(left)) {
+    if (rightSet.has(asset)) count += 1;
+  }
+  return count;
+}
+
+function buildAssetFamilySignature(assets: string[]): string {
+  const sanitized = sanitizeAssetSymbols(assets);
+  const normalized = sanitized.filter((asset) => !TOPIC_STABLE_ASSETS.has(asset));
+  const selected = (normalized.length > 0 ? normalized : sanitized).slice(0, 2).sort((left, right) => left.localeCompare(right));
+  return selected.join('+');
 }
 
 function normalizeDraftScore(raw: unknown, fallback = 60): number {
@@ -2282,13 +2471,87 @@ function buildTopicDraftResearchPacket(
   ].join('\n');
 }
 
+function collectNewsAssetSymbols(items: NewsItem[]): string[] {
+  return dedupeStrings(
+    items
+      .map((item) => normalizeAssetSymbol(item.coin))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function collectPerpAssetSymbols(items: TradeBrowseMarketItem[]): string[] {
+  return dedupeStrings(
+    items
+      .map((item) => normalizePerpBaseSymbol(item.symbol))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function interleaveSymbolGroups(groups: string[][], limit: number): string[] {
+  const queues = groups.map((group) => group.slice());
+  const output: string[] = [];
+  const seen = new Set<string>();
+
+  while (output.length < limit) {
+    let progressed = false;
+    for (const queue of queues) {
+      while (queue.length > 0) {
+        const next = normalizeAssetSymbol(queue.shift());
+        if (!next || seen.has(next)) continue;
+        seen.add(next);
+        output.push(next);
+        progressed = true;
+        break;
+      }
+      if (output.length >= limit) break;
+    }
+    if (!progressed) break;
+  }
+
+  return output;
+}
+
+function interleaveStringGroups(groups: string[][], limit: number): string[] {
+  const queues = groups.map((group) => group.slice());
+  const output: string[] = [];
+  const seen = new Set<string>();
+
+  while (output.length < limit) {
+    let progressed = false;
+    for (const queue of queues) {
+      while (queue.length > 0) {
+        const next = queue.shift()?.trim();
+        if (!next || seen.has(next)) continue;
+        seen.add(next);
+        output.push(next);
+        progressed = true;
+        break;
+      }
+      if (output.length >= limit) break;
+    }
+    if (!progressed) break;
+  }
+
+  return output;
+}
+
 function buildEditorCandidateAssets(editorId: TopicSpecialEditorId, input: TopicDraftGenerationInput): string[] {
+  const marketSymbols = input.marketAssets.slice(0, 12).map((asset) => asset.symbol);
+  const newsSymbols = collectNewsAssetSymbols(input.newsItems);
+  const perpSymbols = collectPerpAssetSymbols(
+    input.perps
+      .slice()
+      .sort((a, b) => Number(b.volume24h ?? 0) - Number(a.volume24h ?? 0))
+      .slice(0, 10),
+  );
+  const defaultSymbols = normalizeAssetSymbols(input.defaultAssets, []);
   switch (editorId) {
     case 'majors':
       return normalizeAssetSymbols(
-        input.marketAssets
-          .slice(0, 8)
-          .map((asset) => asset.symbol),
+        interleaveSymbolGroups(
+          [marketSymbols, newsSymbols, defaultSymbols, ['USDC', 'USDT', 'SOL', 'BNB', 'XRP']],
+          8,
+        ),
         ['BTC', 'ETH', 'SOL', 'USDC', 'USDT'],
       );
     case 'meme':
@@ -2300,18 +2563,18 @@ function buildEditorCandidateAssets(editorId: TopicSpecialEditorId, input: Topic
       );
     case 'perps':
       return normalizeAssetSymbols(
-        input.perps
-          .slice()
-          .sort((a, b) => Number(b.volume24h ?? 0) - Number(a.volume24h ?? 0))
-          .slice(0, 8)
-          .map((item) => normalizePerpBaseSymbol(item.symbol) ?? item.symbol),
+        interleaveSymbolGroups(
+          [perpSymbols, marketSymbols, newsSymbols, ['SOL', 'DOGE', 'XRP', 'BNB']],
+          8,
+        ),
         ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP'],
       );
     case 'prediction':
       return normalizeAssetSymbols(
-        input.marketAssets
-          .slice(0, 6)
-          .map((asset) => asset.symbol),
+        interleaveSymbolGroups(
+          [newsSymbols, defaultSymbols, marketSymbols, ['USDC', 'TRUMP', 'SOL', 'ETH']],
+          8,
+        ),
         ['BTC', 'ETH', 'SOL', 'USDC', 'TRUMP'],
       );
     default:
@@ -2331,10 +2594,10 @@ function buildTopicBeatResearchPacket(
   const marketLimit = compact ? 4 : 6;
   const candidateAssets = buildEditorCandidateAssets(editorId, input);
 
-  const majorKeywords = ['bitcoin', 'btc', 'ethereum', 'eth', 'sol', 'stablecoin', 'usdc', 'usdt', 'etf', 'fed', 'rate', 'treasury', 'nasdaq'];
+  const majorKeywords = ['bitcoin', 'btc', 'ethereum', 'eth', 'sol', 'stablecoin', 'usdc', 'usdt', 'etf', 'fed', 'rate', 'treasury', 'nasdaq', 'defi', 'payment', 'layer 2', 'rwa'];
   const memeKeywords = ['meme', 'memecoin', 'doge', 'dogecoin', 'shib', 'shiba', 'pepe', 'bonk', 'wif', 'pump'];
   const perpKeywords = ['perp', 'perpetual', 'futures', 'funding', 'basis', 'open interest', 'liquidation'];
-  const predictionKeywords = ['polymarket', 'prediction', 'odds', 'election', 'approve', 'approval', 'cpi', 'fed', 'etf', 'bitcoin'];
+  const predictionKeywords = ['polymarket', 'prediction', 'odds', 'election', 'approve', 'approval', 'cpi', 'fed', 'etf', 'bitcoin', 'ethereum', 'regulation', 'rate'];
 
   if (editorId === 'majors') {
     const newsItems = filterNewsItemsByKeywords(input.newsItems, majorKeywords).slice(0, newsLimit);
@@ -2349,7 +2612,7 @@ function buildTopicBeatResearchPacket(
     return [
       `Current slot: ${input.slotKey}`,
       '',
-      'Desk focus: BTC, ETH, SOL, stablecoins, ETF, macro, and broad market regime.',
+      'Desk focus: market breadth, stablecoin liquidity, ETF and macro regime, plus leadership rotation across liquid majors and alt leaders.',
       '',
       'Headline tape:',
       formatBulletBlock(
@@ -2730,21 +2993,21 @@ function buildFallbackTopicDraftsForEditor(
     chiefReason: null,
   });
 
-  switch (editorId) {
+      switch (editorId) {
     case 'majors':
       return [
         createDraft(
-          'Bitcoin Liquidity and ETF Flow Watch',
-          'Track whether Bitcoin demand stays firm as macro rate expectations and ETF narratives reset the market tone.',
-          ['bitcoin', 'btc', 'etf', 'fed', 'rate'],
-          ['BTC', 'ETH', 'USDC'],
+          'Stablecoin Liquidity Is Becoming the Cleaner Risk Gauge',
+          'Watch whether stablecoin balances, ETF headlines, and macro pricing are aligning with a broader expansion in market breadth.',
+          ['stablecoin', 'usdc', 'usdt', 'etf', 'fed', 'rate'],
+          ['USDC', 'USDT', 'SOL'],
           84,
         ),
         createDraft(
-          'Ethereum Positioning and Yield Rotation',
-          'Watch whether Ethereum keeps attracting capital as yield, staking, and relative-strength narratives rotate back into focus.',
-          ['ethereum', 'eth', 'staking', 'yield'],
-          ['ETH', 'SOL', 'BTC'],
+          'Market Breadth Needs to Confirm the Next Majors Breakout',
+          'Leadership matters less than whether participation is broadening across majors, liquid alts, and policy-sensitive narratives.',
+          ['market', 'breadth', 'etf', 'rates', 'rotation'],
+          ['SOL', 'BNB', 'XRP'],
           80,
         ),
       ];
@@ -2768,17 +3031,17 @@ function buildFallbackTopicDraftsForEditor(
     case 'perps':
       return [
         createDraft(
-          'Perp Volume Is Setting the Next Directional Test',
-          'When leverage concentrates in a few perp pairs, even modest spot moves can cascade into outsized positioning resets.',
+          'Leverage Is Concentrating Faster Than Spot Breadth',
+          'When perp conviction outruns spot participation, the next high-volume move often becomes a positioning reset instead of a clean trend.',
           ['perp', 'futures', 'funding', 'basis', 'liquidation'],
-          ['BTC', 'ETH', 'SOL'],
+          ['SOL', 'DOGE', 'XRP'],
           82,
         ),
         createDraft(
-          'High-Beta Perps Are Leading Risk Appetite Again',
-          'Perp leadership from high-beta names can signal either healthy risk expansion or unstable leverage chasing.',
+          'High-Beta Perps Are Testing Whether Rotation Has Real Conviction',
+          'The tape gets more useful when leverage rotates into secondary names without immediately collapsing back into the largest pairs.',
           ['perp', 'futures', 'liquidation', 'open interest'],
-          ['SOL', 'DOGE', 'XRP'],
+          ['DOGE', 'XRP', 'BNB'],
           76,
         ),
       ];
@@ -2786,16 +3049,16 @@ function buildFallbackTopicDraftsForEditor(
       return [
         createDraft(
           'Prediction Markets Are Repricing the Next Policy Catalyst',
-          'When event-market odds move faster than spot, they can reveal which narrative traders expect to matter next.',
-          ['prediction', 'polymarket', 'fed', 'etf', 'approve'],
-          ['BTC', 'ETH', 'USDC'],
+          'When event-market odds move faster than spot, they often show which catalyst is about to reshape positioning across multiple sectors.',
+          ['prediction', 'polymarket', 'fed', 'etf', 'approve', 'regulation'],
+          ['USDC', 'SOL', 'TRUMP'],
           79,
         ),
         createDraft(
           'Event Odds Are Starting to Pull Narrative Attention',
-          'Prediction markets become useful when odds shifts begin leading headline framing across crypto and macro conversations.',
+          'Prediction markets are most valuable when odds shifts begin leading headline framing before the spot market fully reacts.',
           ['prediction', 'polymarket', 'election', 'cpi', 'fed'],
-          ['BTC', 'ETH', 'TRUMP'],
+          ['TRUMP', 'USDC', 'SOL'],
           73,
         ),
       ];
@@ -2815,36 +3078,107 @@ function pickTopicSourceRefs(sourceRefs: string[], keywords: string[]): string[]
   return ['Macro and crypto signals remain mixed across liquidity, policy, and risk appetite.'];
 }
 
+function buildFallbackDeskFraming(editorId: TopicSpecialEditorId, relatedAssets: string[]): {
+  whyNow: string;
+  contextHeading: string;
+  contextBody: string;
+  bullish: string;
+  neutral: string;
+  risk: string;
+  checklist: [string, string, string];
+} {
+  const assetLabel = relatedAssets.join(', ') || 'the tracked assets';
+  if (editorId === 'meme') {
+    return {
+      whyNow: 'The real question is whether attention is broadening into tradeable liquidity or just creating another short-lived spike.',
+      contextHeading: 'Attention Transmission',
+      contextBody: `Meme leadership matters when social velocity starts pulling fresh capital into {primaryAssets}, but durability still depends on liquidity, venue quality, and whether new names can hold attention after the first burst.`,
+      bullish: 'attention expands into {allAssets} with liquidity improving instead of thinning out',
+      neutral: 'headline velocity stays high, but the rotation remains choppy and selective',
+      risk: 'the crowd crowds back into a narrower set of names and {allAssets} fail to hold momentum once attention cools',
+      checklist: [
+        'Track whether social velocity is being confirmed by liquidity and turnover.',
+        'Watch if new entrants are joining the move or if attention is staying narrow.',
+        'Cut conviction quickly if narrative heat is not matched by execution quality.',
+      ],
+    };
+  }
+  if (editorId === 'perps') {
+    return {
+      whyNow: 'What matters is whether leverage is reinforcing spot direction or setting up another forced unwind.',
+      contextHeading: 'Positioning Context',
+      contextBody: `When derivatives interest outruns spot confirmation, moves in {primaryAssets} can become fragile. The useful signal is whether volume, basis, and liquidation risk are broadening across the complex instead of clustering in one obvious pair.`,
+      bullish: 'perp conviction is matched by spot follow-through and the rotation broadens across {allAssets}',
+      neutral: 'positioning stays active, but the market keeps mean-reverting before a real trend can form',
+      risk: 'crowded leverage in {allAssets} becomes the setup for a sharper liquidation-led reset',
+      checklist: [
+        'Watch whether spot breadth is confirming the perp move.',
+        'Check if the highest-volume contracts are still leading or if participation is rotating.',
+        'Treat crowded leverage without spot confirmation as a warning, not a green light.',
+      ],
+    };
+  }
+  if (editorId === 'prediction') {
+    return {
+      whyNow: 'The key is whether odds are moving early enough to reveal the next catalyst before spot positioning fully catches up.',
+      contextHeading: 'Catalyst Context',
+      contextBody: `Event markets help when they reprice a policy or narrative catalyst before the broader market does. In that setup, {primaryAssets} matter less as standalone tickers and more as expressions of which scenario traders think will dominate next.`,
+      bullish: 'odds shifts start pulling positioning and narrative attention into {allAssets} before the broader tape reacts',
+      neutral: 'event pricing moves, but conviction stays contained and the spot market waits for confirmation',
+      risk: 'odds reprice back the other way and {allAssets} lose the catalyst premium that had started to build',
+      checklist: [
+        'Track whether event odds are leading headlines or merely echoing them.',
+        'Check which assets and sectors are most exposed to the repricing.',
+        'Be careful when the catalyst narrative expands faster than supporting evidence.',
+      ],
+    };
+  }
+  return {
+    whyNow: 'The key question is whether broad market participation is strengthening or whether the latest headline is only lifting the most obvious names.',
+    contextHeading: 'Market Regime Context',
+    contextBody: `Macro pricing, ETF flows, stablecoin liquidity, and sector rotation all shape whether moves in {primaryAssets} represent a durable regime shift or just another narrow burst of leadership. The best confirmation usually comes from breadth, not from a single ticker.`,
+    bullish: 'capital rotation broadens beyond the headline into {allAssets}, with participation improving across the tape',
+    neutral: 'the narrative stays alive, but conviction remains selective and breadth fails to improve much',
+    risk: 'the next macro or policy catalyst narrows leadership again before {allAssets} can confirm follow-through',
+    checklist: [
+      'Track whether breadth is improving alongside the headline catalyst.',
+      'Watch stablecoin, ETF, and sector-rotation signals for confirmation.',
+      `Treat ${assetLabel} as expressions of a broader regime call, not as isolated stories.`,
+    ],
+  };
+}
+
 function buildFallbackTopicArticleMarkdown(input: TopicArticleInput): string {
   const relatedAssets = normalizeAssetSymbols(input.relatedAssets, ['BTC', 'ETH', 'USDC']);
   const sourceRefs = normalizeSourceRefs(input.sourceRefs);
   const sourceLines = sourceRefs.length > 0
     ? sourceRefs.map((line) => `- ${line}`).join('\n')
     : '- Macro and crypto signals remain mixed across liquidity, policy, and risk appetite.';
-  const primaryAssets = relatedAssets.slice(0, 2).join(' and ') || 'BTC and ETH';
-  const allAssets = relatedAssets.join(', ') || 'BTC, ETH, USDC';
+  const primaryAssets = relatedAssets.slice(0, 2).join(' and ') || 'the current leaders';
+  const allAssets = relatedAssets.join(', ') || 'the tracked assets';
+  const framing = buildFallbackDeskFraming(input.editorId, relatedAssets);
 
   return [
     `# ${input.topic}`,
     '',
     '## Why this matters now',
-    `${input.summary} The key question is whether the current headline keeps attracting fresh capital or fades once the next macro catalyst arrives.`,
+    `${input.summary} ${framing.whyNow}`,
     '',
-    '## TradFi x Crypto transmission',
-    `Traditional finance catalysts such as rates, ETF flows, regulation, and equity leadership often feed directly into crypto positioning. In practice, that means moves in ${primaryAssets} can be reinforced by broader liquidity conditions, while stablecoin balances and exchange activity help confirm whether the move has depth.`,
+    `## ${framing.contextHeading}`,
+    framing.contextBody.replace('{primaryAssets}', primaryAssets),
     '',
     'Current source signals:',
     sourceLines,
     '',
     '## Scenario watch',
-    `- Bullish: capital rotation broadens from the headline into ${allAssets}, with follow-through across spot activity and market breadth.`,
-    '- Neutral: the narrative stays in the news, but price action remains range-bound and conviction stays selective.',
-    `- Risk: the next macro or policy update reverses sentiment, forcing traders to cut exposure before ${allAssets} can confirm momentum.`,
+    `- Bullish: ${framing.bullish.replace('{allAssets}', allAssets)}`,
+    `- Neutral: ${framing.neutral}`,
+    `- Risk: ${framing.risk.replace('{allAssets}', allAssets)}`,
     '',
     '## Action checklist',
-    '- Track the next catalyst tied to the source signals above.',
-    '- Confirm whether flows broaden beyond the first headline asset into related assets.',
-    '- Reassess sizing quickly if price action diverges from the narrative.',
+    `- ${framing.checklist[0]}`,
+    `- ${framing.checklist[1]}`,
+    `- ${framing.checklist[2]}`,
     '',
     '## Related Assets',
     ...relatedAssets.map((asset) => `- ${asset}`),
@@ -2853,27 +3187,27 @@ function buildFallbackTopicArticleMarkdown(input: TopicArticleInput): string {
 }
 
 function buildSourceReferences(newsItems: NewsItem[], twitterItems: TweetItem[], rssHeadlines: string[]): string[] {
-  const refs: string[] = [];
-
-  for (const item of newsItems) {
-    const title = item.title.trim();
-    if (!title) continue;
-    const source = item.source ? ` (${item.source.trim()})` : '';
-    refs.push(`${title}${source}`.slice(0, 180));
-  }
-
-  for (const headline of rssHeadlines) {
-    const line = headline.trim();
-    if (!line) continue;
-    refs.push(line.slice(0, 180));
-  }
-
-  for (const tweet of twitterItems) {
-    const text = tweet.text.trim();
-    if (!text) continue;
-    const handle = tweet.handle?.trim() ? `@${tweet.handle.trim()}: ` : '';
-    refs.push(`${handle}${text.slice(0, 140)}`);
-  }
+  const newsRefs = newsItems
+    .map((item) => {
+      const title = item.title.trim();
+      if (!title) return null;
+      const source = item.source ? ` (${item.source.trim()})` : '';
+      return `${title}${source}`.slice(0, 180);
+    })
+    .filter((value): value is string => Boolean(value));
+  const rssRefs = rssHeadlines
+    .map((headline) => headline.trim())
+    .filter(Boolean)
+    .map((line) => line.slice(0, 180));
+  const tweetRefs = twitterItems
+    .map((tweet) => {
+      const text = tweet.text.trim();
+      if (!text) return null;
+      const handle = tweet.handle?.trim() ? `@${tweet.handle.trim()}: ` : '';
+      return `${handle}${text.slice(0, 140)}`;
+    })
+    .filter((value): value is string => Boolean(value));
+  const refs = interleaveStringGroups([newsRefs, rssRefs, tweetRefs], SOURCE_REFERENCE_LIMIT);
 
   const deduped = new Set<string>();
   const output: string[] = [];
@@ -2893,32 +3227,22 @@ function buildDefaultAssetPool(
   marketAssets: MarketTopAsset[],
   newsItems: NewsItem[],
   memeHeatItems: DexScreenerMemeHeatItem[],
+  perps: TradeBrowseMarketItem[],
 ): string[] {
-  const output: string[] = [];
-  for (const asset of marketAssets) {
-    const symbol = normalizeAssetSymbol(asset.symbol);
-    if (!symbol) continue;
-    output.push(symbol);
-    if (output.length >= 8) break;
-  }
-
-  for (const item of newsItems) {
-    const symbol = normalizeAssetSymbol(item.coin);
-    if (!symbol) continue;
-    output.push(symbol);
-    if (output.length >= 12) break;
-  }
-
-  for (const item of memeHeatItems) {
-    const symbol = normalizeAssetSymbol(item.symbol);
-    if (!symbol) continue;
-    output.push(symbol);
-    if (output.length >= 18) break;
-  }
-
-  const deduped = dedupeStrings(output).filter((item) => normalizeAssetSymbol(item) != null);
-  if (deduped.length >= 3) return deduped;
-  return dedupeStrings([...deduped, 'BTC', 'ETH', 'SOL', 'USDC', 'USDT']);
+  const marketSymbols = marketAssets
+    .map((asset) => normalizeAssetSymbol(asset.symbol))
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 10);
+  const newsSymbols = collectNewsAssetSymbols(newsItems).slice(0, 8);
+  const memeSymbols = memeHeatItems
+    .map((item) => normalizeAssetSymbol(item.symbol))
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 8);
+  const perpSymbols = collectPerpAssetSymbols(perps).slice(0, 8);
+  const deduped = interleaveSymbolGroups([marketSymbols, newsSymbols, memeSymbols, perpSymbols], 18)
+    .filter((item) => normalizeAssetSymbol(item) != null);
+  if (deduped.length >= 6) return deduped;
+  return dedupeStrings([...deduped, 'BTC', 'ETH', 'SOL', 'USDC', 'USDT', 'DOGE']);
 }
 
 type TopicRelatedRefCandidate = {
@@ -3121,6 +3445,14 @@ async function buildTopicRelatedAssetRefs(
   return [...new Map(candidates.map((item) => [item.key, item.ref])).values()].slice(0, 8);
 }
 
+function sanitizeAssetSymbols(assets: string[] | null | undefined): string[] {
+  return dedupeStrings(
+    (assets ?? [])
+      .map((asset) => normalizeAssetSymbol(asset))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
 function normalizeAssetSymbols(assets: string[] | null | undefined, fallbackAssets: string[]): string[] {
   const input = assets ?? [];
   const normalized = input
@@ -3144,6 +3476,16 @@ function normalizeSourceRefs(refs: string[] | null | undefined): string[] {
     .map((item) => item.slice(0, 180));
   const deduped = dedupeStrings(normalized);
   return deduped.slice(0, 8);
+}
+
+function parseStoredStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return readStringArray(parsed) ?? [];
+  } catch {
+    return [];
+  }
 }
 
 function normalizeAssetSymbol(raw: unknown): string | null {

@@ -9,13 +9,16 @@ import {
   type Chain,
   type Hash,
 } from 'viem';
-import { base, bsc, mainnet } from 'viem/chains';
+import { arbitrum, base, bsc, mainnet, optimism, polygon } from 'viem/chains';
 import type { Bindings, TradeQuoteRequest, TradeQuoteResponse } from '../types';
 import { getChainConfigByNetworkKey } from '../config/appConfig';
 import {
+  ARBITRUM_NETWORK_KEY,
   BASE_NETWORK_KEY,
   BNB_NETWORK_KEY,
   ETHEREUM_NETWORK_KEY,
+  OPTIMISM_NETWORK_KEY,
+  POLYGON_NETWORK_KEY,
   SOLANA_NETWORK_KEY,
   buildEvmWalletExecutionContext,
   getWalletChainAddress,
@@ -127,6 +130,24 @@ function resolveChainConfig(env: Bindings, networkKey: string): ChainRuntimeConf
     return {
       chain: bsc,
       rpcUrl: env.BNB_RPC_URL?.trim() || undefined,
+    };
+  }
+  if (networkKey === ARBITRUM_NETWORK_KEY) {
+    return {
+      chain: arbitrum,
+      rpcUrl: env.ARBITRUM_RPC_URL?.trim() || undefined,
+    };
+  }
+  if (networkKey === OPTIMISM_NETWORK_KEY) {
+    return {
+      chain: optimism,
+      rpcUrl: env.OPTIMISM_RPC_URL?.trim() || undefined,
+    };
+  }
+  if (networkKey === POLYGON_NETWORK_KEY) {
+    return {
+      chain: polygon,
+      rpcUrl: env.POLYGON_RPC_URL?.trim() || undefined,
     };
   }
   throw new Error('unsupported_chain');

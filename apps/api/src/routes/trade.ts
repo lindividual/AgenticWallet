@@ -8,34 +8,15 @@ import {
 import { isSolanaSignature } from '../services/solana';
 import { SOLANA_NETWORK_KEY } from '../services/wallet';
 import type { AppEnv, TradeQuoteRequest, TradeSubmitRequest } from '../types';
-
-function toErrorStatus(error: unknown): 400 | 404 | 502 {
-  const message = error instanceof Error ? error.message : 'unknown_error';
-  const normalized = message.toLowerCase();
-  if (
-    message.startsWith('invalid_')
-    || message.startsWith('insufficient_')
-    || message === 'unsupported_chain'
-    || message === 'wallet_key_decryption_failed'
-    || normalized.includes('trade_provider_invalid_response')
-  ) {
-    return 400;
-  }
-  if (message === 'wallet_not_found') {
-    return 404;
-  }
-  return 502;
-}
+import { getErrorMessage, readJsonBody, toTradeErrorStatus } from './routeHelpers';
 
 export function registerTradeRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/trade/quote', async (c) => {
     const userId = c.get('userId');
     const requestId = crypto.randomUUID();
 
-    let body: TradeQuoteRequest;
-    try {
-      body = await c.req.json<TradeQuoteRequest>();
-    } catch {
+    const body = await readJsonBody<TradeQuoteRequest>(c.req);
+    if (!body) {
       console.error('[trade/quote] invalid_request', { requestId, userId });
       return c.json({ error: 'invalid_request' }, 400);
     }
@@ -63,8 +44,8 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
       });
       return c.json(prepared.quote);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'trade_quote_failed';
-      const status = toErrorStatus(error);
+      const message = getErrorMessage(error, 'trade_quote_failed');
+      const status = toTradeErrorStatus(error);
       console.error('[trade/quote] failed', {
         requestId,
         userId,
@@ -83,10 +64,8 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
     const userId = c.get('userId');
     const requestId = crypto.randomUUID();
 
-    let body: TradeSubmitRequest;
-    try {
-      body = await c.req.json<TradeSubmitRequest>();
-    } catch {
+    const body = await readJsonBody<TradeSubmitRequest>(c.req);
+    if (!body) {
       console.error('[trade/submit] invalid_request', { requestId, userId });
       return c.json({ error: 'invalid_request' }, 400);
     }
@@ -121,8 +100,8 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
         quote: prepared.quote,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'trade_submit_failed';
-      const status = toErrorStatus(error);
+      const message = getErrorMessage(error, 'trade_submit_failed');
+      const status = toTradeErrorStatus(error);
       console.error('[trade/submit] failed', {
         requestId,
         userId,
@@ -152,7 +131,7 @@ export function registerTradeRoutes(app: Hono<AppEnv>): void {
     } catch (error) {
       return c.json(
         {
-          error: error instanceof Error ? error.message : 'trade_status_failed',
+          error: getErrorMessage(error, 'trade_status_failed'),
         },
         502,
       );

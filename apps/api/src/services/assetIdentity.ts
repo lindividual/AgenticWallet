@@ -3,7 +3,10 @@ export const NATIVE_CONTRACT_KEY = 'native';
 const NATIVE_ASSET_ID_BY_CHAIN: Record<string, string> = {
   eth: 'coingecko:ethereum',
   base: 'coingecko:ethereum',
+  arbitrum: 'coingecko:ethereum',
+  optimism: 'coingecko:ethereum',
   bnb: 'coingecko:binancecoin',
+  matic: 'coingecko:matic-network',
   tron: 'coingecko:tron',
   sol: 'coingecko:solana',
   btc: 'coingecko:bitcoin',
@@ -18,7 +21,10 @@ function normalizeText(raw: unknown): string | null {
 export function normalizeMarketChain(raw: unknown): string {
   const value = normalizeText(raw)?.toLowerCase() ?? 'unknown';
   if (value === 'ethereum' || value === 'mainnet') return 'eth';
+  if (value === 'arbitrum-one') return 'arbitrum';
+  if (value === 'optimistic-ethereum' || value === 'op') return 'optimism';
   if (value === 'bsc' || value === 'binance-smart-chain' || value === 'bnb-smart-chain') return 'bnb';
+  if (value === 'polygon' || value === 'polygon-pos' || value === 'pol') return 'matic';
   if (value === 'trx' || value === 'trc20') return 'tron';
   if (value === 'solana') return 'sol';
   if (value === 'bitcoin' || value === 'btc') return 'btc';

@@ -6,7 +6,10 @@ export function normalizeMarketChain(raw: string | null | undefined): string {
   const value = (raw ?? '').trim().toLowerCase();
   if (!value) return 'unknown';
   if (value === 'ethereum' || value === 'mainnet') return 'eth';
+  if (value === 'arbitrum-one') return 'arbitrum';
+  if (value === 'optimistic-ethereum' || value === 'op') return 'optimism';
   if (value === 'bsc' || value === 'binance-smart-chain' || value === 'bnb-smart-chain') return 'bnb';
+  if (value === 'polygon' || value === 'polygon-pos' || value === 'pol') return 'matic';
   if (value === 'trx' || value === 'trc20') return 'tron';
   if (value === 'solana') return 'sol';
   if (value === 'bitcoin' || value === 'btc') return 'btc';

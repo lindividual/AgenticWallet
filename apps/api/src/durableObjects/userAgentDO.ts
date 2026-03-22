@@ -61,6 +61,7 @@ import { privateKeyToBitcoinSegwitAddress } from '../utils/bitcoin';
 import { evmAddressToTronAddress } from '../utils/tron';
 import { ensureTopicSpecialSchema } from '../services/topicSpecials';
 import {
+  ARBITRUM_NETWORK_KEY,
   BNB_NETWORK_KEY,
   BASE_NETWORK_KEY,
   BITCOIN_NETWORK_KEY,
@@ -68,6 +69,8 @@ import {
   ETHEREUM_NETWORK_KEY,
   EVM_PROTOCOL,
   EVM_WALLET_PROVIDER,
+  OPTIMISM_NETWORK_KEY,
+  POLYGON_NETWORK_KEY,
   SOLANA_NETWORK_KEY,
   SVM_PROTOCOL,
   TRON_NETWORK_KEY,
@@ -75,7 +78,7 @@ import {
   type WalletWithPrivateKey,
 } from '../services/wallet';
 import { privateKeyToAccount } from 'viem/accounts';
-import { base, bsc, mainnet } from 'viem/chains';
+import { arbitrum, base, bsc, mainnet, optimism, polygon } from 'viem/chains';
 
 const OWNER_KEY = 'owner_user_id';
 const USER_LOCALE_KEY = 'user_locale';
@@ -1161,6 +1164,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
       { networkKey: ETHEREUM_NETWORK_KEY, chainId: mainnet.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
       { networkKey: BASE_NETWORK_KEY, chainId: base.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
       { networkKey: BNB_NETWORK_KEY, chainId: bsc.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+      { networkKey: ARBITRUM_NETWORK_KEY, chainId: arbitrum.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+      { networkKey: OPTIMISM_NETWORK_KEY, chainId: optimism.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
+      { networkKey: POLYGON_NETWORK_KEY, chainId: polygon.id, protocol: EVM_PROTOCOL, address: evmAccount.address },
       { networkKey: TRON_NETWORK_KEY, chainId: null, protocol: TVM_PROTOCOL, address: tronAddress },
       { networkKey: SOLANA_NETWORK_KEY, chainId: null, protocol: SVM_PROTOCOL, address: solanaKeypair.publicKey.toBase58() },
       { networkKey: BITCOIN_NETWORK_KEY, chainId: null, protocol: BTC_PROTOCOL, address: bitcoinAddress },

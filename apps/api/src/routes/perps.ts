@@ -1,18 +1,7 @@
 import type { Hono } from 'hono';
 import { cancelPerpsOrder, getPerpsAccountSafe, placePerpsOrder } from '../services/perps';
 import type { AppEnv, PerpsCancelOrderRequest, PerpsOrderRequest } from '../types';
-
-function toPerpsErrorStatus(error: unknown): 400 | 502 {
-  const message = error instanceof Error ? error.message : 'perps_request_failed';
-  if (
-    message.startsWith('invalid_')
-    || message.startsWith('perps_cross_margin_unsupported')
-    || message === 'wallet_key_decryption_failed'
-  ) {
-    return 400;
-  }
-  return 502;
-}
+import { getErrorMessage, readJsonBody, toPerpsErrorStatus } from './routeHelpers';
 
 export function registerPerpsRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/perps/account', async (c) => {
@@ -24,10 +13,8 @@ export function registerPerpsRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/perps/order', async (c) => {
     const userId = c.get('userId');
 
-    let body: PerpsOrderRequest;
-    try {
-      body = await c.req.json<PerpsOrderRequest>();
-    } catch {
+    const body = await readJsonBody<PerpsOrderRequest>(c.req);
+    if (!body) {
       return c.json({ error: 'invalid_request' }, 400);
     }
 
@@ -36,7 +23,7 @@ export function registerPerpsRoutes(app: Hono<AppEnv>): void {
       return c.json(result);
     } catch (error) {
       return c.json(
-        { error: error instanceof Error ? error.message : 'perps_order_failed' },
+        { error: getErrorMessage(error, 'perps_order_failed') },
         toPerpsErrorStatus(error),
       );
     }
@@ -45,10 +32,8 @@ export function registerPerpsRoutes(app: Hono<AppEnv>): void {
   app.post('/v1/perps/cancel', async (c) => {
     const userId = c.get('userId');
 
-    let body: PerpsCancelOrderRequest;
-    try {
-      body = await c.req.json<PerpsCancelOrderRequest>();
-    } catch {
+    const body = await readJsonBody<PerpsCancelOrderRequest>(c.req);
+    if (!body) {
       return c.json({ error: 'invalid_request' }, 400);
     }
 
@@ -57,7 +42,7 @@ export function registerPerpsRoutes(app: Hono<AppEnv>): void {
       return c.json(result);
     } catch (error) {
       return c.json(
-        { error: error instanceof Error ? error.message : 'perps_cancel_failed' },
+        { error: getErrorMessage(error, 'perps_cancel_failed') },
         toPerpsErrorStatus(error),
       );
     }

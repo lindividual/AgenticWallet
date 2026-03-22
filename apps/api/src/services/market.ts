@@ -1,7 +1,12 @@
 import type { Bindings } from '../types';
 import { nowIso } from '../utils/time';
 import { fetchWithTimeout } from '../utils/fetch';
-import { getChainConfigByChainId, getMarketChainByChainId, getMarketChainByNetworkKey } from '../config/appConfig';
+import {
+  getChainConfigByChainId,
+  getMarketChainByChainId,
+  getMarketChainByNetworkKey,
+  getSupportedChainIds,
+} from '../config/appConfig';
 import { buildAssetId, buildChainAssetId, inferProtocolFromChain, NATIVE_CONTRACT_KEY, toContractKey } from './assetIdentity';
 import { resolveCoinGeckoAssetIdForContract } from './coingecko';
 import { fetchSolanaPortfolio as fetchSolanaPortfolioViaRpc } from './solana';
@@ -242,7 +247,7 @@ async function fetchEvmPortfolio(
     return [];
   }
 
-  const chainIds = [1, 8453, 56].join(',');
+  const chainIds = getSupportedChainIds().join(',');
   const simResponse = await fetchWithTimeout(
     `https://api.sim.dune.com/v1/evm/balances/${walletAddress}?metadata=logo,url&chain_ids=${encodeURIComponent(chainIds)}`,
     {

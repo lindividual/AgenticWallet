@@ -458,6 +458,30 @@ export function ReceiveCryptoContent({
     >
       {step === 'type' ? (
         <div className="flex flex-col gap-3">
+          {onOpenAgentChat ? (
+            <button
+              type="button"
+              className="w-full rounded-[1.75rem] border border-dashed border-base-300 bg-base-100 px-4 py-4 text-left transition hover:bg-base-200"
+              onClick={handleButtonClick(() => {
+                onOpenAgentChat(receiveAgentRequest);
+              })}
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                  <CircleHelp size={22} aria-hidden />
+                </div>
+                <div>
+                  <p className="m-0 text-base font-semibold text-base-content">
+                    {t('wallet.receiveAddressGuideOptionTitle')}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-base-content/70">
+                    {t('wallet.receiveAddressGuideOptionBody')}
+                  </p>
+                </div>
+              </div>
+            </button>
+          ) : null}
+
           {receiveOptions.map((option) => {
             const supportsText = option.sharedAddress
               ? formatSupportChainsText(t, option.supportedChains)
@@ -498,30 +522,6 @@ export function ReceiveCryptoContent({
               </button>
             );
           })}
-
-          {onOpenAgentChat ? (
-            <button
-              type="button"
-              className="mt-2 w-full rounded-[1.75rem] border border-dashed border-base-300 bg-base-100 px-4 py-4 text-left transition hover:bg-base-200"
-              onClick={handleButtonClick(() => {
-                onOpenAgentChat(receiveAgentRequest);
-              })}
-            >
-              <div className="flex items-start gap-4">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                  <CircleHelp size={22} aria-hidden />
-                </div>
-                <div>
-                  <p className="m-0 text-base font-semibold text-base-content">
-                    {t('wallet.receiveAddressGuideOptionTitle')}
-                  </p>
-                  <p className="mt-1 text-sm leading-6 text-base-content/70">
-                    {t('wallet.receiveAddressGuideOptionBody')}
-                  </p>
-                </div>
-              </div>
-            </button>
-          ) : null}
         </div>
       ) : selectedOption ? (
         <div className="min-h-0 overflow-y-auto">

@@ -12,6 +12,9 @@ export type Bindings = {
   ETHEREUM_RPC_URL?: string;
   BASE_RPC_URL?: string;
   BNB_RPC_URL?: string;
+  ARBITRUM_RPC_URL?: string;
+  OPTIMISM_RPC_URL?: string;
+  POLYGON_RPC_URL?: string;
   TRON_RPC_URL?: string;
   SOLANA_RPC_URL?: string;
   BICONOMY_MEE_VERSION?: string;

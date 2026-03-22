@@ -8,6 +8,7 @@
     "dev": "npm run migrate:local && wrangler dev src/index.ts --persist-to .wrangler/state",
     "deploy": "wrangler deploy",
     "build": "tsc --noEmit",
+    "test:unit": "tsx --test tests/*.test.ts",
     "test:agent-local": "bash scripts/e2e-agent-local.sh",
     "test:auth-local": "bash scripts/e2e-auth-local.sh"
   },
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260207.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.2",
     "wrangler": "^4.6.0"
   }

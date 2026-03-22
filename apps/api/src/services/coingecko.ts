@@ -6,7 +6,17 @@ import { normalizeTronAddress } from '../utils/tron';
 const DEFAULT_COINGECKO_BASE_URL = 'https://api.coingecko.com/api/v3';
 const DEFAULT_COINGECKO_USER_AGENT = 'AgenticWallet-MVP/0.1 (market-shelves; +https://agentic-wallet.local)';
 const MAX_MARKETS_PAGE_SIZE = 250;
-const DEFAULT_SUPPORTED_CHAINS: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'> = ['eth', 'base', 'bnb', 'tron', 'sol', 'btc'];
+const DEFAULT_SUPPORTED_CHAINS: Array<'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc'> = [
+  'eth',
+  'base',
+  'bnb',
+  'arbitrum',
+  'optimism',
+  'matic',
+  'tron',
+  'sol',
+  'btc',
+];
 const PLATFORM_CACHE_TTL_MS = 10 * 60 * 1000;
 const COIN_LIST_CACHE_TTL_MS = 60 * 60 * 1000;
 const COIN_LIST_SYNC_MIN_INTERVAL_MS = 10 * 60 * 1000;
@@ -48,7 +58,7 @@ type CoinGeckoCoinListItem = {
 };
 
 type ChainMatch = {
-  chain: 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc';
+  chain: 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc';
   contract: string;
 };
 
@@ -137,7 +147,7 @@ function parsePlatformsJson(raw: string | null | undefined): Record<string, stri
 
 function normalizeContractAddress(
   raw: unknown,
-  chain?: 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' | null,
+  chain?: 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc' | null,
 ): string | null {
   if (chain === 'tron') {
     return normalizeTronAddress(raw);
@@ -164,35 +174,59 @@ function resolveCoinGeckoUserAgent(raw: string | undefined): string {
   return value || DEFAULT_COINGECKO_USER_AGENT;
 }
 
-function normalizeChains(chains?: string[]): Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'> {
+function normalizeChains(chains?: string[]): Array<'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc'> {
   const normalized = new Set(
     (chains ?? [])
       .map((item) => item.trim().toLowerCase())
       .filter(
-        (item): item is 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' =>
-          item === 'eth' || item === 'base' || item === 'bnb' || item === 'tron' || item === 'sol' || item === 'btc',
+        (item): item is 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc' =>
+          item === 'eth'
+          || item === 'base'
+          || item === 'bnb'
+          || item === 'arbitrum'
+          || item === 'optimism'
+          || item === 'matic'
+          || item === 'tron'
+          || item === 'sol'
+          || item === 'btc',
       ),
   );
   if (normalized.size === 0) return [...DEFAULT_SUPPORTED_CHAINS];
   return [...normalized];
 }
 
-function normalizeSingleChain(raw: unknown): 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' | null {
+function normalizeSingleChain(raw: unknown): 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc' | null {
   const value = normalizeText(raw)?.toLowerCase();
-  if (value === 'eth' || value === 'base' || value === 'bnb' || value === 'tron' || value === 'sol' || value === 'btc') return value;
+  if (
+    value === 'eth'
+    || value === 'base'
+    || value === 'bnb'
+    || value === 'arbitrum'
+    || value === 'optimism'
+    || value === 'matic'
+    || value === 'tron'
+    || value === 'sol'
+    || value === 'btc'
+  ) return value;
   return null;
 }
 
-function mapPlatformToChain(platform: string): 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc' | null {
+function mapPlatformToChain(platform: string): 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc' | null {
   if (platform === 'ethereum') return 'eth';
   if (platform === 'base') return 'base';
+  if (platform === 'arbitrum-one' || platform === 'arbitrum') return 'arbitrum';
+  if (platform === 'optimistic-ethereum' || platform === 'optimism') return 'optimism';
   if (platform === 'binance-smart-chain' || platform === 'bnb-smart-chain') return 'bnb';
+  if (platform === 'polygon-pos' || platform === 'polygon') return 'matic';
   if (platform === 'tron') return 'tron';
   if (platform === 'solana') return 'sol';
   return null;
 }
 
-function buildContractLookupKey(chain: 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc', contract: string): string {
+function buildContractLookupKey(
+  chain: 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc',
+  contract: string,
+): string {
   return `${chain}:${contract}`;
 }
 
@@ -204,7 +238,7 @@ function getOrderByListName(name: TopAssetListName): string {
 
 function pickChainFromPlatforms(
   platforms: Record<string, string | null | undefined> | undefined,
-  preferredChains: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'>,
+  preferredChains: Array<'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc'>,
 ): ChainMatch | null {
   if (!platforms) return null;
   const normalizedPlatforms = Object.fromEntries(
@@ -226,6 +260,18 @@ function pickChainFromPlatforms(
       );
       if (contract) return { chain, contract };
     }
+    if (chain === 'arbitrum') {
+      const contract = normalizeContractAddress(normalizedPlatforms['arbitrum-one'] ?? normalizedPlatforms.arbitrum);
+      if (contract) return { chain, contract };
+    }
+    if (chain === 'optimism') {
+      const contract = normalizeContractAddress(normalizedPlatforms['optimistic-ethereum'] ?? normalizedPlatforms.optimism);
+      if (contract) return { chain, contract };
+    }
+    if (chain === 'matic') {
+      const contract = normalizeContractAddress(normalizedPlatforms['polygon-pos'] ?? normalizedPlatforms.polygon);
+      if (contract) return { chain, contract };
+    }
     if (chain === 'tron') {
       const contract = normalizeContractAddress(normalizedPlatforms.tron, 'tron');
       if (contract) return { chain, contract };
@@ -242,7 +288,7 @@ function pickChainFromPlatforms(
 function pickNativeChainFallback(
   coinId: string | null,
   symbol: string | null,
-  preferredChains: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'>,
+  preferredChains: Array<'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc'>,
 ): ChainMatch | null {
   const id = (coinId ?? '').trim().toLowerCase();
   const sym = (symbol ?? '').trim().toUpperCase();
@@ -251,9 +297,14 @@ function pickNativeChainFallback(
   if (id === 'ethereum' || sym === 'ETH') {
     if (preferred.has('eth')) return { chain: 'eth', contract: '' };
     if (preferred.has('base')) return { chain: 'base', contract: '' };
+    if (preferred.has('arbitrum')) return { chain: 'arbitrum', contract: '' };
+    if (preferred.has('optimism')) return { chain: 'optimism', contract: '' };
   }
   if ((id === 'binancecoin' || sym === 'BNB') && preferred.has('bnb')) {
     return { chain: 'bnb', contract: '' };
+  }
+  if ((id === 'matic-network' || sym === 'MATIC' || sym === 'POL') && preferred.has('matic')) {
+    return { chain: 'matic', contract: '' };
   }
   if ((id === 'tron' || sym === 'TRX') && preferred.has('tron')) {
     return { chain: 'tron', contract: '' };

@@ -1,3 +1,4 @@
+import { getNetworkKeyByMarketChain } from '../config/appConfig';
 import type { MarketTopAsset } from '../services/bitgetWallet';
 import type { SqlStorage } from './userAgentContentTypes';
 
@@ -159,24 +160,14 @@ export function buildRecommendationAssetLookup(marketAssets: MarketTopAsset[]): 
 
 export function getPortfolioHoldings(
   sql: SqlStorage,
-  supportedChains: Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'>,
+  supportedChains: Array<'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc'>,
 ): Array<{ symbol: string; valueUsd: number }> {
   const snapshot = getLatestPortfolioSnapshot(sql);
   if (!snapshot?.holdings_json) return [];
   const networkKeyAllowlist = new Set<string>(
-    supportedChains.map((chain) =>
-      chain === 'eth'
-        ? 'ethereum-mainnet'
-        : chain === 'base'
-          ? 'base-mainnet'
-          : chain === 'bnb'
-            ? 'bnb-mainnet'
-            : chain === 'tron'
-              ? 'tron-mainnet'
-              : chain === 'sol'
-                ? 'solana-mainnet'
-                : 'bitcoin-mainnet',
-    ),
+    supportedChains
+      .map((chain) => getNetworkKeyByMarketChain(chain))
+      .filter((networkKey): networkKey is string => Boolean(networkKey)),
   );
   try {
     const holdings = JSON.parse(snapshot.holdings_json) as Array<{

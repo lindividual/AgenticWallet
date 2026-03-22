@@ -6,22 +6,7 @@ import {
   type PredictionBetInput,
 } from '../services/prediction';
 import type { AppEnv } from '../types';
-
-function toPredictionErrorStatus(error: unknown): 400 | 404 | 502 {
-  const message = error instanceof Error ? error.message : 'unknown_error';
-  if (
-    message.startsWith('invalid_')
-    || message.startsWith('unsupported_')
-    || message.startsWith('prediction_order_rejected')
-    || message.includes('prediction_order_rejected')
-  ) {
-    return 400;
-  }
-  if (message === 'wallet_not_found') {
-    return 404;
-  }
-  return 502;
-}
+import { getErrorMessage, readJsonBody, toPredictionErrorStatus } from './routeHelpers';
 
 export function registerPredictionRoutes(app: Hono<AppEnv>): void {
   app.get('/v1/prediction/account', async (c) => {
@@ -34,7 +19,7 @@ export function registerPredictionRoutes(app: Hono<AppEnv>): void {
       });
       return c.json(account);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'prediction_account_failed';
+      const message = getErrorMessage(error, 'prediction_account_failed');
       const status = toPredictionErrorStatus(error);
       return c.json({ error: message }, status);
     }
@@ -46,7 +31,7 @@ export function registerPredictionRoutes(app: Hono<AppEnv>): void {
       const deposit = await getPredictionDepositInfo(c.env, userId);
       return c.json(deposit);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'prediction_deposit_failed';
+      const message = getErrorMessage(error, 'prediction_deposit_failed');
       const status = toPredictionErrorStatus(error);
       return c.json({ error: message }, status);
     }
@@ -54,10 +39,8 @@ export function registerPredictionRoutes(app: Hono<AppEnv>): void {
 
   app.post('/v1/prediction/bet', async (c) => {
     const userId = c.get('userId');
-    let body: PredictionBetInput;
-    try {
-      body = await c.req.json<PredictionBetInput>();
-    } catch {
+    const body = await readJsonBody<PredictionBetInput>(c.req);
+    if (!body) {
       return c.json({ error: 'invalid_request' }, 400);
     }
 
@@ -65,10 +48,9 @@ export function registerPredictionRoutes(app: Hono<AppEnv>): void {
       const result = await placePredictionBet(c.env, userId, body);
       return c.json(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'prediction_bet_failed';
+      const message = getErrorMessage(error, 'prediction_bet_failed');
       const status = toPredictionErrorStatus(error);
       return c.json({ error: message }, status);
     }
   });
 }
-

@@ -3,7 +3,7 @@ export type ChainConfig = {
   chainId: number | null;
   name: string;
   symbol: string;
-  marketChain: 'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc';
+  marketChain: 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc';
   protocol: 'evm' | 'svm' | 'tvm' | 'btc';
 };
 
@@ -36,6 +36,30 @@ export const APP_CONFIG: AppConfig = {
       name: 'BNB Chain',
       symbol: 'BNB',
       marketChain: 'bnb',
+      protocol: 'evm',
+    },
+    {
+      networkKey: 'arbitrum-mainnet',
+      chainId: 42161,
+      name: 'Arbitrum',
+      symbol: 'ETH',
+      marketChain: 'arbitrum',
+      protocol: 'evm',
+    },
+    {
+      networkKey: 'optimism-mainnet',
+      chainId: 10,
+      name: 'Optimism',
+      symbol: 'ETH',
+      marketChain: 'optimism',
+      protocol: 'evm',
+    },
+    {
+      networkKey: 'polygon-mainnet',
+      chainId: 137,
+      name: 'Polygon',
+      symbol: 'POL',
+      marketChain: 'matic',
       protocol: 'evm',
     },
     {
@@ -79,7 +103,7 @@ export function getChainConfigByChainId(chainId: number): ChainConfig | null {
   return APP_CONFIG.supportedChains.find((item) => item.chainId === chainId) ?? null;
 }
 
-export function getSupportedMarketChains(): Array<'eth' | 'base' | 'bnb' | 'tron' | 'sol' | 'btc'> {
+export function getSupportedMarketChains(): Array<ChainConfig['marketChain']> {
   return [...new Set(APP_CONFIG.supportedChains.map((item) => item.marketChain))];
 }
 

@@ -13,58 +13,18 @@ import {
   waitForTransferReceipt,
 } from '../services/transfer';
 import {
+  createTransferHistoryFilters,
+  normalizeTransferHistoryStatus,
+  resolveLocalTransferHistoryLimit,
+} from '../services/transferHistoryFilters';
+import {
   fetchExternalTransferHistory,
   mergeTransferHistory,
-  type TransferHistoryFilters,
   type TransferHistoryRecord,
 } from '../services/transferHistory';
 import { tryEnsureWalletForUser } from '../services/wallet';
-import type { AppEnv, TransferQuoteRequest, TransferSubmitRequest, TransferStatus } from '../types';
-
-const VALID_TRANSFER_STATUS = new Set<TransferStatus>(['created', 'submitted', 'confirmed', 'failed']);
-
-function normalizeTransferStatus(raw: string | undefined): TransferStatus | undefined {
-  if (!raw) return undefined;
-  const value = raw.trim() as TransferStatus;
-  return VALID_TRANSFER_STATUS.has(value) ? value : undefined;
-}
-
-function normalizeHistoryLimit(raw: string | undefined): number {
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 20;
-  return Math.min(Math.max(Math.trunc(parsed), 1), 100);
-}
-
-function normalizeChainId(raw: string | undefined): number | undefined {
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-  return Math.trunc(parsed);
-}
-
-function normalizeNetworkKey(raw: string | undefined): string | undefined {
-  const value = raw?.trim().toLowerCase();
-  return value || undefined;
-}
-
-function normalizeTokenAddress(raw: string | undefined): string | null | undefined {
-  if (raw == null) return undefined;
-  const value = raw.trim();
-  if (!value) return undefined;
-  if (value.toLowerCase() === 'native' || value === '0x0000000000000000000000000000000000000000') return null;
-  if (/^0x[a-f0-9]{40}$/i.test(value)) return value.toLowerCase();
-  return value;
-}
-
-function normalizeTokenSymbol(raw: string | undefined): string | undefined {
-  const value = raw?.trim().toUpperCase();
-  return value || undefined;
-}
-
-function normalizeAssetType(raw: string | undefined): TransferHistoryFilters['assetType'] | undefined {
-  const value = raw?.trim().toLowerCase();
-  if (value === 'native' || value === 'erc20') return value;
-  return undefined;
-}
+import type { AppEnv, TransferQuoteRequest, TransferSubmitRequest } from '../types';
+import { getErrorMessage, readJsonBody, toTransferErrorStatus } from './routeHelpers';
 
 function toApiTransfer(row: AgentTransfer): TransferHistoryRecord {
   return {
@@ -90,28 +50,6 @@ function toApiTransfer(row: AgentTransfer): TransferHistoryRecord {
     submittedAt: row.submitted_at,
     confirmedAt: row.confirmed_at,
   };
-}
-
-function toErrorStatus(error: unknown): 400 | 404 | 502 {
-  const message = error instanceof Error ? error.message : 'unknown_error';
-  const normalizedMessage = message.toLowerCase();
-  if (
-    message.startsWith('invalid_') ||
-    message.startsWith('insufficient_') ||
-    message === 'unsupported_fee_token' ||
-    message === 'unsupported_bitcoin_token_transfer' ||
-    normalizedMessage.includes('insufficient balance to pay for the gas') ||
-    normalizedMessage.includes('orchestration fee') ||
-    message === 'unsupported_chain' ||
-    message === 'wallet_key_decryption_failed' ||
-    message === 'wallet_key_mismatch'
-  ) {
-    return 400;
-  }
-  if (message === 'wallet_not_found') {
-    return 404;
-  }
-  return 502;
 }
 
 async function maybeRefreshSubmittedTransfer(
@@ -142,10 +80,8 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
     const userId = c.get('userId');
     const requestId = crypto.randomUUID();
 
-    let body: TransferQuoteRequest;
-    try {
-      body = await c.req.json<TransferQuoteRequest>();
-    } catch {
+    const body = await readJsonBody<TransferQuoteRequest>(c.req);
+    if (!body) {
       console.error('[transfer/quote] invalid_request', { requestId, userId });
       return c.json({ error: 'invalid_request' }, 400);
     }
@@ -183,8 +119,8 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       });
       return c.json(prepared.quote);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'transfer_quote_failed';
-      const status = toErrorStatus(error);
+      const message = getErrorMessage(error, 'transfer_quote_failed');
+      const status = toTransferErrorStatus(error);
       console.error('[transfer/quote] failed', {
         requestId,
         userId,
@@ -210,10 +146,8 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
     const userId = c.get('userId');
     const requestId = crypto.randomUUID();
 
-    let body: TransferSubmitRequest;
-    try {
-      body = await c.req.json<TransferSubmitRequest>();
-    } catch {
+    const body = await readJsonBody<TransferSubmitRequest>(c.req);
+    if (!body) {
       console.error('[transfer/submit] invalid_request', { requestId, userId });
       return c.json({ error: 'invalid_request' }, 400);
     }
@@ -273,10 +207,10 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
 
         return c.json(
           {
-            error: error instanceof Error ? error.message : 'transfer_submit_failed',
+            error: getErrorMessage(error, 'transfer_submit_failed'),
             transfer: failed ? toApiTransfer(failed) : toApiTransfer(transferCreated.transfer),
           },
-          toErrorStatus(error),
+          toTransferErrorStatus(error),
         );
       }
 
@@ -328,8 +262,8 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
       });
       return c.json({ transfer: toApiTransfer(submitted ?? transferCreated.transfer), deduped: false });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'transfer_submit_failed';
-      const status = toErrorStatus(error);
+      const message = getErrorMessage(error, 'transfer_submit_failed');
+      const status = toTransferErrorStatus(error);
       console.error('[transfer/submit] failed', {
         requestId,
         userId,
@@ -353,19 +287,17 @@ export function registerTransferRoutes(app: Hono<AppEnv>): void {
 
   app.get('/v1/transfer/history', async (c) => {
     const userId = c.get('userId');
-    const status = normalizeTransferStatus(c.req.query('status'));
-    const filters: TransferHistoryFilters = {
-      limit: normalizeHistoryLimit(c.req.query('limit')),
-      status,
-      networkKey: normalizeNetworkKey(c.req.query('networkKey')),
-      chainId: normalizeChainId(c.req.query('chainId')),
-      tokenAddress: normalizeTokenAddress(c.req.query('tokenAddress')),
-      tokenSymbol: normalizeTokenSymbol(c.req.query('tokenSymbol')),
-      assetType: normalizeAssetType(c.req.query('assetType')),
-    };
-    const localLimit = filters.networkKey || filters.chainId || filters.tokenAddress !== undefined || filters.tokenSymbol || filters.assetType
-      ? 100
-      : filters.limit;
+    const filters = createTransferHistoryFilters({
+      limit: c.req.query('limit'),
+      status: c.req.query('status'),
+      networkKey: c.req.query('networkKey'),
+      chainId: c.req.query('chainId'),
+      tokenAddress: c.req.query('tokenAddress'),
+      tokenSymbol: c.req.query('tokenSymbol'),
+      assetType: c.req.query('assetType'),
+    });
+    const status = normalizeTransferHistoryStatus(c.req.query('status'));
+    const localLimit = resolveLocalTransferHistoryLimit(filters);
 
     const localRows = await listUserTransfers(c.env, userId, {
       limit: localLimit,

@@ -2,7 +2,7 @@ import { getMEEVersion, toMultichainNexusAccount } from '@biconomy/abstractjs';
 import type { Address } from 'viem';
 import { http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { base, bsc, mainnet } from 'viem/chains';
+import { arbitrum, base, bsc, mainnet, optimism, polygon } from 'viem/chains';
 import type { Bindings, WalletNetworkKey, WalletProtocol, WalletSummary } from '../types';
 import { decryptString } from '../utils/crypto';
 import { resolveMeeVersion } from '../utils/env';
@@ -10,6 +10,9 @@ import { resolveMeeVersion } from '../utils/env';
 export const ETHEREUM_NETWORK_KEY: WalletNetworkKey = 'ethereum-mainnet';
 export const BASE_NETWORK_KEY: WalletNetworkKey = 'base-mainnet';
 export const BNB_NETWORK_KEY: WalletNetworkKey = 'bnb-mainnet';
+export const ARBITRUM_NETWORK_KEY: WalletNetworkKey = 'arbitrum-mainnet';
+export const OPTIMISM_NETWORK_KEY: WalletNetworkKey = 'optimism-mainnet';
+export const POLYGON_NETWORK_KEY: WalletNetworkKey = 'polygon-mainnet';
 export const TRON_NETWORK_KEY: WalletNetworkKey = 'tron-mainnet';
 export const SOLANA_NETWORK_KEY: WalletNetworkKey = 'solana-mainnet';
 export const BITCOIN_NETWORK_KEY: WalletNetworkKey = 'bitcoin-mainnet';
@@ -292,6 +295,9 @@ export async function createBiconomyMultichainAccount(env: Bindings, privateKey:
   const ethereumRpcUrl = env.ETHEREUM_RPC_URL?.trim() || undefined;
   const baseRpcUrl = env.BASE_RPC_URL?.trim() || undefined;
   const bnbRpcUrl = env.BNB_RPC_URL?.trim() || undefined;
+  const arbitrumRpcUrl = env.ARBITRUM_RPC_URL?.trim() || undefined;
+  const optimismRpcUrl = env.OPTIMISM_RPC_URL?.trim() || undefined;
+  const polygonRpcUrl = env.POLYGON_RPC_URL?.trim() || undefined;
   const version = resolveMeeVersion(env.BICONOMY_MEE_VERSION);
   const signer = privateKeyToAccount(privateKey);
 
@@ -311,6 +317,21 @@ export async function createBiconomyMultichainAccount(env: Bindings, privateKey:
       {
         chain: bsc,
         transport: http(bnbRpcUrl),
+        version: getMEEVersion(version),
+      },
+      {
+        chain: arbitrum,
+        transport: http(arbitrumRpcUrl),
+        version: getMEEVersion(version),
+      },
+      {
+        chain: optimism,
+        transport: http(optimismRpcUrl),
+        version: getMEEVersion(version),
+      },
+      {
+        chain: polygon,
+        transport: http(polygonRpcUrl),
         version: getMEEVersion(version),
       },
     ],

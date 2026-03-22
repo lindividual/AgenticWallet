@@ -17,11 +17,10 @@ export function registerProtectedRoutes(app: Hono<AppEnv>): void {
   app.use('/v1/admin/*', requireAdminAuth);
   app.use('/v1/*', async (c, next) => {
     if (isAdminApiPath(c.req.path)) {
-      await next();
-      return;
+      return next();
     }
 
-    await requireAuth(c, next);
+    return requireAuth(c, next);
   });
 
   app.post('/v1/auth/logout', async (c) => {
