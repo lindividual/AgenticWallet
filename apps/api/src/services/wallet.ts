@@ -6,6 +6,7 @@ import { arbitrum, base, bsc, mainnet, optimism, polygon } from 'viem/chains';
 import type { Bindings, WalletNetworkKey, WalletProtocol, WalletSummary } from '../types';
 import { decryptString } from '../utils/crypto';
 import { resolveMeeVersion } from '../utils/env';
+import { evmAddressToTronAddress } from '../utils/tron';
 
 export const ETHEREUM_NETWORK_KEY: WalletNetworkKey = 'ethereum-mainnet';
 export const BASE_NETWORK_KEY: WalletNetworkKey = 'base-mainnet';
@@ -55,6 +56,45 @@ type WalletRpcStub = DurableObjectStub & {
   ensureWalletWithPrivateKeyRpc(userId: string): Promise<{ wallet: WalletWithPrivateKey }>;
   deleteWalletRpc(userId: string): Promise<{ ok: true }>;
 };
+
+function normalizeWalletChainAccounts(
+  chainAccounts: WalletSummary['chainAccounts'],
+  walletAddress: string,
+): WalletSummary['chainAccounts'] {
+  const hasTronAccount = chainAccounts.some((row) => row.protocol === TVM_PROTOCOL || row.networkKey === TRON_NETWORK_KEY);
+  if (hasTronAccount) {
+    return chainAccounts;
+  }
+
+  const evmAddress =
+    chainAccounts.find((row) => row.protocol === EVM_PROTOCOL)?.address?.trim()
+    || walletAddress.trim();
+
+  if (!evmAddress) {
+    return chainAccounts;
+  }
+
+  try {
+    return [
+      ...chainAccounts,
+      {
+        networkKey: TRON_NETWORK_KEY,
+        chainId: null,
+        protocol: TVM_PROTOCOL,
+        address: evmAddressToTronAddress(evmAddress),
+      },
+    ];
+  } catch {
+    return chainAccounts;
+  }
+}
+
+function normalizeWalletSummary<T extends WalletSummary>(wallet: T): T {
+  return {
+    ...wallet,
+    chainAccounts: normalizeWalletChainAccounts(wallet.chainAccounts, wallet.address),
+  };
+}
 
 function normalizeWalletProtocol(raw: string | null | undefined): WalletProtocol | null {
   if (raw === EVM_PROTOCOL || raw === SVM_PROTOCOL || raw === TVM_PROTOCOL || raw === BTC_PROTOCOL) return raw;
@@ -186,16 +226,16 @@ export async function getWallet(env: Bindings, userId: string): Promise<WalletSu
   const current = await stub.getWalletRpc(userId);
   if (current.wallet) {
     await clearLegacyWallet(env.DB, userId);
-    return current.wallet;
+    return normalizeWalletSummary(current.wallet);
   }
 
   const migrated = await migrateLegacyWalletToDo(env, userId);
   if (migrated) {
-    return {
+    return normalizeWalletSummary({
       address: migrated.address,
       provider: migrated.provider,
       chainAccounts: migrated.chainAccounts,
-    };
+    });
   }
   return null;
 }
@@ -237,9 +277,10 @@ export async function getWalletWithPrivateKey(
   if (current.wallet) {
     await clearLegacyWallet(env.DB, userId);
     const withKeys = await stub.ensureWalletWithPrivateKeyRpc(userId);
-    return withKeys.wallet;
+    return normalizeWalletSummary(withKeys.wallet);
   }
-  return migrateLegacyWalletToDo(env, userId);
+  const migrated = await migrateLegacyWalletToDo(env, userId);
+  return migrated ? normalizeWalletSummary(migrated) : null;
 }
 
 export async function ensureWalletWithPrivateKey(env: Bindings, userId: string): Promise<WalletWithPrivateKey> {
@@ -288,6 +329,14 @@ export function getWalletChainAddress(
   const found = wallet.chainAccounts.find((row) => row.networkKey === networkKey && row.protocol === protocol)?.address;
   if (found) return found;
   if (protocol === EVM_PROTOCOL) return wallet.address;
+  if (protocol === TVM_PROTOCOL || networkKey === TRON_NETWORK_KEY) {
+    try {
+      const evmAddress = wallet.chainAccounts.find((row) => row.protocol === EVM_PROTOCOL)?.address ?? wallet.address;
+      return evmAddress ? evmAddressToTronAddress(evmAddress) : null;
+    } catch {
+      return null;
+    }
+  }
   return null;
 }
 

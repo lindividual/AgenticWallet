@@ -1020,8 +1020,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                     />
                   ))}
                 </div>
-              ) : stableAndCryptos.stableHoldings.length === 0 ? (
-                <div className="mt-3 py-2 text-sm text-base-content/60">{t('wallet.noAssetsFound')}</div>
               ) : null}
             </article>
 
@@ -1033,9 +1031,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                 </p>
               </div>
               <div className="mt-3 flex flex-col">
-                {stableAndCryptos.cryptoHoldings.length === 0 && (
-                  <div className="py-2 text-sm text-base-content/60">{t('wallet.noAssetsFound')}</div>
-                )}
                 {stableAndCryptos.cryptoHoldings.map((asset) => {
                   const resolvedPriceChangePct = asset.priceChangePct ?? detailPriceChangeByHoldingKey[asset.key] ?? null;
                   const changeClassName =
@@ -1093,14 +1088,14 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         <Modal visible={modalVisible} originRect={modalOriginRect} onClose={closeActiveModal}>
           <div className="relative flex-1 overflow-hidden">
             {exitingModalContent ? (
-              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0">
                 {renderModalPane(exitingModalContent, {
                   footerVisible: false,
                   stageClassName: getStageClassName('exit'),
                 })}
               </div>
             ) : null}
-            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0">
               {renderModalPane(activeModalContent, {
                 footerVisible: true,
                 stageClassName: exitingModalContent ? getStageClassName('enter') : undefined,

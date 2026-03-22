@@ -18,7 +18,7 @@ export function Modal({ visible, originRect, onClose, children }: ModalProps) {
       onClick={onClose}
     >
       <section
-        className={`mx-auto flex min-h-screen w-full max-w-[420px] flex-col bg-base-200 p-6 transition-opacity duration-200 ${
+        className={`mx-auto flex h-screen w-full max-w-[420px] flex-col overflow-hidden bg-base-200 p-6 transition-opacity duration-200 ${
           visible ? 'opacity-100' : 'opacity-0'
         }`}
         onClick={(event) => {

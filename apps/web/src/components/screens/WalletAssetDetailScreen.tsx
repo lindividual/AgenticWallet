@@ -1221,14 +1221,14 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
         <Modal visible={modalVisible} originRect={modalOriginRect} onClose={closeModal}>
           <div className="relative flex-1 overflow-hidden">
             {exitingModalContent ? (
-              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+              <div key={`exit-${exitingModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0">
                 {renderModalPane(exitingModalContent, {
                   footerVisible: false,
                   stageClassName: getStageClassName('exit'),
                 })}
               </div>
             ) : null}
-            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0">
+            <div key={`active-${activeModalContent}-${modalTransitionKey}`} className="absolute inset-0 flex min-h-0">
               {renderModalPane(activeModalContent, {
                 footerVisible: true,
                 stageClassName: exitingModalContent ? getStageClassName('enter') : undefined,
