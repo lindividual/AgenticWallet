@@ -374,8 +374,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
         showSuccess(t('trade.watchAdded'));
       }
       await queryClient.invalidateQueries({ queryKey: ['market-watchlist'] });
-    } catch (error) {
-      showError(`${t('common.error')}: ${(error as Error).message}`);
+    } catch {
+      showError(t('common.actionFailed'));
     } finally {
       setIsWatchlistToggling(false);
     }
@@ -428,8 +428,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       }).catch(() => undefined);
       await queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] });
       showSuccess(t('trade.betSuccess'));
-    } catch (error) {
-      showError(`${t('trade.betFailed')}: ${(error as Error).message}`);
+    } catch {
+      showError(t('trade.betFailedRetry'));
     } finally {
       setPendingPredictionOptionId(null);
     }
@@ -439,7 +439,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     if (pendingPerpsSubmit) return;
     const coin = (activeMarketItem?.symbol ?? '').trim().toUpperCase();
     if (!coin) {
-      showError(t('trade.loadFailed', { message: 'perp_market_unavailable' }));
+      showError(t('trade.loadFailed'));
       return;
     }
     if (!perpsSize.trim()) {
@@ -473,8 +473,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       showSuccess(t('trade.perpsOrderSuccess'));
       setPerpsSize('');
       setPerpsReduceOnly(false);
-    } catch (error) {
-      showError(`${t('trade.perpsOrderFailed')}: ${(error as Error).message}`);
+    } catch {
+      showError(t('trade.perpsOrderFailedRetry'));
     } finally {
       setPendingPerpsSubmit(false);
     }
@@ -493,8 +493,8 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
         queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] }),
       ]);
       showSuccess(t('trade.perpsCancelSuccess'));
-    } catch (error) {
-      showError(`${t('trade.perpsCancelFailed')}: ${(error as Error).message}`);
+    } catch {
+      showError(t('trade.perpsCancelFailedRetry'));
     } finally {
       setPendingPerpsCancelOrderId(null);
     }

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
-import { ArrowLeft, ChevronDown, CircleHelp, Copy, Info, Search, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { ArrowLeft, ChevronDown, CircleHelp, Copy, Info, QrCode, Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import encodeQR from 'qr';
 import type { AgentChatOpenRequest } from '../../agent/types';
@@ -65,12 +65,6 @@ function getProtocolIconPath(protocol: ChainProtocol): string {
   if (protocol === 'tvm') return '/trx.svg';
   if (protocol === 'btc') return '/btc.svg';
   return '/eth.svg';
-}
-
-function truncateAddress(address: string, head = 6, tail = 6): string {
-  if (!address) return '';
-  if (address.length <= head + tail + 3) return address;
-  return `${address.slice(0, head)}...${address.slice(-tail)}`;
 }
 
 function joinChainNames(chains: ReceiveChain[], protocol?: ChainProtocol): string {
@@ -164,25 +158,8 @@ function getChainPillIconPath(chain: ReceiveChain): string | null {
   return null;
 }
 
-function SecondaryActionButton({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="flex h-11 items-center justify-center gap-2 rounded-full bg-base-content px-5 text-sm font-medium text-base-100 transition hover:opacity-90"
-      onClick={onClick}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
+function isActivationKey(event: KeyboardEvent<HTMLElement>): boolean {
+  return event.key === 'Enter' || event.key === ' ';
 }
 
 export function ReceiveCryptoContent({
@@ -201,6 +178,7 @@ export function ReceiveCryptoContent({
   const [selectedAddressType, setSelectedAddressType] = useState<ChainProtocol | null>(null);
   const [isChainListOpen, setIsChainListOpen] = useState(false);
   const [chainQuery, setChainQuery] = useState('');
+  const [openChainListOnEnter, setOpenChainListOnEnter] = useState(false);
 
   function handleButtonClick(action: () => void) {
     return (event: MouseEvent<HTMLButtonElement>) => {
@@ -276,9 +254,10 @@ export function ReceiveCryptoContent({
   );
 
   useEffect(() => {
-    setIsChainListOpen(false);
+    setIsChainListOpen(openChainListOnEnter && selectedAddressType === 'evm');
     setChainQuery('');
-  }, [selectedAddressType]);
+    setOpenChainListOnEnter(false);
+  }, [openChainListOnEnter, selectedAddressType]);
 
   const displayAddress = selectedOption?.address ?? '';
 
@@ -348,25 +327,25 @@ export function ReceiveCryptoContent({
     };
   }, [chainAccounts, supportedChains, t, walletAddress]);
 
-  async function handleCopyAddress() {
-    if (!displayAddress || !selectedOption) {
+  async function copyAddress(address: string, label: string) {
+    if (!address) {
       showError(t('wallet.addressUnavailable'));
       return;
     }
     try {
       if (onCopyAddress) {
-        await onCopyAddress(displayAddress);
+        await onCopyAddress(address);
       } else {
-        await navigator.clipboard.writeText(displayAddress);
+        await navigator.clipboard.writeText(address);
       }
-      showSuccess(t('wallet.receiveAddressCopiedForLabel', { label: selectedOption.addressLabel }));
-    } catch (error) {
-      showError(`${t('common.error')}: ${(error as Error).message}`);
+      showSuccess(t('wallet.receiveAddressCopiedForLabel', { label }));
+    } catch {
+      showError(t('common.copyFailed'));
     }
   }
 
   const title = step === 'type' ? t('wallet.receiveSelectAddressTypeTitle') : null;
-  const headerMeta = null;
+  const headerSubtitle = step === 'type' ? t('wallet.receiveSelectAddressTypeSubtitle') : null;
 
   return (
     <div className={['flex h-full min-h-0 flex-1 flex-col overflow-hidden', stageClassName].filter(Boolean).join(' ')}>
@@ -374,7 +353,7 @@ export function ReceiveCryptoContent({
         {title ? (
           <header className="pb-6">
             <h2 className="m-0 text-4xl font-bold tracking-tight">{title}</h2>
-            {headerMeta ? <div className="mt-3">{headerMeta}</div> : null}
+            {headerSubtitle ? <p className="mt-3 max-w-[34rem] text-base leading-7 text-base-content/70">{headerSubtitle}</p> : null}
           </header>
         ) : null}
 
@@ -389,13 +368,17 @@ export function ReceiveCryptoContent({
                 })}
               >
                 <div className="flex items-start gap-4">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-base-200 text-base-content">
-                    <CircleHelp size={22} aria-hidden />
+                  <div className="flex h-11 w-14 shrink-0 items-center justify-center">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-base-200 text-base-content">
+                      <CircleHelp size={22} aria-hidden />
+                    </div>
                   </div>
-                  <div>
-                    <p className="m-0 text-base font-semibold text-base-content">
-                      {t('wallet.receiveAddressGuideOptionTitle')}
-                    </p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-h-10 items-center">
+                      <p className="m-0 leading-none text-base font-semibold text-base-content">
+                        {t('wallet.receiveAddressGuideOptionTitle')}
+                      </p>
+                    </div>
                     <p className="mt-1 text-sm leading-6 text-base-content/65">
                       {t('wallet.receiveAddressGuideOptionBody')}
                     </p>
@@ -411,56 +394,94 @@ export function ReceiveCryptoContent({
                 : 0;
 
               return (
-                <button
+                <div
                   key={option.id}
-                  type="button"
-                  className="w-full border-b border-base-300/80 bg-transparent px-0 py-5 text-left transition hover:border-base-content/25"
-                  onClick={handleButtonClick(() => setSelectedAddressType(option.id))}
+                  className="w-full border-b border-base-300/80 bg-transparent px-0 pe-2 py-5 text-left transition hover:border-base-content/25"
                 >
                   <div className="flex items-start gap-4">
-                    <ReceiveProtocolIcon protocol={option.id} alt={option.title} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="m-0 text-lg font-semibold text-base-content">{option.title}</p>
-                      </div>
-                      <p className="mt-3 break-all font-mono text-sm text-base-content/80">{option.address}</p>
-                      {option.id === 'evm' && visibleNetworkPills.length > 0 ? (
-                        <div className="mt-3">
-                          <p className="m-0 text-[11px] uppercase tracking-[0.18em] text-base-content/45">
-                            {t('wallet.receiveCardSupportedNetworks')}
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {visibleNetworkPills.map((chain) => {
-                              const iconPath = getChainPillIconPath(chain);
-                              return (
-                                <span
-                                  key={chain.networkKey}
-                                  className="inline-flex items-center gap-1.5 rounded-full bg-base-200/80 px-3 py-1.5 text-xs text-base-content/80"
-                                >
-                                  {iconPath ? (
-                                    <img
-                                      src={iconPath}
-                                      alt=""
-                                      aria-hidden
-                                      className="h-3.5 w-3.5 rounded-full object-cover"
-                                      loading="lazy"
-                                    />
-                                  ) : null}
-                                  <span>{chain.name}</span>
-                                </span>
-                              );
-                            })}
-                            {hiddenNetworkCount > 0 ? (
-                              <span className="inline-flex items-center rounded-full bg-base-200/60 px-3 py-1.5 text-xs text-base-content/70">
-                                +{hiddenNetworkCount} {t('common.more')}
-                              </span>
-                            ) : null}
+                    <div className="flex h-11 w-14 shrink-0 items-center justify-center">
+                      <ReceiveProtocolIcon protocol={option.id} alt={option.title} />
+                    </div>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      className="flex min-w-0 flex-1 items-start gap-4 bg-transparent p-0 text-left"
+                      onClick={() => setSelectedAddressType(option.id)}
+                      onKeyDown={(event) => {
+                        if (!isActivationKey(event)) return;
+                        event.preventDefault();
+                        setSelectedAddressType(option.id);
+                      }}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-h-10 items-center justify-between gap-3">
+                          <p className="m-0 leading-none text-lg font-semibold text-base-content">{option.title}</p>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              type="button"
+                              className="flex h-10 w-10 items-center justify-center rounded-full bg-base-200/80 text-base-content transition hover:bg-base-300"
+                              aria-label={t('wallet.copy')}
+                              onClick={handleButtonClick(() => {
+                                void copyAddress(option.address, option.addressLabel);
+                              })}
+                            >
+                              <Copy size={16} aria-hidden />
+                            </button>
+                            <button
+                              type="button"
+                              className="flex h-10 w-10 items-center justify-center rounded-full bg-base-200/80 text-base-content transition hover:bg-base-300"
+                              aria-label={option.addressLabel}
+                              onClick={handleButtonClick(() => setSelectedAddressType(option.id))}
+                            >
+                              <QrCode size={16} aria-hidden />
+                            </button>
                           </div>
                         </div>
-                      ) : null}
+                        <p className="mt-2 break-all font-mono text-sm text-base-content/80">
+                          {option.address}
+                        </p>
+                        {option.id === 'evm' && visibleNetworkPills.length > 0 ? (
+                          <div className="mt-3">
+                            <div className="flex flex-wrap gap-2">
+                              {visibleNetworkPills.map((chain) => {
+                                const iconPath = getChainPillIconPath(chain);
+                                return (
+                                  <span
+                                    key={chain.networkKey}
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-base-300/70 bg-base-200/80 px-3 py-1.5 text-xs text-base-content/80"
+                                  >
+                                    {iconPath ? (
+                                      <img
+                                        src={iconPath}
+                                        alt=""
+                                        aria-hidden
+                                        className="h-3.5 w-3.5 rounded-full object-cover"
+                                        loading="lazy"
+                                      />
+                                    ) : null}
+                                    <span>{chain.name}</span>
+                                  </span>
+                                );
+                              })}
+                              {hiddenNetworkCount > 0 ? (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center rounded-full border border-base-300/70 bg-base-200/60 px-3 py-1.5 text-xs text-base-content/70 transition hover:bg-base-200"
+                                  onClick={handleButtonClick(() => {
+                                    setOpenChainListOnEnter(true);
+                                    setSelectedAddressType(option.id);
+                                  })}
+                                >
+                                  +{hiddenNetworkCount} {t('common.more')}
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -484,15 +505,6 @@ export function ReceiveCryptoContent({
                 </p>
               </div>
 
-              <div className="mt-5">
-                <SecondaryActionButton
-                  icon={<Copy size={16} aria-hidden />}
-                  label={t('wallet.copy')}
-                  onClick={handleButtonClick(() => {
-                    void handleCopyAddress();
-                  })}
-                />
-              </div>
             </div>
 
             {selectedOption.sharedAddress ? (
@@ -502,11 +514,9 @@ export function ReceiveCryptoContent({
                   className="flex w-full items-center justify-between gap-3 text-left"
                   onClick={handleButtonClick(() => setIsChainListOpen((value) => !value))}
                 >
-                  <div>
-                    <p className="m-0 text-base font-semibold text-base-content">
-                      {t('wallet.receiveSupportedChainsTitle')}
-                    </p>
-                  </div>
+                  <p className="m-0 text-sm leading-6 text-base-content/65">
+                    {formatSupportChainsText(t, selectedOption.supportedChains)}
+                  </p>
                   <ChevronDown
                     size={18}
                     aria-hidden
@@ -595,6 +605,9 @@ export function ReceiveCryptoContent({
                       : t('wallet.receiveDirectAddressRiskNotice', {
                           network: selectedOption.networkLabel,
                         })}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-amber-900/80">
+                    {t('wallet.receiveAddressConfirmationNotice')}
                   </p>
                 </div>
               </div>

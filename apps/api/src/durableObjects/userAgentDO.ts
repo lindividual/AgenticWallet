@@ -54,6 +54,11 @@ import type {
   WatchlistAssetRow,
 } from './userAgentTypes';
 import { safeJsonParse } from '../utils/json';
+import {
+  normalizeAgentChatAction,
+  normalizeAgentChatPayload,
+  normalizeAgentChatQuickReplyOption,
+} from '../agent/chatParsing';
 import type { ArticleRelatedAssetRef } from '../services/articleRelatedAssets';
 import { encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
 import { fetchWalletPortfolio } from '../services/market';
@@ -113,6 +118,27 @@ type AgentChatQuickRepliesAction = {
 };
 
 type AgentChatAction = AgentChatTransferAction | AgentChatQuickRepliesAction;
+
+type AgentRuntimeToolName = 'read_article';
+
+type AgentChatToolCall = {
+  tool: AgentRuntimeToolName;
+  arguments: Record<string, string | null | undefined>;
+};
+
+type AgentRuntimeStep =
+  | {
+      kind: 'tool_call';
+      toolCall: AgentChatToolCall;
+    }
+  | {
+      kind: 'final';
+      reply: string;
+      actions: AgentChatAction[];
+    };
+
+const CHAT_AGENT_STEP_LIMIT = 5;
+const READ_ARTICLE_EXCERPT_CHAR_LIMIT = 6_000;
 
 function stripJsonFences(text: string): string {
   const trimmed = text.trim();
@@ -782,13 +808,15 @@ export class UserAgentDO extends DurableObject<Bindings> {
   ): Promise<{ reply: string; sessionId: string; actions?: AgentChatAction[] }> {
     this.ensureOwner(userId);
 
-    const baseSystemPrompt = this.buildChatSystemPrompt(request.page, request.pageContext ?? {});
+    const pageContext = request.pageContext ?? {};
+    const availableTools = this.getAvailableChatTools(pageContext);
+    const baseSystemPrompt = this.buildChatSystemPrompt(request.page, pageContext);
     const promptConfig = await getAgentPromptConfig(this.env.DB);
     const promptSkills = await getAgentPromptSkills(this.env.DB);
     const configuredPrompt = applyAgentPromptConfig(baseSystemPrompt, promptConfig);
     const systemPrompt = applyAgentPromptSkills(configuredPrompt, promptSkills);
-    const llmMessages = [
-      { role: 'system' as const, content: systemPrompt },
+    const llmMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: systemPrompt },
       ...request.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
@@ -798,16 +826,39 @@ export class UserAgentDO extends DurableObject<Bindings> {
     let reply: string;
     let actions: AgentChatAction[] = [];
     try {
-      const result = await generateWithLlm(this.env, {
-        messages: llmMessages,
-        temperature: 0.5,
-        maxTokens: 500,
-        retryAttempts: 2,
-        maxRetryDelayMs: 5_000,
-      });
-      const parsed = this.parseChatLlmOutput(result.text, request.page);
-      reply = parsed.reply;
-      actions = parsed.actions;
+      for (let attempt = 0; attempt < CHAT_AGENT_STEP_LIMIT; attempt += 1) {
+        const result = await generateWithLlm(this.env, {
+          messages: llmMessages,
+          temperature: 0.5,
+          maxTokens: 500,
+          retryAttempts: 2,
+          maxRetryDelayMs: 5_000,
+        });
+        const runtimeStep = this.parseAgentRuntimeStep(result.text, request.page, availableTools);
+        if (runtimeStep.kind === 'tool_call') {
+          if (attempt >= CHAT_AGENT_STEP_LIMIT - 1) {
+            reply = this.getToolCallSuppressedReply(request.page);
+            actions = [];
+            return { reply, sessionId: request.sessionId, actions };
+          }
+
+          const toolResult = await this.executeAgentRuntimeTool(runtimeStep.toolCall, pageContext);
+          llmMessages.push({ role: 'assistant', content: stripJsonFences(result.text) });
+          llmMessages.push({ role: 'system', content: toolResult });
+          llmMessages.push({
+            role: 'system',
+            content: 'Continue the same task using the tool result above. Return raw JSON only. Either call another available tool with {"type":"tool_call","tool":"...","arguments":{...}} or finish with {"type":"final","reply":"string","actions":[]}. Never expose the internal tool protocol to the user.',
+          });
+          continue;
+        }
+
+        reply = runtimeStep.reply;
+        actions = runtimeStep.actions;
+        return { reply, sessionId: request.sessionId, actions };
+      }
+
+      reply = this.getFallbackChatReply(request.page);
+      actions = [];
     } catch {
       reply = this.getFallbackChatReply(request.page);
       actions = [];
@@ -3086,8 +3137,18 @@ export class UserAgentDO extends DurableObject<Bindings> {
     };
   }
 
+  private getAvailableChatTools(pageContext: Record<string, string>): AgentRuntimeToolName[] {
+    const tools: AgentRuntimeToolName[] = [];
+    if (pageContext.articleId?.trim()) {
+      tools.push('read_article');
+    }
+    return tools;
+  }
+
   private buildChatSystemPrompt(page: string, pageContext: Record<string, string>): string {
     const isReceiveFlow = pageContext.receiveMode === 'true';
+    const availableTools = this.getAvailableChatTools(pageContext);
+    const canReadArticle = availableTools.includes('read_article');
     const pageDescriptions: Record<string, string> = {
       home: 'the home screen showing daily digest, asset recommendations, watchlist, and topic articles',
       trade: 'the trading screen with market overview, top movers, trending assets, perps, and predictions',
@@ -3153,11 +3214,15 @@ export class UserAgentDO extends DurableObject<Bindings> {
       '- Offer actionable suggestions related to the current page.',
       '- If asked about specific assets, provide general guidance (not financial advice).',
       '- If the user gives a short affirmative reply after you offered help on the token page, treat it as a request to analyze the current token immediately.',
-      '- Return raw JSON only, with this exact top-level shape: {"reply":"string","actions":[]}. Do not wrap it in markdown fences.',
+      '- This chat runs in an internal multi-step agent runtime. Return raw JSON only and do not wrap it in markdown fences.',
+      '- When you are ready to answer the user, return {"type":"final","reply":"string","actions":[]}.',
+      '- When you need a tool before answering, return {"type":"tool_call","tool":"tool_name","arguments":{...}}.',
+      '- Never expose internal tool JSON, tool names, or protocol details to the user.',
       `- Supported transfer network keys: ${ETHEREUM_NETWORK_KEY} (Ethereum), ${BASE_NETWORK_KEY} (Base), ${BNB_NETWORK_KEY} (BNB Chain), ${TRON_NETWORK_KEY} (Tron), ${SOLANA_NETWORK_KEY} (Solana), ${BITCOIN_NETWORK_KEY} (Bitcoin).`,
       '- When it would help the user choose a next step, you may include one quick reply action like {"type":"quick_replies","options":[{"label":"Analyze risks","message":"Analyze the main risks of this token."},{"label":"Compare with BTC","message":"Compare this token with BTC."}]}.',
       '- Keep quick reply labels short, useful, and tappable. Prefer 2-4 options, and do not repeat the exact same wording as the reply sentence.',
       '- When you ask the user to choose from a small known set, include quick_replies instead of only listing the choices in plain text.',
+      '- Actions are only for user-facing UI actions such as quick_replies or transfer_preview.',
       '- Only include a transfer_preview action when the transfer recipient, network, asset, and amount are all explicit or clearly implied by the current page context.',
       '- When transfer details are incomplete, ask for exactly one missing field at a time in this order: recipient address, then network, then asset, then amount.',
       '- If the user refers to the current token on the token page, you may use the current token symbol and contract from context as the asset.',
@@ -3167,18 +3232,254 @@ export class UserAgentDO extends DurableObject<Bindings> {
       '- If the user is choosing a receive address, only recommend chains that appear in the configured supported receive chains from context.',
       '- If the correct receive network is clear, provide the exact matching receive address from context instead of speaking abstractly.',
       '- If multiple receive addresses are available, explain which network maps to which address and do not say unsupported networks are safe.',
+      canReadArticle
+        ? '- A hidden tool named read_article is available for the current article. Use it when the user asks for a summary, explanation, verification, or details that require the article contents.'
+        : '',
+      canReadArticle
+        ? `- Available tool: read_article. Arguments: {"articleId":"${pageContext.articleId}"}. The current article id is ${pageContext.articleId}.`
+        : '',
+      canReadArticle
+        ? '- Use read_article only when the current article contents are actually needed. After a tool result arrives, continue the same task and then return a final response.'
+        : '',
+      canReadArticle
+        ? '- Never place read_article inside actions. read_article is an internal hidden tool call, not a user-facing action.'
+        : '',
       `- ${langHint}`,
     ]
       .filter(Boolean)
       .join('\n');
   }
 
-  private parseChatLlmOutput(text: string, page: string): { reply: string; actions: AgentChatAction[] } {
+  private parseAgentRuntimeStep(
+    text: string,
+    page: string,
+    availableTools: AgentRuntimeToolName[],
+  ): AgentRuntimeStep {
+    const toolCall = this.parseAgentRuntimeToolCall(text, availableTools);
+    if (toolCall) {
+      return {
+        kind: 'tool_call',
+        toolCall,
+      };
+    }
+
+    const parsed = this.parseChatLlmOutput(text, page, availableTools);
+    return {
+      kind: 'final',
+      reply: parsed.reply,
+      actions: parsed.actions,
+    };
+  }
+
+  private parseAgentRuntimeToolCall(
+    text: string,
+    availableTools: AgentRuntimeToolName[],
+  ): AgentChatToolCall | null {
+    const candidate = extractJsonObject(text);
+    const parsed = safeJsonParse<Record<string, unknown>>(candidate);
+    const normalizedFromParsed = parsed ? this.normalizeParsedToolCall(parsed, availableTools) : null;
+    if (normalizedFromParsed) return normalizedFromParsed;
+
+    if (availableTools.includes('read_article')) {
+      const hasReadArticleToolCall = /"tool"\s*:\s*"read_article"/i.test(text)
+        || /"toolCall"\s*:\s*\{[\s\S]*?"name"\s*:\s*"read_article"/i.test(text)
+        || /"type"\s*:\s*"read_article"/i.test(text);
+      if (hasReadArticleToolCall) {
+        const articleIdMatch = text.match(/"articleId"\s*:\s*"([^"]+)"/i);
+        return {
+          tool: 'read_article',
+          arguments: {
+            articleId: articleIdMatch?.[1]?.trim() || null,
+          },
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeParsedToolCall(
+    payload: Record<string, unknown>,
+    availableTools: AgentRuntimeToolName[],
+  ): AgentChatToolCall | null {
+    const normalizedDirectTool = this.normalizeToolCallShape(payload.type, payload.tool, payload.arguments, availableTools);
+    if (normalizedDirectTool) return normalizedDirectTool;
+
+    const rawToolCall = payload.toolCall;
+    if (rawToolCall && typeof rawToolCall === 'object') {
+      const wrapped = rawToolCall as Record<string, unknown>;
+      const normalizedWrappedTool = this.normalizeToolCallShape('tool_call', wrapped.name, wrapped.arguments, availableTools);
+      if (normalizedWrappedTool) return normalizedWrappedTool;
+    }
+
+    if (Array.isArray(payload.actions) && payload.actions.length > 0) {
+      const firstAction = payload.actions[0];
+      if (firstAction && typeof firstAction === 'object') {
+        const actionPayload = firstAction as Record<string, unknown>;
+        const normalizedActionTool = this.normalizeToolCallShape('tool_call', actionPayload.type, actionPayload.arguments, availableTools);
+        if (normalizedActionTool) return normalizedActionTool;
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeToolCallShape(
+    rawType: unknown,
+    rawTool: unknown,
+    rawArguments: unknown,
+    availableTools: AgentRuntimeToolName[],
+  ): AgentChatToolCall | null {
+    const type = typeof rawType === 'string' ? rawType.trim() : '';
+    const tool = typeof rawTool === 'string' ? rawTool.trim() as AgentRuntimeToolName : '';
+    if (type && type !== 'tool_call') {
+      if (type === 'read_article' && availableTools.includes('read_article')) {
+        return {
+          tool: 'read_article',
+          arguments: this.normalizeToolArguments(rawArguments),
+        };
+      }
+      return null;
+    }
+    if (!tool || !availableTools.includes(tool)) return null;
+
+    return {
+      tool,
+      arguments: this.normalizeToolArguments(rawArguments),
+    };
+  }
+
+  private normalizeToolArguments(rawArguments: unknown): Record<string, string | null | undefined> {
+    if (!rawArguments || typeof rawArguments !== 'object') return {};
+
+    const result: Record<string, string | null | undefined> = {};
+    for (const [key, value] of Object.entries(rawArguments as Record<string, unknown>)) {
+      if (typeof value === 'string') {
+        result[key] = value.trim() || null;
+      } else if (value == null) {
+        result[key] = null;
+      }
+    }
+    return result;
+  }
+
+  private async executeAgentRuntimeTool(
+    toolCall: AgentChatToolCall,
+    pageContext: Record<string, string>,
+  ): Promise<string> {
+    if (toolCall.tool === 'read_article') {
+      return this.executeReadArticleTool(toolCall.arguments, pageContext);
+    }
+    return `Tool result: unsupported tool ${toolCall.tool}.`;
+  }
+
+  private async executeReadArticleTool(
+    args: Record<string, string | null | undefined>,
+    pageContext: Record<string, string>,
+  ): Promise<string> {
+    const articleId = args.articleId?.trim() || pageContext.articleId?.trim() || '';
+    if (!articleId) {
+      return 'Tool result for read_article: unavailable because no article id was provided.';
+    }
+
+    const detail = await this.getArticleDetail(articleId);
+    if (!detail) {
+      return `Tool result for read_article: article ${articleId} was not found.`;
+    }
+
+    const relatedAssets = detail.relatedAssets
+      .slice(0, 8)
+      .map((asset) => {
+        const symbol = asset.symbol?.trim() || asset.name?.trim() || 'unknown';
+        const chain = asset.chain?.trim();
+        const contract = asset.contract?.trim();
+        const priceChange = Number.isFinite(Number(asset.price_change_percentage_24h))
+          ? ` (${Number(asset.price_change_percentage_24h).toFixed(2)}% 24h)`
+          : '';
+        const location = chain
+          ? contract
+            ? ` on ${chain} ${contract}`
+            : ` on ${chain}`
+          : '';
+        return `${symbol}${location}${priceChange}`;
+      })
+      .filter(Boolean)
+      .join(', ');
+
+    const markdown = this.buildArticleExcerptForChat(detail.markdown);
+
+    return [
+      `Tool result for read_article (${articleId}):`,
+      `Title: ${detail.article.title}`,
+      `Summary: ${detail.article.summary}`,
+      `Article type: ${detail.article.article_type}`,
+      `Created at: ${detail.article.created_at}`,
+      relatedAssets ? `Related assets: ${relatedAssets}` : '',
+      'Article body excerpt:',
+      markdown,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  private buildArticleExcerptForChat(markdown: string): string {
+    const normalized = markdown.replace(/\r\n/g, '\n').trim();
+    if (!normalized) return '(empty article body)';
+
+    const withoutLeadingHeading = normalized.replace(/^\uFEFF?(?:\s*\n)*#(?!#)[ \t]+[^\n]+(?:\n+|$)/, '').trimStart();
+    if (withoutLeadingHeading.length <= READ_ARTICLE_EXCERPT_CHAR_LIMIT) {
+      return withoutLeadingHeading;
+    }
+
+    return `${withoutLeadingHeading.slice(0, READ_ARTICLE_EXCERPT_CHAR_LIMIT).trimEnd()}\n\n[article excerpt truncated]`;
+  }
+
+  private getToolCallSuppressedReply(page: string): string {
+    if (page === 'article') {
+      return 'I checked the article context, but the summary step did not finish cleanly. Please ask again and I will summarize it directly.';
+    }
+    return 'I had trouble finishing that step cleanly. Please try again.';
+  }
+
+  private extractReplyTextFromJsonish(text: string): string | null {
+    const match = text.match(/"reply"\s*:\s*"((?:\\.|[^"\\])*)"/s);
+    if (!match?.[1]) return null;
+
+    const normalized = match[1]
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '')
+      .replace(/\\t/g, '\t')
+      .replace(/\\\\/g, '\\')
+      .trim();
+    return normalized || null;
+  }
+
+  private parseChatLlmOutput(
+    text: string,
+    page: string,
+    availableTools: AgentRuntimeToolName[],
+  ): { reply: string; actions: AgentChatAction[] } {
+    if (this.parseAgentRuntimeToolCall(text, availableTools)) {
+      return {
+        reply: this.getToolCallSuppressedReply(page),
+        actions: [],
+      };
+    }
+
     const candidate = extractJsonObject(text);
     const parsed = safeJsonParse<Record<string, unknown>>(candidate);
     if (parsed) {
       const normalized = this.normalizeChatPayload(parsed);
       if (normalized) return normalized;
+    }
+
+    const extractedReply = this.extractReplyTextFromJsonish(text);
+    if (extractedReply) {
+      return {
+        reply: extractedReply,
+        actions: [],
+      };
     }
 
     return {
@@ -3188,82 +3489,15 @@ export class UserAgentDO extends DurableObject<Bindings> {
   }
 
   private normalizeChatPayload(payload: Record<string, unknown>): { reply: string; actions: AgentChatAction[] } | null {
-    const reply = typeof payload.reply === 'string'
-      ? payload.reply.trim()
-      : typeof payload.assistantReply === 'string'
-        ? payload.assistantReply.trim()
-        : '';
-    if (!reply) return null;
-
-    const actions = Array.isArray(payload.actions)
-      ? payload.actions
-        .map((action) => this.normalizeChatAction(action))
-        .filter((action): action is AgentChatAction => Boolean(action))
-      : [];
-
-    return { reply, actions };
+    return normalizeAgentChatPayload(payload);
   }
 
   private normalizeChatAction(input: unknown): AgentChatAction | null {
-    if (!input || typeof input !== 'object') return null;
-    const payload = input as Record<string, unknown>;
-    const type = typeof payload.type === 'string' ? payload.type.trim() : '';
-    if (type === 'quick_replies') {
-      const options = Array.isArray(payload.options)
-        ? payload.options
-          .map((option) => this.normalizeChatQuickReplyOption(option))
-          .filter((option): option is AgentChatQuickReplyOption => Boolean(option))
-          .slice(0, 4)
-        : [];
-      if (options.length === 0) return null;
-      return {
-        type: 'quick_replies',
-        options,
-      };
-    }
-
-    if (type !== 'transfer_preview') return null;
-
-    const networkKey = typeof payload.networkKey === 'string' ? payload.networkKey.trim().toLowerCase() : '';
-    const toAddress = typeof payload.toAddress === 'string' ? payload.toAddress.trim() : '';
-    const amount = typeof payload.amount === 'string' ? payload.amount.trim() : '';
-    const tokenSymbol = typeof payload.tokenSymbol === 'string' ? payload.tokenSymbol.trim().slice(0, 32) : null;
-    const tokenAddress = typeof payload.tokenAddress === 'string' ? payload.tokenAddress.trim() : null;
-    const tokenDecimalsValue = typeof payload.tokenDecimals === 'number' ? payload.tokenDecimals : null;
-    const tokenDecimals = Number.isFinite(tokenDecimalsValue) && tokenDecimalsValue != null
-      ? Math.max(0, Math.min(36, Math.trunc(tokenDecimalsValue)))
-      : null;
-
-    if (!networkKey || !toAddress || !amount) return null;
-
-    return {
-      type: 'transfer_preview',
-      networkKey,
-      toAddress,
-      amount,
-      tokenSymbol: tokenSymbol || null,
-      tokenAddress: tokenAddress || null,
-      tokenDecimals,
-    };
+    return normalizeAgentChatAction(input);
   }
 
   private normalizeChatQuickReplyOption(input: unknown): AgentChatQuickReplyOption | null {
-    if (typeof input === 'string') {
-      const value = input.trim().slice(0, 80);
-      if (!value) return null;
-      return { label: value, message: value };
-    }
-    if (!input || typeof input !== 'object') return null;
-
-    const payload = input as Record<string, unknown>;
-    const label = typeof payload.label === 'string' ? payload.label.trim().slice(0, 80) : '';
-    const message = typeof payload.message === 'string' ? payload.message.trim().slice(0, 280) : '';
-    if (!label) return null;
-
-    return {
-      label,
-      message: message || label,
-    };
+    return normalizeAgentChatQuickReplyOption(input);
   }
 
   private getFallbackChatReply(page: string): string {

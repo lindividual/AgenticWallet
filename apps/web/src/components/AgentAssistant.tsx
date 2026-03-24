@@ -65,12 +65,64 @@ const HELP_PROMPT_KEYS: Record<string, string> = {
   market: 'agent.helpPromptMarket',
 };
 
+const AGENT_CHAT_STORAGE_KEY = 'agentic_wallet_agent_chat_v1';
+
 function generateSessionId(): string {
   return `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function generateChatActionId(): string {
   return `action_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readStoredAgentChat(): {
+  sessionId: string;
+  messages: ChatMessage[];
+  lastGenericContextKey: string | null;
+} | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = window.localStorage.getItem(AGENT_CHAT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      sessionId?: unknown;
+      messages?: unknown;
+      lastGenericContextKey?: unknown;
+    };
+    if (typeof parsed.sessionId !== 'string' || !Array.isArray(parsed.messages)) {
+      return null;
+    }
+    const messages = parsed.messages.filter((message): message is ChatMessage => (
+      Boolean(message)
+      && typeof message === 'object'
+      && ('role' in message)
+      && ('content' in message)
+      && ('id' in message)
+    ));
+    return {
+      sessionId: parsed.sessionId,
+      messages,
+      lastGenericContextKey: typeof parsed.lastGenericContextKey === 'string'
+        ? parsed.lastGenericContextKey
+        : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildGenericContextKey(pageContext: PageContext): string {
+  if (pageContext.page === 'article') {
+    return `article:${pageContext.articleId?.trim() || 'default'}`;
+  }
+  if (pageContext.page === 'token') {
+    return `token:${(pageContext.tokenChain ?? '').trim().toLowerCase()}:${(pageContext.tokenContract ?? '').trim().toLowerCase()}`;
+  }
+  if (pageContext.page === 'market') {
+    return `market:${(pageContext.marketType ?? '').trim().toLowerCase()}:${(pageContext.marketItemId ?? '').trim()}`;
+  }
+  return pageContext.page;
 }
 
 function formatTokenContextNumber(value: number | null | undefined, digits = 4): string | null {
@@ -157,18 +209,21 @@ function isQuickRepliesActionCard(action: ChatActionCard): action is QuickReplie
 export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRequest }: AgentAssistantProps) {
   const { i18n, t } = useTranslation();
   const queryClient = useQueryClient();
+  const storedChat = useMemo(() => readStoredAgentChat(), []);
   const [phase, setPhase] = useState<'closed' | 'panel' | 'chat'>('closed');
   const [activeNudge, setActiveNudge] = useState<AgentNudge | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => storedChat?.messages ?? []);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [contextOverrides, setContextOverrides] = useState<AgentChatContextOverrides>({});
-  const [sessionId] = useState(generateSessionId);
+  const [lastGenericContextKey, setLastGenericContextKey] = useState<string | null>(() => storedChat?.lastGenericContextKey ?? null);
+  const [sessionId] = useState(() => storedChat?.sessionId ?? generateSessionId());
   const handledOpenRequestKeyRef = useRef(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const currentPageKey = pageContext.page;
+  const currentGenericContextKey = useMemo(() => buildGenericContextKey(pageContext), [pageContext]);
   const normalizedTokenChain = (pageContext.tokenChain ?? '').trim().toLowerCase();
   const normalizedTokenContract = normalizedTokenChain
     ? normalizeContractForChain(normalizedTokenChain, pageContext.tokenContract ?? '')
@@ -345,13 +400,24 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
   }, [currentPageKey, i18n.language, i18n.resolvedLanguage, pageContext.tokenSymbol, routePreview?.symbol, tokenDetail?.symbol]);
 
   useEffect(() => {
-    setPhase('closed');
-    setActiveNudge(null);
-    setMessages([]);
-    setInput('');
-    setLoading(false);
     setContextOverrides({});
-  }, [currentPageKey]);
+  }, [
+    currentPageKey,
+    pageContext.articleId,
+    pageContext.marketItemId,
+    pageContext.marketType,
+    pageContext.tokenChain,
+    pageContext.tokenContract,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(AGENT_CHAT_STORAGE_KEY, JSON.stringify({
+      sessionId,
+      messages,
+      lastGenericContextKey,
+    }));
+  }, [lastGenericContextKey, messages, sessionId]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -359,6 +425,9 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
 
   useEffect(() => {
     if (phase === 'chat') {
+      requestAnimationFrame(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      });
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [phase]);
@@ -367,22 +436,29 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     setPhase('chat');
     setActiveNudge(null);
     setContextOverrides({});
+    if (messages.length > 0 && currentGenericContextKey === lastGenericContextKey) {
+      return;
+    }
     const helpPrompt = t(HELP_PROMPT_KEYS[currentPageKey] ?? HELP_PROMPT_KEYS.home);
-    setMessages([
-      {
-        id: `greeting_${Date.now()}`,
-        role: 'assistant',
-        content: helpPrompt,
-        actions: [
-          {
-            kind: 'quick_replies',
-            id: generateChatActionId(),
-            options: buildStarterQuickReplies(),
-          },
-        ],
-      },
-    ]);
-  }, [buildStarterQuickReplies, currentPageKey, t]);
+    const starterMessage: ChatMessage = {
+      id: `greeting_${Date.now()}`,
+      role: 'assistant',
+      content: helpPrompt,
+      actions: [
+        {
+          kind: 'quick_replies',
+          id: generateChatActionId(),
+          options: buildStarterQuickReplies(),
+        },
+      ],
+    };
+    if (messages.length === 0) {
+      setMessages([starterMessage]);
+    } else {
+      setMessages((prev) => [...prev, starterMessage]);
+    }
+    setLastGenericContextKey(currentGenericContextKey);
+  }, [buildStarterQuickReplies, currentGenericContextKey, currentPageKey, lastGenericContextKey, messages.length, t]);
 
   const buildPageContextPayload = useCallback((requestOverrides?: AgentChatContextOverrides): Record<string, string> => {
     const pageCtx: Record<string, string> = {};
@@ -448,15 +524,19 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
 
   const getTransferFeeText = useCallback(
     (quote: TransferQuoteResponse) => {
-      const symbol = quote.tokenSymbol ?? '';
+      const fallbackSymbol = getSupportedChain(quote.networkKey)?.symbol ?? quote.tokenSymbol ?? '';
+      const symbol = quote.estimatedFeeTokenSymbol ?? fallbackSymbol;
       if (quote.estimatedFeeTokenAmount) {
         return `${quote.estimatedFeeTokenAmount} ${symbol}`.trim();
       }
-      const normalized = formatFeeAmount(quote.estimatedFeeTokenWei, quote.tokenDecimals);
+      const normalized = formatFeeAmount(
+        quote.estimatedFeeTokenWei,
+        quote.estimatedFeeTokenDecimals ?? quote.tokenDecimals,
+      );
       if (normalized) return `${normalized} ${symbol}`.trim();
       return quote.estimatedFeeWei ?? t('wallet.transferQuoteUnavailable');
     },
-    [t],
+    [getSupportedChain, t],
   );
 
   const getTransferActionErrorMessage = useCallback(
@@ -751,13 +831,14 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
           content: prompt,
         },
       ];
-      setMessages(seededMessages);
+      const updatedMessages = [...messages, ...seededMessages];
+      setMessages(updatedMessages);
       setInput('');
       setLoading(true);
 
       try {
         const result = await requestReply(
-          seededMessages.map((message) => ({
+          updatedMessages.map((message) => ({
             role: message.role,
             content: message.content,
           })),
@@ -778,14 +859,13 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
         setLoading(false);
       }
     },
-    [buildAssistantMessage, loading, requestReply, t],
+    [buildAssistantMessage, loading, messages, requestReply, t],
   );
 
   useEffect(() => {
     const requestKey = openRequest?.key ?? 0;
     if (requestKey <= handledOpenRequestKeyRef.current) return;
     handledOpenRequestKeyRef.current = requestKey;
-    setMessages([]);
     setInput('');
     setLoading(false);
     setContextOverrides(openRequest?.contextOverrides ?? {});

@@ -924,8 +924,8 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
     try {
       await navigator.clipboard.writeText(detailContract);
       showSuccess(t('wallet.assetDetailContractCopied'));
-    } catch (error) {
-      showError(`${t('common.error')}: ${(error as Error).message}`);
+    } catch {
+      showError(t('common.copyFailed'));
     }
   }
 

@@ -160,14 +160,14 @@ export function TradeContent({
     try {
       const nextQuote = await quoteTrade(requestPayload);
       setQuote(nextQuote);
-    } catch (error) {
+    } catch {
       setQuote(null);
       emitAgentInterventionSignal({
         type: 'trade_form_struggle',
         reason: 'quote_failed',
         entityKey: `trade:${preset?.mode ?? 'default'}:${networkKey}`,
       });
-      showError(`${t('wallet.tradeFailed')}: ${(error as Error).message}`);
+      showError(t('wallet.tradeFailedRetry'));
     } finally {
       setQuoting(false);
     }
@@ -228,13 +228,13 @@ export function TradeContent({
       onSubmitted?.(result);
       showSuccess(t('wallet.tradeSuccess'));
       onClose();
-    } catch (error) {
+    } catch {
       emitAgentInterventionSignal({
         type: 'trade_form_struggle',
         reason: 'submit_failed',
         entityKey: `trade:${preset?.mode ?? 'default'}:${networkKey}`,
       });
-      showError(`${t('wallet.tradeFailed')}: ${(error as Error).message}`);
+      showError(t('wallet.tradeFailedRetry'));
     } finally {
       setSubmitting(false);
     }

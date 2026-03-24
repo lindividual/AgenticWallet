@@ -176,7 +176,7 @@ export function buildFallbackDailyDigestMarkdown(
   }
 
   return [
-    `# 每日专属日报 ${date}`,
+    `# 每日日报 ${date}`,
     '',
     '## 今日摘要',
     items || '- 今日暂无关键行为变化',

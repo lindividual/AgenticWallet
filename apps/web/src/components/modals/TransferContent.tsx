@@ -248,11 +248,14 @@ export function TransferContent({
 
   function getDisplayFeeText(nextQuote: TransferQuoteResponse): string {
     const fallbackSymbol = selectedAsset?.symbol ?? selectedChain?.symbol ?? nextQuote.tokenSymbol ?? '';
-    const symbol = nextQuote.estimatedFeeTokenAddress ? (nextQuote.tokenSymbol ?? fallbackSymbol) : fallbackSymbol;
+    const symbol = nextQuote.estimatedFeeTokenSymbol ?? fallbackSymbol;
     if (nextQuote.estimatedFeeTokenAmount) {
       return `${nextQuote.estimatedFeeTokenAmount} ${symbol}`.trim();
     }
-    const normalized = formatTokenAmount(nextQuote.estimatedFeeTokenWei, nextQuote.tokenDecimals);
+    const normalized = formatTokenAmount(
+      nextQuote.estimatedFeeTokenWei,
+      nextQuote.estimatedFeeTokenDecimals ?? nextQuote.tokenDecimals,
+    );
     if (normalized) return `${normalized} ${symbol}`.trim();
     return nextQuote.estimatedFeeWei ?? t('wallet.transferQuoteUnavailable');
   }
@@ -289,7 +292,7 @@ export function TransferContent({
       } else if (message === 'unsupported_fee_token') {
         showError(t('wallet.transferUnsupportedFeeToken'));
       } else {
-        showError(`${t('wallet.transferFailed')}: ${message}`);
+        showError(t('wallet.transferFailedRetry'));
       }
     } finally {
       setQuoting(false);
@@ -373,9 +376,9 @@ export function TransferContent({
       showSuccess(t('wallet.transferSuccess'));
       setResultState({ success: true, transfer: result.transfer });
       setStep('result');
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'unknown_error';
-      showError(`${t('wallet.transferFailed')}: ${errorMessage}`);
+    } catch {
+      const errorMessage = t('wallet.transferFailedRetry');
+      showError(errorMessage);
       setResultState({ success: false, errorMessage });
       setStep('result');
     } finally {

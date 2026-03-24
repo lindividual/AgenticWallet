@@ -493,6 +493,8 @@ export async function prepareTronTransfer(
       estimatedFeeTokenWei: preparedTx.estimatedFeeSun.toString(),
       estimatedFeeTokenAddress: null,
       estimatedFeeTokenChainId: null,
+      estimatedFeeTokenSymbol: 'TRX',
+      estimatedFeeTokenDecimals: TRON_NATIVE_DECIMALS,
       insufficientFeeTokenBalance: false,
       estimatedGas: {
         preVerificationGas: null,

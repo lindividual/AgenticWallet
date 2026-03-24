@@ -197,6 +197,8 @@ export async function prepareBitcoinTransfer(
       estimatedFeeTokenWei: feeSats.toString(),
       estimatedFeeTokenAddress: null,
       estimatedFeeTokenChainId: null,
+      estimatedFeeTokenSymbol: BITCOIN_SYMBOL,
+      estimatedFeeTokenDecimals: BITCOIN_DECIMALS,
       insufficientFeeTokenBalance: false,
       estimatedGas: {
         preVerificationGas: null,

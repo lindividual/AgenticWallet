@@ -314,6 +314,8 @@ export type TransferQuoteResponse = {
   estimatedFeeTokenWei: string | null;
   estimatedFeeTokenAddress: string | null;
   estimatedFeeTokenChainId: number | null;
+  estimatedFeeTokenSymbol: string | null;
+  estimatedFeeTokenDecimals: number | null;
   insufficientFeeTokenBalance: boolean;
   estimatedGas: {
     preVerificationGas: string | null;

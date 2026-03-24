@@ -265,7 +265,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const detailPriceChangeCacheRef = useRef<Map<string, { value: number | null; expiresAt: number }>>(new Map());
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
-  const tradeButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
   const walletFingerprint = buildWalletAccountsFingerprint(auth.wallet?.chainAccounts, auth.wallet?.address);
   const [hiddenAssetKeys, setHiddenAssetKeys] = useState<Set<string>>(() => getHiddenWalletAssetKeys(walletAddress));
@@ -698,14 +697,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     };
   }
 
-  function openTradeModal(mode: 'buy' | 'stableSwap') {
-    const preset = buildTradePreset(mode);
-    if (!preset) return;
-    setTradePreset(preset);
-    setActiveModalContent('trade');
-    showModal(snapshotRect(tradeButtonRef.current));
-  }
-
   function openTradeFromTopUp(mode: 'buy' | 'stableSwap') {
     const preset = buildTradePreset(mode);
     if (!preset) return;
@@ -926,7 +917,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         )}
       </section>
 
-      <section className="mt-6 grid grid-cols-3 gap-3">
+      <section className="mt-6 grid grid-cols-2 gap-3">
         <button
           ref={topUpButtonRef}
           type="button"
@@ -942,14 +933,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
           onClick={openTransferModal}
         >
           {t('wallet.transfer')}
-        </button>
-        <button
-          type="button"
-          ref={tradeButtonRef}
-          className="btn btn-primary h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
-          onClick={() => openTradeModal('buy')}
-        >
-          {t('wallet.trade')}
         </button>
       </section>
 

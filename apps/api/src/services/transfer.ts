@@ -76,6 +76,7 @@ const ERC20_ABI = [
 ] as const;
 
 const DEFAULT_TRANSFER_CALL_GAS_LIMIT = 35_000n;
+const NATIVE_FEE_TOKEN_DECIMALS = 18;
 
 type ChainRuntimeConfig = {
   chain: Chain;
@@ -309,6 +310,130 @@ function resolveMeeSponsorshipEnabled(env: Bindings): boolean {
   return false;
 }
 
+function resolveTransferTokenSymbol(input: TransferQuoteRequest): string | null {
+  return input.tokenSymbol?.trim().toUpperCase() || null;
+}
+
+function resolveFeeTokenChainId(raw: number | undefined, fallbackChainId: number): number {
+  const feeTokenChainId = raw !== undefined ? Number(raw) : fallbackChainId;
+  if (!Number.isFinite(feeTokenChainId)) {
+    throw new Error('invalid_fee_token_chain_id');
+  }
+  return feeTokenChainId;
+}
+
+function shouldAllowDirectErc20Fallback(input: TransferQuoteRequest): boolean {
+  return !input.feeTokenAddress?.trim() && input.feeTokenChainId === undefined;
+}
+
+function isSameAddress(left: Address | null, right: Address | null): boolean {
+  if (!left || !right) return false;
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function buildTransferQuoteBase(params: {
+  networkKey: string;
+  chainId: number;
+  fromAddress: Address;
+  toAddress: Address;
+  tokenAddress: Address | null;
+  tokenSymbol: string | null;
+  tokenDecimals: number;
+  amountInput: string;
+  amountRaw: bigint;
+}): Omit<
+  TransferQuoteResponse,
+  | 'estimatedFeeWei'
+  | 'estimatedFeeTokenAmount'
+  | 'estimatedFeeTokenWei'
+  | 'estimatedFeeTokenAddress'
+  | 'estimatedFeeTokenChainId'
+  | 'estimatedFeeTokenSymbol'
+  | 'estimatedFeeTokenDecimals'
+  | 'insufficientFeeTokenBalance'
+  | 'estimatedGas'
+> {
+  return {
+    networkKey: params.networkKey,
+    chainId: params.chainId,
+    fromAddress: params.fromAddress,
+    toAddress: params.toAddress,
+    tokenAddress: params.tokenAddress,
+    tokenSymbol: params.tokenSymbol,
+    tokenDecimals: params.tokenDecimals,
+    amountInput: params.amountInput.trim(),
+    amountRaw: params.amountRaw.toString(),
+  };
+}
+
+async function buildDirectErc20TransferQuote(params: {
+  networkKey: string;
+  chain: Chain;
+  chainSymbol: string;
+  fromAddress: Address;
+  toAddress: Address;
+  signerAddress: Address;
+  tokenAddress: Address;
+  tokenSymbol: string | null;
+  tokenDecimals: number;
+  amountInput: string;
+  amountRaw: bigint;
+  nativeBalance: bigint;
+  publicClient: ReturnType<typeof createPublicClient>;
+  walletClient: ReturnType<typeof createWalletClient>;
+}): Promise<EoaPreparedTransfer> {
+  const data = encodeFunctionData({
+    abi: ERC20_ABI,
+    functionName: 'transfer',
+    args: [params.toAddress, params.amountRaw],
+  });
+  const feeEstimate = await estimateDirectFee(params.publicClient, {
+    account: params.signerAddress,
+    to: params.tokenAddress,
+    value: 0n,
+    data,
+  });
+  const estimatedFeeWei = parseBigintString(feeEstimate.estimatedFeeWei);
+  if (estimatedFeeWei !== null && params.nativeBalance < estimatedFeeWei) {
+    throw new Error('insufficient_native_balance_for_gas');
+  }
+
+  return {
+    mode: 'eoa',
+    quote: {
+      ...buildTransferQuoteBase({
+        networkKey: params.networkKey,
+        chainId: params.chain.id,
+        fromAddress: params.fromAddress,
+        toAddress: params.toAddress,
+        tokenAddress: params.tokenAddress,
+        tokenSymbol: params.tokenSymbol,
+        tokenDecimals: params.tokenDecimals,
+        amountInput: params.amountInput,
+        amountRaw: params.amountRaw,
+      }),
+      estimatedFeeWei: feeEstimate.estimatedFeeWei,
+      estimatedFeeTokenAmount: null,
+      estimatedFeeTokenWei: feeEstimate.estimatedFeeWei,
+      estimatedFeeTokenAddress: null,
+      estimatedFeeTokenChainId: params.chain.id,
+      estimatedFeeTokenSymbol: params.chainSymbol,
+      estimatedFeeTokenDecimals: NATIVE_FEE_TOKEN_DECIMALS,
+      insufficientFeeTokenBalance: false,
+      estimatedGas: feeEstimate.estimatedGas,
+    },
+    publicClient: params.publicClient,
+    walletClient: params.walletClient,
+    request: {
+      chain: params.chain,
+      account: params.signerAddress,
+      to: params.tokenAddress,
+      value: 0n,
+      data,
+    },
+  };
+}
+
 export async function prepareTransfer(
   env: Bindings,
   userId: string,
@@ -332,6 +457,7 @@ export async function prepareTransfer(
   const { chain } = resolveChainConfig(env, networkKey);
   const toAddress = toAddressOrThrow(input.toAddress, 'to_address');
   const tokenAddress = input.tokenAddress?.trim() ? toAddressOrThrow(input.tokenAddress, 'token_address') : null;
+  const tokenSymbol = resolveTransferTokenSymbol(input);
 
   const {
     account,
@@ -342,6 +468,7 @@ export async function prepareTransfer(
     fromAddress,
     signer,
   } = await buildTransferContext(env, userId, networkKey);
+  const nativeBalance = await publicClient.getBalance({ address: fromAddress });
 
   let tokenDecimals = tokenAddress ? normalizeTokenDecimals(input.tokenDecimals) : 18;
   if (tokenAddress && tokenDecimals === null) {
@@ -374,11 +501,7 @@ export async function prepareTransfer(
     const feeTokenAddress = input.feeTokenAddress?.trim()
       ? toAddressOrThrow(input.feeTokenAddress, 'fee_token_address')
       : tokenAddress;
-    const feeTokenChainId =
-      input.feeTokenChainId !== undefined ? Number(input.feeTokenChainId) : chain.id;
-    if (!Number.isFinite(feeTokenChainId)) {
-      throw new Error('invalid_fee_token_chain_id');
-    }
+    const feeTokenChainId = resolveFeeTokenChainId(input.feeTokenChainId, chain.id);
 
     const simulationEnabled = resolveMeeSimulationEnabled(env);
     const transferCallGasLimit = resolveTransferCallGasLimit(env);
@@ -420,7 +543,25 @@ export async function prepareTransfer(
         tokenAddress: feeTokenAddress,
       });
     } catch {
-      throw new Error('unsupported_fee_token');
+      if (!shouldAllowDirectErc20Fallback(input)) {
+        throw new Error('unsupported_fee_token');
+      }
+      return buildDirectErc20TransferQuote({
+        networkKey,
+        chain,
+        chainSymbol: chainConfig.symbol,
+        fromAddress,
+        toAddress,
+        signerAddress: signer.address,
+        tokenAddress,
+        tokenSymbol,
+        tokenDecimals,
+        amountInput: input.amount,
+        amountRaw,
+        nativeBalance,
+        publicClient,
+        walletClient,
+      });
     }
     let meeQuote: GetQuotePayload;
     try {
@@ -453,12 +594,37 @@ export async function prepareTransfer(
           ...feeDetail,
         });
       }
-      throw error instanceof Error ? error : new Error('transfer_quote_failed');
+      if (!shouldAllowDirectErc20Fallback(input)) {
+        throw error instanceof Error ? error : new Error('transfer_quote_failed');
+      }
+      console.warn('[transfer/quote][mee] falling_back_to_direct_gas', {
+        userId,
+        chainId: chain.id,
+        tokenAddress,
+        toAddress,
+        error: message,
+      });
+      return buildDirectErc20TransferQuote({
+        networkKey,
+        chain,
+        chainSymbol: chainConfig.symbol,
+        fromAddress,
+        toAddress,
+        signerAddress: signer.address,
+        tokenAddress,
+        tokenSymbol,
+        tokenDecimals,
+        amountInput: input.amount,
+        amountRaw,
+        nativeBalance,
+        publicClient,
+        walletClient,
+      });
     }
 
     const feeTokenWeiAmount = parseBigintString(meeQuote.paymentInfo.tokenWeiAmount);
     const insufficientFeeTokenBalance =
-      feeTokenAddress.toLowerCase() === tokenAddress.toLowerCase() &&
+      isSameAddress(feeTokenAddress, tokenAddress) &&
       feeTokenChainId === chain.id &&
       feeTokenWeiAmount !== null &&
       tokenBalance < amountRaw + feeTokenWeiAmount;
@@ -466,20 +632,26 @@ export async function prepareTransfer(
     return {
       mode: 'mee',
       quote: {
-        networkKey,
-        chainId: chain.id,
-        fromAddress,
-        toAddress,
-        tokenAddress,
-        tokenSymbol: input.tokenSymbol?.trim().toUpperCase() || null,
-        tokenDecimals,
-        amountInput: input.amount.trim(),
-        amountRaw: amountRaw.toString(),
+        ...buildTransferQuoteBase({
+          networkKey,
+          chainId: chain.id,
+          fromAddress,
+          toAddress,
+          tokenAddress,
+          tokenSymbol,
+          tokenDecimals,
+          amountInput: input.amount,
+          amountRaw,
+        }),
         estimatedFeeWei: meeQuote.paymentInfo.tokenWeiAmount ?? null,
         estimatedFeeTokenAmount: meeQuote.paymentInfo.tokenAmount ?? null,
         estimatedFeeTokenWei: meeQuote.paymentInfo.tokenWeiAmount ?? null,
         estimatedFeeTokenAddress: meeQuote.paymentInfo.token ?? null,
         estimatedFeeTokenChainId: Number(meeQuote.paymentInfo.chainId),
+        estimatedFeeTokenSymbol:
+          isSameAddress(feeTokenAddress, tokenAddress) && feeTokenChainId === chain.id ? tokenSymbol : null,
+        estimatedFeeTokenDecimals:
+          isSameAddress(feeTokenAddress, tokenAddress) && feeTokenChainId === chain.id ? tokenDecimals : null,
         insufficientFeeTokenBalance,
         estimatedGas: {
           preVerificationGas: null,
@@ -493,7 +665,6 @@ export async function prepareTransfer(
       meeQuote,
     };
   } else {
-    const nativeBalance = await publicClient.getBalance({ address: fromAddress });
     if (nativeBalance < amountRaw) {
       throw new Error('insufficient_native_balance');
     }
@@ -529,20 +700,24 @@ export async function prepareTransfer(
       return {
         mode: 'mee',
         quote: {
-          networkKey,
-          chainId: chain.id,
-          fromAddress,
-          toAddress,
-          tokenAddress,
-          tokenSymbol: input.tokenSymbol?.trim().toUpperCase() || null,
-          tokenDecimals,
-          amountInput: input.amount.trim(),
-          amountRaw: amountRaw.toString(),
+          ...buildTransferQuoteBase({
+            networkKey,
+            chainId: chain.id,
+            fromAddress,
+            toAddress,
+            tokenAddress,
+            tokenSymbol,
+            tokenDecimals,
+            amountInput: input.amount,
+            amountRaw,
+          }),
           estimatedFeeWei: meeQuote.paymentInfo.tokenWeiAmount ?? '0',
           estimatedFeeTokenAmount: meeQuote.paymentInfo.tokenAmount ?? null,
           estimatedFeeTokenWei: meeQuote.paymentInfo.tokenWeiAmount ?? null,
           estimatedFeeTokenAddress: meeQuote.paymentInfo.token ?? null,
           estimatedFeeTokenChainId: Number(meeQuote.paymentInfo.chainId),
+          estimatedFeeTokenSymbol: meeQuote.paymentInfo.token ? tokenSymbol ?? chainConfig.symbol : null,
+          estimatedFeeTokenDecimals: meeQuote.paymentInfo.token ? tokenDecimals : null,
           insufficientFeeTokenBalance: false,
           estimatedGas: {
             preVerificationGas: null,
@@ -572,20 +747,24 @@ export async function prepareTransfer(
     return {
       mode: 'eoa',
       quote: {
-        networkKey,
-        chainId: chain.id,
-        fromAddress,
-        toAddress,
-        tokenAddress,
-        tokenSymbol: input.tokenSymbol?.trim().toUpperCase() || null,
-        tokenDecimals,
-        amountInput: input.amount.trim(),
-        amountRaw: amountRaw.toString(),
+        ...buildTransferQuoteBase({
+          networkKey,
+          chainId: chain.id,
+          fromAddress,
+          toAddress,
+          tokenAddress,
+          tokenSymbol,
+          tokenDecimals,
+          amountInput: input.amount,
+          amountRaw,
+        }),
         estimatedFeeWei: feeEstimate.estimatedFeeWei,
         estimatedFeeTokenAmount: null,
-        estimatedFeeTokenWei: null,
+        estimatedFeeTokenWei: feeEstimate.estimatedFeeWei,
         estimatedFeeTokenAddress: null,
-        estimatedFeeTokenChainId: null,
+        estimatedFeeTokenChainId: chain.id,
+        estimatedFeeTokenSymbol: chainConfig.symbol,
+        estimatedFeeTokenDecimals: NATIVE_FEE_TOKEN_DECIMALS,
         insufficientFeeTokenBalance: false,
         estimatedGas: feeEstimate.estimatedGas,
       },

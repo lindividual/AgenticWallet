@@ -45,6 +45,8 @@ export type Bindings = {
   COINGECKO_USER_AGENT?: string;
   TRON_PRO_API_KEY?: string;
   TRONSCAN_API_KEY?: string;
+  LIFI_API_KEY?: string;
+  LIFI_API_BASE_URL?: string;
   OPENNEWS_TOKEN?: string;
   TWITTER_TOKEN?: string;
   ADMIN_API_TOKEN?: string;
@@ -145,6 +147,8 @@ export type TransferQuoteResponse = {
   estimatedFeeTokenWei: string | null;
   estimatedFeeTokenAddress: string | null;
   estimatedFeeTokenChainId: number | null;
+  estimatedFeeTokenSymbol: string | null;
+  estimatedFeeTokenDecimals: number | null;
   insufficientFeeTokenBalance: boolean;
   estimatedGas: {
     preVerificationGas: string | null;
@@ -157,6 +161,80 @@ export type TransferQuoteResponse = {
 
 export type TransferSubmitRequest = TransferQuoteRequest & {
   idempotencyKey?: string;
+};
+
+export type CrossChainTransferSourceRequest = {
+  networkKey: WalletNetworkKey;
+  tokenAddress: string;
+  tokenSymbol?: string;
+  tokenDecimals?: number;
+};
+
+export type CrossChainTransferQuoteRequest = {
+  toAddress: string;
+  targetNetworkKey: WalletNetworkKey;
+  targetTokenAddress: string;
+  targetTokenSymbol?: string;
+  targetTokenDecimals?: number;
+  amount: string;
+  sources: CrossChainTransferSourceRequest[];
+};
+
+export type CrossChainTransferLegQuote = {
+  kind: 'direct' | 'bridge';
+  fromNetworkKey: WalletNetworkKey;
+  fromChainId: number;
+  fromTokenAddress: string;
+  fromTokenSymbol: string | null;
+  fromTokenDecimals: number;
+  fromAmountRaw: string;
+  fromAmountInput: string;
+  fromAddress: string;
+  toNetworkKey: WalletNetworkKey;
+  toChainId: number;
+  toTokenAddress: string;
+  toTokenSymbol: string | null;
+  toTokenDecimals: number;
+  toAmountRaw: string;
+  toAmountMinRaw: string | null;
+  recipientAddress: string;
+  tool: string | null;
+  approvalAddress: string | null;
+  estimatedDurationSeconds: number | null;
+  estimatedGasCostUsd: string | null;
+  estimatedFeeCostUsd: string | null;
+};
+
+export type CrossChainTransferQuoteResponse = {
+  toAddress: string;
+  targetNetworkKey: WalletNetworkKey;
+  targetChainId: number;
+  targetTokenAddress: string;
+  targetTokenSymbol: string | null;
+  targetTokenDecimals: number;
+  requestedAmountInput: string;
+  requestedAmountRaw: string;
+  estimatedReceivedAmountRaw: string;
+  fullyCovered: boolean;
+  shortfallAmountRaw: string;
+  legs: CrossChainTransferLegQuote[];
+};
+
+export type CrossChainTransferSubmitRequest = CrossChainTransferQuoteRequest;
+
+export type CrossChainTransferSubmitLegResult = {
+  kind: 'direct' | 'bridge';
+  fromNetworkKey: WalletNetworkKey;
+  txHash: string;
+  approvalTxHash: string | null;
+  sourceStatus: 'confirmed' | 'failed' | 'pending' | 'submitted';
+  tool: string | null;
+};
+
+export type CrossChainTransferSubmitResponse = {
+  status: 'confirmed' | 'failed' | 'pending' | 'submitted';
+  quote: CrossChainTransferQuoteResponse;
+  legs: CrossChainTransferSubmitLegResult[];
 };
 
 export type TradeQuoteRequest = {

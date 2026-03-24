@@ -564,8 +564,8 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
         showSuccess(t('trade.watchAdded'));
       }
       await queryClient.invalidateQueries({ queryKey: ['market-watchlist'] });
-    } catch (error) {
-      showError(`${t('common.error')}: ${(error as Error).message}`);
+    } catch {
+      showError(t('common.actionFailed'));
     } finally {
       setIsWatchlistToggling(false);
     }

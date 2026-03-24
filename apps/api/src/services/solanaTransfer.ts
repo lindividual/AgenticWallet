@@ -83,6 +83,8 @@ export async function prepareSolanaTransfer(
       estimatedFeeTokenWei: null,
       estimatedFeeTokenAddress: null,
       estimatedFeeTokenChainId: null,
+      estimatedFeeTokenSymbol: 'SOL',
+      estimatedFeeTokenDecimals: 9,
       insufficientFeeTokenBalance: false,
       estimatedGas: {
         preVerificationGas: null,
