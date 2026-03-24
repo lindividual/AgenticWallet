@@ -6,7 +6,6 @@ import {
   agentChat,
   getAppConfig,
   getCoinDetail,
-  getMarketWatchlist,
   quoteTransfer,
   searchMarketTokens,
   submitTransfer,
@@ -125,11 +124,6 @@ function buildGenericContextKey(pageContext: PageContext): string {
   return pageContext.page;
 }
 
-function formatTokenContextNumber(value: number | null | undefined, digits = 4): string | null {
-  if (!Number.isFinite(Number(value))) return null;
-  return Number(value).toFixed(digits);
-}
-
 function normalizeIntentText(value: string): string {
   return value.trim().toLowerCase().replace(/[.!?。！？]/g, '');
 }
@@ -241,12 +235,6 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     staleTime: 20_000,
   });
 
-  const { data: watchlistData } = useQuery({
-    queryKey: ['agent-token-context-watchlist'],
-    queryFn: () => getMarketWatchlist({ limit: 200 }),
-    enabled: currentPageKey === 'token' && Boolean(normalizedTokenChain && normalizedTokenContract),
-    staleTime: 15_000,
-  });
   const { data: appConfig } = useQuery({
     queryKey: ['app-config'],
     queryFn: getAppConfig,
@@ -464,27 +452,11 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     const pageCtx: Record<string, string> = {};
     const tokenSymbol = pageContext.tokenSymbol ?? tokenDetail?.symbol ?? routePreview?.symbol ?? '';
     const tokenName = tokenDetail?.name ?? routePreview?.name ?? '';
-    const tokenPriceUsd = tokenDetail?.currentPriceUsd ?? routePreview?.current_price ?? null;
-    const tokenPriceChange24h = tokenDetail?.priceChange24h ?? routePreview?.price_change_percentage_24h ?? null;
-    const isInWatchlist =
-      currentPageKey === 'token'
-      && Boolean(
-        normalizedTokenChain
-        && normalizedTokenContract
-        && (watchlistData?.assets ?? []).some((asset) => (
-          asset.watch_type === 'crypto'
-          && asset.chain.trim().toLowerCase() === normalizedTokenChain
-          && normalizeContractForChain(asset.chain, asset.contract) === normalizedTokenContract
-        )),
-      );
 
-    if (tokenSymbol) pageCtx.symbol = tokenSymbol;
-    if (pageContext.tokenChain) pageCtx.chain = pageContext.tokenChain;
-    if (pageContext.tokenContract) pageCtx.contract = pageContext.tokenContract;
+    if (tokenSymbol) pageCtx.tokenSymbol = tokenSymbol;
+    if (pageContext.tokenChain) pageCtx.tokenChain = pageContext.tokenChain;
+    if (pageContext.tokenContract) pageCtx.tokenContract = pageContext.tokenContract;
     if (tokenName) pageCtx.tokenName = tokenName;
-    if (tokenPriceUsd != null) pageCtx.currentPriceUsd = formatTokenContextNumber(tokenPriceUsd, 6) ?? '';
-    if (tokenPriceChange24h != null) pageCtx.priceChange24h = formatTokenContextNumber(tokenPriceChange24h, 2) ?? '';
-    if (isInWatchlist) pageCtx.inWatchlist = 'true';
     if (pageContext.articleId) pageCtx.articleId = pageContext.articleId;
     if (pageContext.marketType) pageCtx.marketType = pageContext.marketType;
     if (pageContext.marketItemId) pageCtx.marketItemId = pageContext.marketItemId;
@@ -506,15 +478,10 @@ export function AgentAssistant({ entryNudge = null, onClose, pageContext, openRe
     normalizedTokenChain,
     normalizedTokenContract,
     pageContext,
-    routePreview?.current_price,
     routePreview?.name,
-    routePreview?.price_change_percentage_24h,
     routePreview?.symbol,
-    tokenDetail?.currentPriceUsd,
     tokenDetail?.name,
-    tokenDetail?.priceChange24h,
     tokenDetail?.symbol,
-    watchlistData?.assets,
   ]);
 
   const getSupportedChain = useCallback(

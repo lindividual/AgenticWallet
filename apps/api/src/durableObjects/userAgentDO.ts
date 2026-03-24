@@ -59,9 +59,32 @@ import {
   normalizeAgentChatPayload,
   normalizeAgentChatQuickReplyOption,
 } from '../agent/chatParsing';
+import type { AgentChatToolCall, AgentRuntimeToolName } from '../agent/runtimeTools';
+import {
+  getAvailableAgentRuntimeTools,
+  getRuntimeTokenContext,
+  parseAgentRuntimeToolCall,
+} from '../agent/runtimeTools';
+import {
+  buildReceiveAddressesToolResult,
+  buildTokenContextToolResult,
+  buildWalletContextToolResult,
+} from '../agent/runtimeToolFormat';
 import type { ArticleRelatedAssetRef } from '../services/articleRelatedAssets';
 import { encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
-import { fetchWalletPortfolio } from '../services/market';
+import { buildMergedPortfolioHoldings, fetchWalletPortfolio } from '../services/market';
+import { APP_CONFIG } from '../config/appConfig';
+import { normalizeMarketChain, toContractKey } from '../services/assetIdentity';
+import {
+  fetchBitgetTokenDetail,
+  fetchBitgetTokenKline,
+  fetchBitgetTokenSecurityAudit,
+  type BitgetKlineCandle,
+  type BitgetTokenDetail,
+  type BitgetTokenSecurityAudit,
+} from '../services/bitgetWallet';
+import { fetchTopMarketAssets } from '../services/marketTopAssets';
+import { fetchSolanaTokenDetails } from '../services/solana';
 import { privateKeyToBitcoinSegwitAddress } from '../utils/bitcoin';
 import { evmAddressToTronAddress } from '../utils/tron';
 import { ensureTopicSpecialSchema } from '../services/topicSpecials';
@@ -119,13 +142,6 @@ type AgentChatQuickRepliesAction = {
 
 type AgentChatAction = AgentChatTransferAction | AgentChatQuickRepliesAction;
 
-type AgentRuntimeToolName = 'read_article';
-
-type AgentChatToolCall = {
-  tool: AgentRuntimeToolName;
-  arguments: Record<string, string | null | undefined>;
-};
-
 type AgentRuntimeStep =
   | {
       kind: 'tool_call';
@@ -136,6 +152,15 @@ type AgentRuntimeStep =
       reply: string;
       actions: AgentChatAction[];
     };
+
+type AgentRuntimeToolDefinition = {
+  name: AgentRuntimeToolName;
+  buildPromptLines: (pageContext: Record<string, string>) => string[];
+  execute: (
+    args: Record<string, string | null | undefined>,
+    pageContext: Record<string, string>,
+  ) => Promise<string>;
+};
 
 const CHAT_AGENT_STEP_LIMIT = 5;
 const READ_ARTICLE_EXCERPT_CHAR_LIMIT = 6_000;
@@ -809,8 +834,9 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ensureOwner(userId);
 
     const pageContext = request.pageContext ?? {};
-    const availableTools = this.getAvailableChatTools(pageContext);
-    const baseSystemPrompt = this.buildChatSystemPrompt(request.page, pageContext);
+    const toolDefinitions = this.getAvailableChatToolDefinitions(request.page, pageContext);
+    const availableTools = toolDefinitions.map((definition) => definition.name);
+    const baseSystemPrompt = this.buildChatSystemPrompt(request.page, pageContext, toolDefinitions);
     const promptConfig = await getAgentPromptConfig(this.env.DB);
     const promptSkills = await getAgentPromptSkills(this.env.DB);
     const configuredPrompt = applyAgentPromptConfig(baseSystemPrompt, promptConfig);
@@ -842,7 +868,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
             return { reply, sessionId: request.sessionId, actions };
           }
 
-          const toolResult = await this.executeAgentRuntimeTool(runtimeStep.toolCall, pageContext);
+          const toolResult = await this.executeAgentRuntimeTool(runtimeStep.toolCall, pageContext, toolDefinitions);
           llmMessages.push({ role: 'assistant', content: stripJsonFences(result.text) });
           llmMessages.push({ role: 'system', content: toolResult });
           llmMessages.push({
@@ -3137,63 +3163,92 @@ export class UserAgentDO extends DurableObject<Bindings> {
     };
   }
 
-  private getAvailableChatTools(pageContext: Record<string, string>): AgentRuntimeToolName[] {
-    const tools: AgentRuntimeToolName[] = [];
-    if (pageContext.articleId?.trim()) {
-      tools.push('read_article');
-    }
-    return tools;
+  private getAvailableChatToolDefinitions(
+    page: string,
+    pageContext: Record<string, string>,
+  ): AgentRuntimeToolDefinition[] {
+    const availableTools = getAvailableAgentRuntimeTools(page, pageContext);
+    const tokenContext = getRuntimeTokenContext(pageContext);
+
+    const registry: Record<AgentRuntimeToolName, AgentRuntimeToolDefinition> = {
+      read_article: {
+        name: 'read_article',
+        buildPromptLines: () => [
+          '- Hidden tool available: read_article.',
+          '- Use read_article when the user asks for a summary, explanation, verification, or details from the current article.',
+          `- Tool contract: {"type":"tool_call","tool":"read_article","arguments":{}}. Current article id: ${pageContext.articleId}.`,
+        ],
+        execute: (args, context) => this.executeReadArticleTool(args, context),
+      },
+      read_token_context: {
+        name: 'read_token_context',
+        buildPromptLines: () => [
+          '- Hidden tool available: read_token_context.',
+          '- Use read_token_context when you need price, risk, trend, watchlist status, or the user position for the current token.',
+          `- Tool contract: {"type":"tool_call","tool":"read_token_context","arguments":{}}. Current token: ${tokenContext.tokenSymbol ?? tokenContext.tokenName ?? 'current token'} on ${tokenContext.tokenChain ?? 'unknown'} ${tokenContext.tokenContract ?? ''}.`,
+        ],
+        execute: (args, context) => this.executeReadTokenContextTool(args, context),
+      },
+      read_wallet_context: {
+        name: 'read_wallet_context',
+        buildPromptLines: () => [
+          '- Hidden tool available: read_wallet_context.',
+          '- Use read_wallet_context when you need live portfolio context, top holdings, concentration, or address coverage.',
+          '- Tool contract: {"type":"tool_call","tool":"read_wallet_context","arguments":{}}.',
+        ],
+        execute: () => this.executeReadWalletContextTool(),
+      },
+      read_receive_addresses: {
+        name: 'read_receive_addresses',
+        buildPromptLines: () => [
+          '- Hidden tool available: read_receive_addresses.',
+          '- Use read_receive_addresses when the user asks which receive address to share or which chain maps to which address.',
+          '- Tool contract: {"type":"tool_call","tool":"read_receive_addresses","arguments":{}}.',
+        ],
+        execute: () => this.executeReadReceiveAddressesTool(),
+      },
+    };
+
+    return availableTools.map((tool) => registry[tool]);
   }
 
-  private buildChatSystemPrompt(page: string, pageContext: Record<string, string>): string {
+  private buildChatSystemPrompt(
+    page: string,
+    pageContext: Record<string, string>,
+    toolDefinitions: AgentRuntimeToolDefinition[],
+  ): string {
     const isReceiveFlow = pageContext.receiveMode === 'true';
-    const availableTools = this.getAvailableChatTools(pageContext);
-    const canReadArticle = availableTools.includes('read_article');
+    const tokenContext = getRuntimeTokenContext(pageContext);
     const pageDescriptions: Record<string, string> = {
-      home: 'the home screen showing daily digest, asset recommendations, watchlist, and topic articles',
-      trade: 'the trading screen with market overview, top movers, trending assets, perps, and predictions',
-      wallet: 'the wallet screen showing balance, holdings across multiple chains, and transaction tools',
+      home: 'the home screen showing daily digest, recommendations, and wallet entry points',
+      trade: 'the trading screen with market overview, top movers, perps, and predictions',
+      wallet: 'the wallet screen showing balances, holdings, and transfer tools',
       article: 'reading a content article generated by the agent',
-      token: `viewing token details${pageContext.symbol ? ` for ${pageContext.symbol}` : ''}${pageContext.chain ? ` on ${pageContext.chain}` : ''}`,
+      token: `viewing token details${tokenContext.tokenSymbol ? ` for ${tokenContext.tokenSymbol}` : ''}${tokenContext.tokenChain ? ` on ${tokenContext.tokenChain}` : ''}`,
       market: `viewing market details for a ${pageContext.marketType ?? 'market'} item`,
     };
     const pageDesc = isReceiveFlow
       ? 'the wallet receive flow where the user is choosing which receive address to share'
       : pageDescriptions[page] ?? `the ${page} page`;
 
-    const recentEvents = this.getLatestEvents(10);
-    const eventSummary = recentEvents
-      .slice(0, 5)
-      .map((e) => e.event_type)
-      .join(', ');
-
-    const watchlistAssets = this.getWatchlistAssets(5);
-    const watchlistSummary = watchlistAssets
-      .map((a) => a.symbol)
-      .filter(Boolean)
-      .join(', ');
-    const tokenContextLines = page === 'token'
-      ? [
-          pageContext.tokenName ? `Token name: ${pageContext.tokenName}.` : '',
-          pageContext.contract ? `Token contract: ${pageContext.contract}.` : '',
-          pageContext.currentPriceUsd ? `Current price: $${pageContext.currentPriceUsd}.` : '',
-          pageContext.priceChange24h ? `24h price change: ${pageContext.priceChange24h}%.` : '',
-          pageContext.inWatchlist === 'true' ? 'The token is already in the user watchlist.' : '',
-        ].filter(Boolean)
-      : [];
-    const receiveContextLines = isReceiveFlow
-      ? [
-          pageContext.receiveSupportedChains ? `Configured supported receive chains: ${pageContext.receiveSupportedChains}.` : '',
-          pageContext.receiveSupportedEvmChains ? `Configured EVM receive chains: ${pageContext.receiveSupportedEvmChains}.` : '',
-          pageContext.receiveSupportedTronChains ? `Configured Tron receive chains: ${pageContext.receiveSupportedTronChains}.` : '',
-          pageContext.receiveSupportedSolanaChains ? `Configured Solana receive chains: ${pageContext.receiveSupportedSolanaChains}.` : '',
-          pageContext.receiveSupportedBitcoinChains ? `Configured Bitcoin receive chains: ${pageContext.receiveSupportedBitcoinChains}.` : '',
-          pageContext.receiveAddressEvm ? `EVM receive address: ${pageContext.receiveAddressEvm}.` : '',
-          pageContext.receiveAddressTron ? `Tron receive address: ${pageContext.receiveAddressTron}.` : '',
-          pageContext.receiveAddressSolana ? `Solana receive address: ${pageContext.receiveAddressSolana}.` : '',
-          pageContext.receiveAddressBitcoin ? `Bitcoin receive address: ${pageContext.receiveAddressBitcoin}.` : '',
-        ].filter(Boolean)
-      : [];
+    const ambientContextLines = [
+      tokenContext.tokenName ? `Current token name: ${tokenContext.tokenName}.` : '',
+      tokenContext.tokenChain ? `Current token chain: ${tokenContext.tokenChain}.` : '',
+      tokenContext.tokenContract ? `Current token contract: ${tokenContext.tokenContract}.` : '',
+      pageContext.articleId ? `Current article id: ${pageContext.articleId}.` : '',
+      pageContext.marketType ? `Current market type: ${pageContext.marketType}.` : '',
+      pageContext.marketItemId ? `Current market item id: ${pageContext.marketItemId}.` : '',
+      isReceiveFlow ? 'Receive mode is active for this chat.' : '',
+      pageContext.receiveSupportedChains ? `Configured supported receive chains: ${pageContext.receiveSupportedChains}.` : '',
+      pageContext.receiveSupportedEvmChains ? `Configured EVM receive chains: ${pageContext.receiveSupportedEvmChains}.` : '',
+      pageContext.receiveSupportedTronChains ? `Configured Tron receive chains: ${pageContext.receiveSupportedTronChains}.` : '',
+      pageContext.receiveSupportedSolanaChains ? `Configured Solana receive chains: ${pageContext.receiveSupportedSolanaChains}.` : '',
+      pageContext.receiveSupportedBitcoinChains ? `Configured Bitcoin receive chains: ${pageContext.receiveSupportedBitcoinChains}.` : '',
+      pageContext.receiveAddressEvm ? `EVM receive address: ${pageContext.receiveAddressEvm}.` : '',
+      pageContext.receiveAddressTron ? `Tron receive address: ${pageContext.receiveAddressTron}.` : '',
+      pageContext.receiveAddressSolana ? `Solana receive address: ${pageContext.receiveAddressSolana}.` : '',
+      pageContext.receiveAddressBitcoin ? `Bitcoin receive address: ${pageContext.receiveAddressBitcoin}.` : '',
+    ].filter(Boolean);
 
     const locale = this.getEffectiveLocale();
     const langHint = locale?.startsWith('zh')
@@ -3205,45 +3260,34 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return [
       'You are a helpful AI assistant for umi wallet, a crypto wallet and trading app.',
       `The user is currently on ${pageDesc}.`,
-      ...tokenContextLines,
-      ...receiveContextLines,
-      watchlistSummary ? `Their watchlist includes: ${watchlistSummary}.` : '',
-      eventSummary ? `Recent activity: ${eventSummary}.` : '',
+      ...ambientContextLines,
       'Guidelines:',
       '- Be concise and direct (2-3 sentences max per response).',
       '- Offer actionable suggestions related to the current page.',
-      '- If asked about specific assets, provide general guidance (not financial advice).',
+      '- If asked about specific assets, provide general guidance and avoid financial guarantees.',
       '- If the user gives a short affirmative reply after you offered help on the token page, treat it as a request to analyze the current token immediately.',
       '- This chat runs in an internal multi-step agent runtime. Return raw JSON only and do not wrap it in markdown fences.',
       '- When you are ready to answer the user, return {"type":"final","reply":"string","actions":[]}.',
-      '- When you need a tool before answering, return {"type":"tool_call","tool":"tool_name","arguments":{...}}.',
+      '- When you need a tool before answering, return {"type":"tool_call","tool":"tool_name","arguments":{}}.',
       '- Never expose internal tool JSON, tool names, or protocol details to the user.',
+      '- After a tool result arrives, continue the same task and either call another hidden tool or finish with a final response.',
       `- Supported transfer network keys: ${ETHEREUM_NETWORK_KEY} (Ethereum), ${BASE_NETWORK_KEY} (Base), ${BNB_NETWORK_KEY} (BNB Chain), ${TRON_NETWORK_KEY} (Tron), ${SOLANA_NETWORK_KEY} (Solana), ${BITCOIN_NETWORK_KEY} (Bitcoin).`,
       '- When it would help the user choose a next step, you may include one quick reply action like {"type":"quick_replies","options":[{"label":"Analyze risks","message":"Analyze the main risks of this token."},{"label":"Compare with BTC","message":"Compare this token with BTC."}]}.',
       '- Keep quick reply labels short, useful, and tappable. Prefer 2-4 options, and do not repeat the exact same wording as the reply sentence.',
       '- When you ask the user to choose from a small known set, include quick_replies instead of only listing the choices in plain text.',
       '- Actions are only for user-facing UI actions such as quick_replies or transfer_preview.',
+      '- Never place hidden tools inside actions.',
       '- Only include a transfer_preview action when the transfer recipient, network, asset, and amount are all explicit or clearly implied by the current page context.',
       '- When transfer details are incomplete, ask for exactly one missing field at a time in this order: recipient address, then network, then asset, then amount.',
       '- If the user refers to the current token on the token page, you may use the current token symbol and contract from context as the asset.',
       '- If the asset is the native asset for that network, set tokenAddress to null.',
       '- When all required transfer details are present, include one action like {"type":"transfer_preview","networkKey":"...","toAddress":"...","amount":"...","tokenSymbol":"ETH","tokenAddress":null,"tokenDecimals":null}.',
       '- Never invent recipient addresses, contract addresses, token decimals, amounts, or unsupported assets. Ask a concise follow-up question when details are missing or ambiguous.',
-      '- If the user is choosing a receive address, only recommend chains that appear in the configured supported receive chains from context.',
-      '- If the correct receive network is clear, provide the exact matching receive address from context instead of speaking abstractly.',
-      '- If multiple receive addresses are available, explain which network maps to which address and do not say unsupported networks are safe.',
-      canReadArticle
-        ? '- A hidden tool named read_article is available for the current article. Use it when the user asks for a summary, explanation, verification, or details that require the article contents.'
-        : '',
-      canReadArticle
-        ? `- Available tool: read_article. Arguments: {"articleId":"${pageContext.articleId}"}. The current article id is ${pageContext.articleId}.`
-        : '',
-      canReadArticle
-        ? '- Use read_article only when the current article contents are actually needed. After a tool result arrives, continue the same task and then return a final response.'
-        : '',
-      canReadArticle
-        ? '- Never place read_article inside actions. read_article is an internal hidden tool call, not a user-facing action.'
-        : '',
+      '- For receive-address guidance, first use any receive chains and addresses already present in the current context.',
+      '- If the correct receive network is clear from the user message and current context, give the exact matching receive address directly.',
+      '- If multiple receive addresses are available, explain which network maps to which address and do not ask the user to provide their own receive address.',
+      '- Use the hidden receive-address tool only when the current context is missing the needed receive mapping or you need to double-check it.',
+      ...toolDefinitions.flatMap((definition) => definition.buildPromptLines(pageContext)),
       `- ${langHint}`,
     ]
       .filter(Boolean)
@@ -3255,7 +3299,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     page: string,
     availableTools: AgentRuntimeToolName[],
   ): AgentRuntimeStep {
-    const toolCall = this.parseAgentRuntimeToolCall(text, availableTools);
+    const toolCall = parseAgentRuntimeToolCall(text, availableTools);
     if (toolCall) {
       return {
         kind: 'tool_call',
@@ -3271,106 +3315,14 @@ export class UserAgentDO extends DurableObject<Bindings> {
     };
   }
 
-  private parseAgentRuntimeToolCall(
-    text: string,
-    availableTools: AgentRuntimeToolName[],
-  ): AgentChatToolCall | null {
-    const candidate = extractJsonObject(text);
-    const parsed = safeJsonParse<Record<string, unknown>>(candidate);
-    const normalizedFromParsed = parsed ? this.normalizeParsedToolCall(parsed, availableTools) : null;
-    if (normalizedFromParsed) return normalizedFromParsed;
-
-    if (availableTools.includes('read_article')) {
-      const hasReadArticleToolCall = /"tool"\s*:\s*"read_article"/i.test(text)
-        || /"toolCall"\s*:\s*\{[\s\S]*?"name"\s*:\s*"read_article"/i.test(text)
-        || /"type"\s*:\s*"read_article"/i.test(text);
-      if (hasReadArticleToolCall) {
-        const articleIdMatch = text.match(/"articleId"\s*:\s*"([^"]+)"/i);
-        return {
-          tool: 'read_article',
-          arguments: {
-            articleId: articleIdMatch?.[1]?.trim() || null,
-          },
-        };
-      }
-    }
-
-    return null;
-  }
-
-  private normalizeParsedToolCall(
-    payload: Record<string, unknown>,
-    availableTools: AgentRuntimeToolName[],
-  ): AgentChatToolCall | null {
-    const normalizedDirectTool = this.normalizeToolCallShape(payload.type, payload.tool, payload.arguments, availableTools);
-    if (normalizedDirectTool) return normalizedDirectTool;
-
-    const rawToolCall = payload.toolCall;
-    if (rawToolCall && typeof rawToolCall === 'object') {
-      const wrapped = rawToolCall as Record<string, unknown>;
-      const normalizedWrappedTool = this.normalizeToolCallShape('tool_call', wrapped.name, wrapped.arguments, availableTools);
-      if (normalizedWrappedTool) return normalizedWrappedTool;
-    }
-
-    if (Array.isArray(payload.actions) && payload.actions.length > 0) {
-      const firstAction = payload.actions[0];
-      if (firstAction && typeof firstAction === 'object') {
-        const actionPayload = firstAction as Record<string, unknown>;
-        const normalizedActionTool = this.normalizeToolCallShape('tool_call', actionPayload.type, actionPayload.arguments, availableTools);
-        if (normalizedActionTool) return normalizedActionTool;
-      }
-    }
-
-    return null;
-  }
-
-  private normalizeToolCallShape(
-    rawType: unknown,
-    rawTool: unknown,
-    rawArguments: unknown,
-    availableTools: AgentRuntimeToolName[],
-  ): AgentChatToolCall | null {
-    const type = typeof rawType === 'string' ? rawType.trim() : '';
-    const tool = typeof rawTool === 'string' ? rawTool.trim() as AgentRuntimeToolName : '';
-    if (type && type !== 'tool_call') {
-      if (type === 'read_article' && availableTools.includes('read_article')) {
-        return {
-          tool: 'read_article',
-          arguments: this.normalizeToolArguments(rawArguments),
-        };
-      }
-      return null;
-    }
-    if (!tool || !availableTools.includes(tool)) return null;
-
-    return {
-      tool,
-      arguments: this.normalizeToolArguments(rawArguments),
-    };
-  }
-
-  private normalizeToolArguments(rawArguments: unknown): Record<string, string | null | undefined> {
-    if (!rawArguments || typeof rawArguments !== 'object') return {};
-
-    const result: Record<string, string | null | undefined> = {};
-    for (const [key, value] of Object.entries(rawArguments as Record<string, unknown>)) {
-      if (typeof value === 'string') {
-        result[key] = value.trim() || null;
-      } else if (value == null) {
-        result[key] = null;
-      }
-    }
-    return result;
-  }
-
   private async executeAgentRuntimeTool(
     toolCall: AgentChatToolCall,
     pageContext: Record<string, string>,
+    toolDefinitions: AgentRuntimeToolDefinition[],
   ): Promise<string> {
-    if (toolCall.tool === 'read_article') {
-      return this.executeReadArticleTool(toolCall.arguments, pageContext);
-    }
-    return `Tool result: unsupported tool ${toolCall.tool}.`;
+    const definition = toolDefinitions.find((candidate) => candidate.name === toolCall.tool) ?? null;
+    if (!definition) return `Tool result: unsupported tool ${toolCall.tool}.`;
+    return definition.execute(toolCall.arguments, pageContext);
   }
 
   private async executeReadArticleTool(
@@ -3434,6 +3386,213 @@ export class UserAgentDO extends DurableObject<Bindings> {
     return `${withoutLeadingHeading.slice(0, READ_ARTICLE_EXCERPT_CHAR_LIMIT).trimEnd()}\n\n[article excerpt truncated]`;
   }
 
+  private async executeReadTokenContextTool(
+    args: Record<string, string | null | undefined>,
+    pageContext: Record<string, string>,
+  ): Promise<string> {
+    const tokenContext = getRuntimeTokenContext(pageContext);
+    const tokenChain = args.tokenChain?.trim() || tokenContext.tokenChain || '';
+    const tokenContract = args.tokenContract?.trim() || tokenContext.tokenContract || '';
+    const tokenSymbol = args.tokenSymbol?.trim() || tokenContext.tokenSymbol || null;
+    const tokenName = args.tokenName?.trim() || tokenContext.tokenName || null;
+    if (!tokenChain || !tokenContract) {
+      return 'Tool result for read_token_context: unavailable because the current token identity is incomplete.';
+    }
+
+    const normalizedChain = normalizeMarketChain(tokenChain);
+    const normalizedContract = toContractKey(tokenContract, normalizedChain);
+    const [detail, audit, candles, wallet, watchlistAssets] = await Promise.all([
+      this.resolveTokenDetailForTool(normalizedChain, normalizedContract, tokenSymbol).catch(() => null),
+      fetchBitgetTokenSecurityAudit(this.env, normalizedChain, normalizedContract).catch(() => null),
+      fetchBitgetTokenKline(this.env, { chain: normalizedChain, contract: normalizedContract, period: '1h', size: 24 }).catch(() => []),
+      Promise.resolve(this.getWalletSummary()),
+      Promise.resolve(this.getWatchlistAssets(MAX_WATCHLIST_SIZE)),
+    ]);
+
+    let holding: {
+      symbol: string | null;
+      valueUsd: number;
+      portfolioWeightPct: number | null;
+      networkCount: number;
+    } | null = null;
+    if (wallet) {
+      const portfolio = await fetchWalletPortfolio(this.env, wallet).catch(() => null);
+      if (portfolio) {
+        const merged = await buildMergedPortfolioHoldings(this.env, portfolio.holdings).catch(() => []);
+        const matched = merged.find((item) => item.variants.some((variant) => (
+          variant.market_chain === normalizedChain && variant.contract_key === normalizedContract
+        ))) ?? null;
+        if (matched) {
+          holding = {
+            symbol: matched.symbol,
+            valueUsd: matched.total_value_usd,
+            portfolioWeightPct: portfolio.totalUsd > 0 ? (matched.total_value_usd / portfolio.totalUsd) * 100 : null,
+            networkCount: matched.variants.length,
+          };
+        }
+      }
+    }
+
+    const isInWatchlist = watchlistAssets.some((asset) => (
+      normalizeMarketChain(asset.chain) === normalizedChain && toContractKey(asset.contract, normalizedChain) === normalizedContract
+    ));
+
+    return buildTokenContextToolResult({
+      requestedChain: normalizedChain,
+      requestedContract: normalizedContract,
+      requestedSymbol: tokenSymbol,
+      requestedName: tokenName,
+      detail: detail
+        ? {
+            ...detail,
+            volume24h: null,
+            fdv: null,
+          }
+        : null,
+      audit,
+      candles,
+      isInWatchlist,
+      holding,
+    });
+  }
+
+  private async resolveTokenDetailForTool(
+    tokenChain: string,
+    tokenContract: string,
+    tokenSymbol?: string | null,
+  ): Promise<BitgetTokenDetail | null> {
+    const normalizedChain = normalizeMarketChain(tokenChain);
+    const normalizedContract = toContractKey(tokenContract, normalizedChain);
+
+    if (normalizedChain === 'sol') {
+      const details = await fetchSolanaTokenDetails(this.env, [normalizedContract || 'native']);
+      const detail = details.get(normalizedContract || 'native') ?? details.get('native') ?? null;
+      if (!detail) return null;
+      return {
+        asset_id: detail.asset_id,
+        chain_asset_id: detail.chain_asset_id,
+        chain: detail.chain,
+        contract: detail.contract,
+        symbol: detail.symbol,
+        name: detail.name,
+        image: detail.image,
+        priceChange24h: detail.priceChange24h,
+        currentPriceUsd: detail.currentPriceUsd,
+        holders: null,
+        totalSupply: null,
+        liquidityUsd: null,
+        top10HolderPercent: null,
+        devHolderPercent: null,
+        lockLpPercent: null,
+      };
+    }
+
+    if (normalizedContract === 'native') {
+      const assets = await fetchTopMarketAssets(this.env, {
+        source: 'coingecko',
+        name: 'marketCap',
+        limit: 80,
+        chains: [normalizedChain],
+      }).catch(() => []);
+      const expectedSymbol = tokenSymbol?.trim().toUpperCase() ?? '';
+      const matched = assets.find((asset) => (
+        normalizeMarketChain(asset.chain) === normalizedChain && toContractKey(asset.contract || 'native', normalizedChain) === 'native'
+      )) ?? assets.find((asset) => expectedSymbol && asset.symbol.trim().toUpperCase() === expectedSymbol) ?? null;
+      if (!matched) return null;
+      return {
+        asset_id: matched.asset_id,
+        chain_asset_id: matched.chain_asset_id,
+        chain: matched.chain,
+        contract: matched.contract,
+        symbol: matched.symbol,
+        name: matched.name,
+        image: matched.image ?? null,
+        priceChange24h: matched.price_change_percentage_24h ?? null,
+        currentPriceUsd: matched.current_price ?? null,
+        holders: null,
+        totalSupply: null,
+        liquidityUsd: null,
+        top10HolderPercent: null,
+        devHolderPercent: null,
+        lockLpPercent: null,
+      };
+    }
+
+    return fetchBitgetTokenDetail(this.env, normalizedChain, normalizedContract);
+  }
+
+  private async executeReadWalletContextTool(): Promise<string> {
+    const wallet = this.getWalletSummary();
+    if (!wallet) {
+      return buildWalletContextToolResult({
+        walletAddress: null,
+        chainAccounts: [],
+        totalUsd: null,
+        topHoldings: [],
+        watchlistSymbols: [],
+        recentEventTypes: [],
+      });
+    }
+
+    const portfolio = await fetchWalletPortfolio(this.env, wallet).catch(() => null);
+    const merged = portfolio ? await buildMergedPortfolioHoldings(this.env, portfolio.holdings).catch(() => []) : [];
+    const topHoldings = merged.slice(0, 5).map((item) => ({
+      symbol: item.symbol,
+      name: item.name,
+      valueUsd: item.total_value_usd,
+      portfolioWeightPct: portfolio && portfolio.totalUsd > 0 ? (item.total_value_usd / portfolio.totalUsd) * 100 : null,
+    }));
+
+    return buildWalletContextToolResult({
+      walletAddress: wallet.address,
+      chainAccounts: wallet.chainAccounts.map((account) => ({
+        networkKey: account.networkKey,
+        protocol: account.protocol,
+        address: account.address,
+      })),
+      totalUsd: portfolio?.totalUsd ?? null,
+      topHoldings,
+      watchlistSymbols: this.getWatchlistAssets(8).map((item) => item.symbol).filter(Boolean),
+      recentEventTypes: this.getLatestEvents(6).map((item) => item.event_type).filter(Boolean),
+    });
+  }
+
+  private async executeReadReceiveAddressesTool(): Promise<string> {
+    const wallet = this.getWalletSummary();
+    if (!wallet) {
+      return 'Tool result for read_receive_addresses: unavailable because the wallet has not been initialized.';
+    }
+
+    const groups = [
+      {
+        protocol: 'evm' as const,
+        label: 'EVM receive address',
+        address: wallet.chainAccounts.find((item) => item.protocol === 'evm')?.address ?? wallet.address,
+        chainNames: APP_CONFIG.supportedChains.filter((item) => item.protocol === 'evm').map((item) => item.name),
+      },
+      {
+        protocol: 'tvm' as const,
+        label: 'Tron receive address',
+        address: wallet.chainAccounts.find((item) => item.protocol === 'tvm')?.address ?? '',
+        chainNames: APP_CONFIG.supportedChains.filter((item) => item.protocol === 'tvm').map((item) => item.name),
+      },
+      {
+        protocol: 'svm' as const,
+        label: 'Solana receive address',
+        address: wallet.chainAccounts.find((item) => item.protocol === 'svm')?.address ?? '',
+        chainNames: APP_CONFIG.supportedChains.filter((item) => item.protocol === 'svm').map((item) => item.name),
+      },
+      {
+        protocol: 'btc' as const,
+        label: 'Bitcoin receive address',
+        address: wallet.chainAccounts.find((item) => item.protocol === 'btc')?.address ?? '',
+        chainNames: APP_CONFIG.supportedChains.filter((item) => item.protocol === 'btc').map((item) => item.name),
+      },
+    ].filter((group) => Boolean(group.address));
+
+    return buildReceiveAddressesToolResult({ groups });
+  }
+
   private getToolCallSuppressedReply(page: string): string {
     if (page === 'article') {
       return 'I checked the article context, but the summary step did not finish cleanly. Please ask again and I will summarize it directly.';
@@ -3460,7 +3619,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     page: string,
     availableTools: AgentRuntimeToolName[],
   ): { reply: string; actions: AgentChatAction[] } {
-    if (this.parseAgentRuntimeToolCall(text, availableTools)) {
+    if (parseAgentRuntimeToolCall(text, availableTools)) {
       return {
         reply: this.getToolCallSuppressedReply(page),
         actions: [],
