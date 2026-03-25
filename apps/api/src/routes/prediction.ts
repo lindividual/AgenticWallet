@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import {
+  activatePredictionAccount,
   getPredictionAccount,
   getPredictionDepositInfo,
   placePredictionBet,
@@ -20,6 +21,22 @@ export function registerPredictionRoutes(app: Hono<AppEnv>): void {
       return c.json(account);
     } catch (error) {
       const message = getErrorMessage(error, 'prediction_account_failed');
+      const status = toPredictionErrorStatus(error);
+      return c.json({ error: message }, status);
+    }
+  });
+
+  app.post('/v1/prediction/activate', async (c) => {
+    const userId = c.get('userId');
+    const body = await readJsonBody<{ signatureType?: 'proxy' | 'eoa' | 'gnosis-safe' }>(c.req);
+
+    try {
+      const account = await activatePredictionAccount(c.env, userId, {
+        signatureType: body?.signatureType,
+      });
+      return c.json(account);
+    } catch (error) {
+      const message = getErrorMessage(error, 'prediction_activation_failed');
       const status = toPredictionErrorStatus(error);
       return c.json({ error: message }, status);
     }

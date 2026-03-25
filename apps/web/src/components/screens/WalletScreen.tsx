@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
 import type { LivelinePoint } from 'liveline';
 import {
+  activatePredictionAccount,
   getAppConfig,
   getCoinDetailsBatch,
   getWalletPortfolio,
@@ -29,12 +30,22 @@ import { SkeletonAssetListItem } from '../Skeleton';
 import { formatUsdAdaptive } from '../../utils/currency';
 import { cacheStores, readCache, writeCache } from '../../utils/indexedDbCache';
 import { SettingsDropdown } from '../SettingsDropdown';
+import { WalletCryptoToolsModal } from '../WalletCryptoToolsModal';
 import { buildChainAssetId } from '../../utils/assetIdentity';
-import { buildWalletAccountsFingerprint, normalizeContractForChain } from '../../utils/chainIdentity';
+import { buildWalletAccountsFingerprint, normalizeContractForChain, normalizeMarketChain } from '../../utils/chainIdentity';
 import { formatChartTimeLabel } from '../../utils/kline';
 import { buildTransferableAssets } from '../../utils/transferAssets';
 import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { getHiddenWalletAssetKeys } from '../../utils/walletHiddenAssets';
+import {
+  getWalletAddedAssets,
+  getWalletCryptoFilterState,
+  setWalletCryptoFilterState,
+  upsertWalletAddedAsset,
+  type WalletAddedAsset,
+  type WalletAddedAssetInput,
+  type WalletCryptoFilterState,
+} from '../../utils/walletTrackedAssets';
 
 type WalletScreenProps = {
   auth: AuthState;
@@ -66,12 +77,16 @@ type WalletHoldingListItem = {
   key: string;
   assetId: string | null;
   chainAssetId: string | null;
+  chainAssetIds: string[];
   symbol: string;
   name: string;
   logo: string | null;
   valueUsd: number;
   amountText: string;
   priceChangePct: number | null;
+  networkKeys: string[];
+  networkLabelText: string;
+  isManualAdded: boolean;
   transferAsset: SimEvmBalance;
 };
 
@@ -184,6 +199,7 @@ const STABLE_ASSET_IDS = new Set(['coingecko:usd-coin', 'coingecko:tether']);
 const STABLE_SYMBOLS = new Set(['USDC', 'USDT']);
 const PRICE_CHANGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PRICE_CHANGE_FAILED_CACHE_TTL_MS = 60 * 1000;
+const SMALL_ASSET_USD_THRESHOLD = 1;
 
 function resolvePriceChangeLookupParams(
   asset: WalletHoldingListItem,
@@ -242,6 +258,37 @@ function TokenAvatar({
   );
 }
 
+function AccountIntroBlock({
+  kind,
+  text,
+}: {
+  kind: 'perps' | 'prediction';
+  text: string;
+}) {
+  return (
+    <div className="mt-2 flex items-start gap-3 rounded-2xl bg-base-200/35 px-3 py-3">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-base-100 text-base-content shadow-sm">
+        {kind === 'perps' ? (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 16l5-5 4 4 7-7" />
+            <path d="M15 8h5v5" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M6 7.5h12" />
+            <path d="M6 12h7" />
+            <path d="M6 16.5h5" />
+            <circle cx="17.5" cy="15.5" r="2.5" />
+          </svg>
+        )}
+      </div>
+      <p className="m-0 flex-1 text-base leading-7 text-base-content/80">
+        {text}
+      </p>
+    </div>
+  );
+}
+
 export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentChat }: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
@@ -255,9 +302,11 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const [modalVisible, setModalVisible] = useState(false);
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
+  const [isActivatingPrediction, setIsActivatingPrediction] = useState(false);
   const [isStablesExpanded, setIsStablesExpanded] = useState(false);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
   const [detailPriceChangeByHoldingKey, setDetailPriceChangeByHoldingKey] = useState<Record<string, number | null>>({});
+  const [cryptoToolsMode, setCryptoToolsMode] = useState<'filter' | 'add' | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
   const modalSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -267,6 +316,8 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
   const walletFingerprint = buildWalletAccountsFingerprint(auth.wallet?.chainAccounts, auth.wallet?.address);
   const [hiddenAssetKeys, setHiddenAssetKeys] = useState<Set<string>>(() => getHiddenWalletAssetKeys(walletAddress));
+  const [cryptoFilterState, setCryptoFilterStateState] = useState<WalletCryptoFilterState>(() => getWalletCryptoFilterState(walletAddress));
+  const [trackedAssets, setTrackedAssets] = useState<WalletAddedAsset[]>(() => getWalletAddedAssets(walletAddress));
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['wallet-portfolio', walletFingerprint],
@@ -292,11 +343,23 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     staleTime: 60_000,
     refetchInterval: 120_000,
   });
+  const { data: trackedAssetDetails = [] } = useQuery({
+    queryKey: [
+      'wallet-tracked-asset-details',
+      trackedAssets.map((item) => `${item.chain}:${item.contract}`).join(','),
+    ],
+    queryFn: () => getCoinDetailsBatch(trackedAssets.map((item) => ({ chain: item.chain, contract: item.contract }))),
+    enabled: trackedAssets.length > 0,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
 
   const portfolioData = data ?? cachedPortfolio;
   const perpsAccount = portfolioData?.perpsAccount ?? null;
   const predictionAccount = portfolioData?.predictionAccount ?? null;
   const totalBalance = portfolioData?.totalUsd ?? 0;
+  const isPerpsActivated = perpsAccount?.activationState === 'active';
+  const isPredictionActivated = predictionAccount?.activationState === 'active';
   const perpsAccountValue = perpsAccount?.available && Number.isFinite(Number(perpsAccount.balanceUsd))
     ? formatUsdAdaptive(Number(perpsAccount.balanceUsd ?? 0), i18n.language)
     : t('wallet.accountUnavailableValue');
@@ -316,6 +379,14 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     () => new Map(supportedChains.map((chain) => [chain.networkKey, chain.name] as const)),
     [supportedChains],
   );
+  const supportedChainByNetworkKey = useMemo(
+    () => new Map(supportedChains.map((chain) => [chain.networkKey, chain] as const)),
+    [supportedChains],
+  );
+  const supportedChainByMarketChain = useMemo(
+    () => new Map(supportedChains.map((chain) => [normalizeMarketChain(chain.marketChain), chain] as const)),
+    [supportedChains],
+  );
   const transferAvailableAssets = useMemo(
     () => buildTransferableAssets(portfolioData, { hiddenAssetKeys }),
     [hiddenAssetKeys, portfolioData],
@@ -329,7 +400,23 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
 
   useEffect(() => {
     setHiddenAssetKeys(getHiddenWalletAssetKeys(walletAddress));
+    setCryptoFilterStateState(getWalletCryptoFilterState(walletAddress));
+    setTrackedAssets(getWalletAddedAssets(walletAddress));
   }, [walletAddress]);
+
+  async function handleActivatePredictionAccount(): Promise<void> {
+    if (isActivatingPrediction) return;
+    setIsActivatingPrediction(true);
+    try {
+      await activatePredictionAccount({ signatureType: 'eoa' });
+      await queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] });
+      showSuccess(t('wallet.predictionActivationSuccess'));
+    } catch {
+      showError(t('wallet.predictionActivationFailed'));
+    } finally {
+      setIsActivatingPrediction(false);
+    }
+  }
 
   useEffect(() => {
     if (!walletFingerprint) return;
@@ -349,134 +436,227 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     });
   }, [data, walletFingerprint]);
 
+  const trackedAssetDetailByChainAssetId = useMemo(
+    () =>
+      new Map(
+        trackedAssetDetails.map((item) => [buildChainAssetId(item.chain, item.contract).trim(), item.detail] as const),
+      ),
+    [trackedAssetDetails],
+  );
+
   const holdings = useMemo<WalletHoldingListItem[]>(() => {
-    if (!portfolioData) {
-      return [];
+    const resolvedHoldings: WalletHoldingListItem[] = [];
+
+    if (portfolioData) {
+      const merged = portfolioData.mergedHoldings ?? [];
+      if (merged.length > 0) {
+        resolvedHoldings.push(
+          ...[...merged]
+            .filter((item) => !(item.variants ?? []).some((variant) => isHoldingVariantHidden(variant, hiddenAssetKeys)))
+            .sort((a, b) => Number(b.total_value_usd ?? 0) - Number(a.total_value_usd ?? 0))
+            .flatMap((item) => {
+              const variants = [...(item.variants ?? [])].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+              const primary = variants[0];
+              if (!primary) return [];
+
+              const networkKeys = [...new Set(variants.map((variant) => variant.network_key).filter(Boolean))];
+              const chainLabels = [
+                ...new Set(
+                  variants
+                    .map((variant) => {
+                      const fromConfig = chainNameByNetworkKey.get(variant.network_key);
+                      if (fromConfig) return fromConfig;
+                      if (variant.chain) return variant.chain.toUpperCase();
+                      return variant.network_key || '--';
+                    })
+                    .filter(Boolean),
+                ),
+              ];
+              const chainAssetIds = variants
+                .map((variant) => normalizeChainAssetId(
+                  variant.chain_asset_id ?? buildChainAssetId(variant.market_chain ?? variant.chain, variant.contract_key ?? variant.address),
+                ))
+                .filter((value): value is string => Boolean(value));
+              const symbol = (item.symbol ?? primary.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
+              const name = (item.name ?? primary.name ?? t('wallet.token')).trim();
+              const totalAmount = variants.reduce(
+                (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
+                0,
+              );
+
+              return [{
+                key: item.asset_id || `${primary.network_key}-${primary.address}`,
+                assetId: normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id),
+                chainAssetId: chainAssetIds[0] ?? null,
+                chainAssetIds,
+                symbol,
+                name,
+                logo: resolveHoldingIcon(
+                  item.logo,
+                  primary.logo,
+                  primary.logo_uri,
+                  primary.url,
+                  resolveAssetIdFallbackIcon(normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id), symbol),
+                ),
+                valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
+                amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
+                priceChangePct: null,
+                networkKeys,
+                networkLabelText: chainLabels.join(' · '),
+                isManualAdded: false,
+                transferAsset: primary,
+              } satisfies WalletHoldingListItem];
+            }),
+        );
+      } else {
+        const grouped = [...portfolioData.holdings].reduce<Map<string, { totalValueUsd: number; variants: SimEvmBalance[] }>>(
+          (acc, asset) => {
+            const key = normalizeAssetId(asset.asset_id) ?? `${asset.network_key}:${asset.address?.toLowerCase() ?? ''}`;
+            const current = acc.get(key);
+            const valueUsd = Number(asset.value_usd ?? 0);
+            if (current) {
+              current.totalValueUsd += valueUsd;
+              current.variants.push(asset);
+              return acc;
+            }
+            acc.set(key, { totalValueUsd: valueUsd, variants: [asset] });
+            return acc;
+          },
+          new Map(),
+        );
+
+        resolvedHoldings.push(
+          ...Array.from(grouped.values())
+            .filter((group) => !group.variants.some((variant) => isHoldingVariantHidden(variant, hiddenAssetKeys)))
+            .sort((a, b) => b.totalValueUsd - a.totalValueUsd)
+            .flatMap((group) => {
+              const variants = [...group.variants].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
+              const primary = variants[0];
+              if (!primary) return [];
+
+              const networkKeys = [...new Set(variants.map((variant) => variant.network_key).filter(Boolean))];
+              const chainLabels = [
+                ...new Set(
+                  variants
+                    .map((variant) => {
+                      const fromConfig = chainNameByNetworkKey.get(variant.network_key);
+                      if (fromConfig) return fromConfig;
+                      if (variant.chain) return variant.chain.toUpperCase();
+                      return variant.network_key || '--';
+                    })
+                    .filter(Boolean),
+                ),
+              ];
+              const chainAssetIds = variants
+                .map((variant) => normalizeChainAssetId(
+                  variant.chain_asset_id ?? buildChainAssetId(variant.chain, variant.address),
+                ))
+                .filter((value): value is string => Boolean(value));
+              const symbol = (primary.symbol ?? primary.name ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
+              const name = (primary.name ?? t('wallet.token')).trim();
+              const totalAmount = variants.reduce(
+                (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
+                0,
+              );
+
+              return [{
+                key: normalizeAssetId(primary.asset_id) ?? `${primary.network_key}-${primary.address}`,
+                assetId: normalizeAssetId(primary.asset_id),
+                chainAssetId: chainAssetIds[0] ?? null,
+                chainAssetIds,
+                symbol,
+                name,
+                logo: resolveHoldingIcon(
+                  primary.logo,
+                  primary.logo_uri,
+                  primary.url,
+                  resolveAssetIdFallbackIcon(normalizeAssetId(primary.asset_id), symbol),
+                ),
+                valueUsd: group.totalValueUsd,
+                amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
+                priceChangePct: null,
+                networkKeys,
+                networkLabelText: chainLabels.join(' · '),
+                isManualAdded: false,
+                transferAsset: primary,
+              } satisfies WalletHoldingListItem];
+            }),
+        );
+      }
     }
 
-    const merged = portfolioData.mergedHoldings ?? [];
-    if (merged.length > 0) {
-      return [...merged]
-        .filter((item) => !(item.variants ?? []).some((variant) => isHoldingVariantHidden(variant, hiddenAssetKeys)))
-        .sort((a, b) => Number(b.total_value_usd ?? 0) - Number(a.total_value_usd ?? 0))
-        .slice(0, 10)
-        .flatMap((item) => {
-          const variants = [...(item.variants ?? [])].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
-          const primary = variants[0];
-          if (!primary) return [];
-
-          const chainLabels = [
-            ...new Set(
-              variants
-                .map((variant) => {
-                  const fromConfig = chainNameByNetworkKey.get(variant.network_key);
-                  if (fromConfig) return fromConfig;
-                  if (variant.chain) return variant.chain.toUpperCase();
-                  return variant.network_key || '--';
-                })
-                .filter(Boolean),
-            ),
-          ];
-          const symbol = (item.symbol ?? primary.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
-          const name = (item.name ?? primary.name ?? t('wallet.token')).trim();
-          const chainAssetId = normalizeChainAssetId(
-            primary.chain_asset_id ?? buildChainAssetId(primary.market_chain ?? primary.chain, primary.contract_key ?? primary.address),
-          );
-          const totalAmount = variants.reduce(
-            (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
-            0,
-          );
-
-          return [
-            {
-              key: item.asset_id || `${primary.network_key}-${primary.address}`,
-              assetId: normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id),
-              chainAssetId,
-              symbol,
-              name,
-              logo: resolveHoldingIcon(
-                item.logo,
-                primary.logo,
-                primary.logo_uri,
-                primary.url,
-                resolveAssetIdFallbackIcon(normalizeAssetId(item.asset_id) ?? normalizeAssetId(primary.asset_id), symbol),
-              ),
-              valueUsd: Number(item.total_value_usd ?? primary.value_usd ?? 0),
-              amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
-              priceChangePct: null as number | null,
-              transferAsset: primary,
-            } satisfies WalletHoldingListItem,
-          ];
-        });
-    }
-
-    const grouped = [...portfolioData.holdings].reduce<Map<string, { totalValueUsd: number; variants: SimEvmBalance[] }>>(
-      (acc, asset) => {
-        const key = normalizeAssetId(asset.asset_id) ?? `${asset.network_key}:${asset.address?.toLowerCase() ?? ''}`;
-        const current = acc.get(key);
-        const valueUsd = Number(asset.value_usd ?? 0);
-        if (current) {
-          current.totalValueUsd += valueUsd;
-          current.variants.push(asset);
-          return acc;
-        }
-        acc.set(key, { totalValueUsd: valueUsd, variants: [asset] });
-        return acc;
-      },
-      new Map(),
+    const existingChainAssetIds = new Set(
+      resolvedHoldings.flatMap((asset) => asset.chainAssetIds).filter(Boolean),
     );
 
-    return Array.from(grouped.values())
-      .filter((group) => !group.variants.some((variant) => isHoldingVariantHidden(variant, hiddenAssetKeys)))
-      .sort((a, b) => b.totalValueUsd - a.totalValueUsd)
-      .slice(0, 10)
-      .flatMap((group) => {
-        const variants = [...group.variants].sort((a, b) => Number(b.value_usd ?? 0) - Number(a.value_usd ?? 0));
-        const primary = variants[0];
-        if (!primary) {
-          return [];
-        }
-        const chainLabels = [
-          ...new Set(
-            variants
-              .map((variant) => {
-                const fromConfig = chainNameByNetworkKey.get(variant.network_key);
-                if (fromConfig) return fromConfig;
-                if (variant.chain) return variant.chain.toUpperCase();
-                return variant.network_key || '--';
-              })
-              .filter(Boolean),
-          ),
-        ];
-        const symbol = (primary.symbol ?? primary.name ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
-        const name = (primary.name ?? t('wallet.token')).trim();
-        const chainAssetId = normalizeChainAssetId(
-          primary.chain_asset_id ?? buildChainAssetId(primary.chain, primary.address),
-        );
-        const totalAmount = variants.reduce(
-          (sum, variant) => sum + toDisplayAmount(variant.amount, variant.decimals),
-          0,
-        );
-        return {
-          key: normalizeAssetId(primary.asset_id) ?? `${primary.network_key}-${primary.address}`,
-          assetId: normalizeAssetId(primary.asset_id),
-          chainAssetId,
-          symbol,
-          name,
-          logo: resolveHoldingIcon(
-            primary.logo,
-            primary.logo_uri,
-            primary.url,
-            resolveAssetIdFallbackIcon(normalizeAssetId(primary.asset_id), symbol),
-          ),
-          valueUsd: group.totalValueUsd,
-          amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
-          priceChangePct: null as number | null,
-          transferAsset: primary,
-        } satisfies WalletHoldingListItem;
-      })
-      .sort((a, b) => b.valueUsd - a.valueUsd);
-  }, [chainNameByNetworkKey, hiddenAssetKeys, portfolioData, t]);
+    for (const trackedAsset of trackedAssets) {
+      const chainAssetId = buildChainAssetId(trackedAsset.chain, trackedAsset.contract).trim();
+      if (!chainAssetId || hiddenAssetKeys.has(chainAssetId) || existingChainAssetIds.has(chainAssetId)) continue;
+
+      const detail = trackedAssetDetailByChainAssetId.get(chainAssetId) ?? null;
+      const chainConfig = trackedAsset.networkKey
+        ? supportedChainByNetworkKey.get(trackedAsset.networkKey) ?? null
+        : supportedChainByMarketChain.get(normalizeMarketChain(trackedAsset.chain)) ?? null;
+      const networkKey = trackedAsset.networkKey ?? chainConfig?.networkKey ?? `${trackedAsset.chain}-manual`;
+      const networkLabel = chainConfig?.name ?? trackedAsset.chain.toUpperCase();
+      const symbol = (detail?.symbol ?? trackedAsset.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
+      const name = (detail?.name ?? trackedAsset.name ?? t('wallet.token')).trim();
+      const contract = detail?.contract?.trim() || trackedAsset.contract;
+      const syntheticTransferAsset = {
+        protocol: chainConfig?.protocol,
+        network_key: networkKey,
+        chain: trackedAsset.chain,
+        chain_id: chainConfig?.chainId ?? null,
+        address: contract,
+        asset_id: detail?.asset_id ?? trackedAsset.assetId ?? undefined,
+        chain_asset_id: detail?.chain_asset_id ?? chainAssetId,
+        amount: '0',
+        symbol,
+        name,
+        price_usd: detail?.currentPriceUsd ?? undefined,
+        value_usd: 0,
+        logo: detail?.image ?? trackedAsset.image ?? undefined,
+        url: detail?.image ?? trackedAsset.image ?? undefined,
+        market_chain: trackedAsset.chain,
+        contract_key: contract,
+      } as SimEvmBalance & { market_chain: string; contract_key: string };
+
+      resolvedHoldings.push({
+        key: `tracked:${chainAssetId}`,
+        assetId: detail?.asset_id ?? trackedAsset.assetId ?? null,
+        chainAssetId,
+        chainAssetIds: [chainAssetId],
+        symbol,
+        name,
+        logo: resolveHoldingIcon(
+          detail?.image ?? trackedAsset.image,
+          resolveAssetIdFallbackIcon(detail?.asset_id ?? trackedAsset.assetId ?? null, symbol),
+        ),
+        valueUsd: 0,
+        amountText: '0',
+        priceChangePct: detail?.priceChange24h ?? null,
+        networkKeys: [networkKey],
+        networkLabelText: networkLabel,
+        isManualAdded: true,
+        transferAsset: syntheticTransferAsset,
+      });
+    }
+
+    return resolvedHoldings.sort((a, b) => {
+      if (b.valueUsd !== a.valueUsd) return b.valueUsd - a.valueUsd;
+      if (a.isManualAdded !== b.isManualAdded) return a.isManualAdded ? 1 : -1;
+      return a.symbol.localeCompare(b.symbol);
+    });
+  }, [
+    chainNameByNetworkKey,
+    hiddenAssetKeys,
+    portfolioData,
+    supportedChainByMarketChain,
+    supportedChainByNetworkKey,
+    t,
+    trackedAssets,
+    trackedAssetDetailByChainAssetId,
+  ]);
 
   const stableAndCryptos = useMemo(() => {
     const stableHoldings = holdings.filter((asset) => {
@@ -484,10 +664,27 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
       return STABLE_SYMBOLS.has(asset.symbol.trim().toUpperCase());
     });
     const cryptoHoldings = holdings.filter((asset) => !stableHoldings.includes(asset));
+    const filteredCryptoHoldings = cryptoHoldings.filter((asset) => {
+      if (cryptoFilterState.networkKey && !asset.networkKeys.includes(cryptoFilterState.networkKey)) {
+        return false;
+      }
+      if (cryptoFilterState.hideSmallBalances && asset.valueUsd < SMALL_ASSET_USD_THRESHOLD) {
+        return false;
+      }
+      return true;
+    });
     const stablesUsd = stableHoldings.reduce((sum, item) => sum + Number(item.valueUsd ?? 0), 0);
     const cryptosUsd = cryptoHoldings.reduce((sum, item) => sum + Number(item.valueUsd ?? 0), 0);
-    return { stableHoldings, cryptoHoldings, stablesUsd, cryptosUsd };
-  }, [holdings]);
+    const filteredCryptosUsd = filteredCryptoHoldings.reduce((sum, item) => sum + Number(item.valueUsd ?? 0), 0);
+    return {
+      stableHoldings,
+      cryptoHoldings,
+      filteredCryptoHoldings,
+      stablesUsd,
+      cryptosUsd,
+      filteredCryptosUsd,
+    };
+  }, [cryptoFilterState, holdings]);
 
   const chartLine = useMemo<LivelinePoint[]>(
     () => snapshotsToLivelinePoints(snapshotData?.points),
@@ -611,6 +808,8 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
 
   const shouldShowLoading = isLoading && !portfolioData;
   const shouldShowError = isError && !portfolioData;
+  const shouldShowBalanceEmptyState = !shouldShowLoading && !shouldShowError && totalBalance <= 0 && holdings.length === 0;
+  const hasActiveCryptoFilters = Boolean(cryptoFilterState.networkKey || cryptoFilterState.hideSmallBalances);
 
   useEffect(
     () => () => {
@@ -707,6 +906,24 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     setTradePreset(null);
     setActiveModalContent('transfer');
     showModal(snapshotRect(transferButtonRef.current));
+  }
+
+  function openCryptoTools(mode: 'filter' | 'add') {
+    setCryptoToolsMode(mode);
+  }
+
+  function closeCryptoTools() {
+    setCryptoToolsMode(null);
+  }
+
+  function handleCryptoFilterChange(nextState: WalletCryptoFilterState) {
+    const persisted = setWalletCryptoFilterState(walletAddress, nextState);
+    setCryptoFilterStateState(persisted);
+  }
+
+  function handleTrackedAssetAdd(input: WalletAddedAssetInput) {
+    const nextAssets = upsertWalletAddedAsset(walletAddress, input);
+    setTrackedAssets(nextAssets);
   }
 
   function openReceiveModal() {
@@ -845,87 +1062,124 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
       />
 
       <section className="p-0">
-        <div className="flex flex-wrap gap-2">
-          {BALANCE_CHART_PERIOD_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={`btn btn-xs border-0 px-3 ${balanceChartPeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => void switchBalanceChartPeriod(option.value)}
-              disabled={pendingChartPeriod != null}
-            >
-              {pendingChartPeriod === option.value ? (
-                <span className="loading loading-spinner loading-xs" />
-              ) : (
-                t(option.labelKey)
-              )}
-            </button>
-          ))}
-        </div>
-        {isChartLoading ? (
-          <div className="mt-3">
-            <div className="h-48 overflow-hidden rounded-lg bg-base-200/30 px-2 py-2">
-              <svg viewBox="0 0 640 150" className="h-full w-full" role="img" aria-label={t('wallet.balanceChartLoading')}>
-                <defs>
-                  <linearGradient id="loading-balance-line" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="currentColor" stopOpacity="0.3" />
-                    <stop offset="50%" stopColor="currentColor" stopOpacity="0.9" />
-                    <stop offset="100%" stopColor="currentColor" stopOpacity="0.3" />
-                  </linearGradient>
-                </defs>
-                <line
-                  x1="24"
-                  y1="75"
-                  x2="616"
-                  y2="75"
-                  stroke="url(#loading-balance-line)"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  className="text-base-content/70"
-                />
-              </svg>
+        {shouldShowBalanceEmptyState ? (
+          <div className="border-b border-base-300 py-5">
+            <p className="m-0 max-w-[16rem] text-[1.875rem] leading-8 font-semibold tracking-[-0.03em] text-base-content">
+              {t('wallet.balanceChartEmptyStateTitle')}
+            </p>
+            <p className="m-0 mt-3 text-sm leading-6 text-base-content/70">
+              {t('wallet.balanceChartEmptyStateSubtitle')}
+            </p>
+            <div className="mt-5">
+              <button
+                type="button"
+                className="btn btn-primary h-11 w-full text-sm font-semibold"
+                onClick={openTopUpModal}
+              >
+                {t('wallet.balanceChartEmptyStateCta')}
+              </button>
+            </div>
+            <div className="mt-3 text-sm text-base-content/65">
+              <span>{t('wallet.balanceChartEmptyStateHelpPrompt')} </span>
+              <button
+                type="button"
+                className="font-semibold text-base-content underline underline-offset-4"
+                onClick={() => onOpenAgentChat({
+                  intro: t('wallet.balanceChartEmptyStateHelpIntro'),
+                  prompt: t('wallet.balanceChartEmptyStateHelpAgentPrompt'),
+                })}
+              >
+                {t('wallet.balanceChartEmptyStateHelpCta')}
+              </button>
             </div>
           </div>
-        ) : chartLine.length === 0 ? (
-          <p className="m-0 mt-3 text-sm text-base-content/60">{t('wallet.balanceChartEmpty')}</p>
         ) : (
-          <div className="mt-2 h-48 overflow-hidden p-0">
-            <Liveline
-              data={chartLine}
-              value={latestChartValue}
-              theme={resolvedTheme}
-              color={chartColor}
-              badge={false}
-              window={chartWindow}
-              formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
-              formatTime={(time) => formatChartTimeLabel(time, i18n.language, chartBucketSeconds)}
-              grid={false}
-              scrub
-              fill
-              padding={{ top: 6, right: 6, bottom: 6, left: 6 }}
-            />
-          </div>
+          <>
+            <div className="flex flex-wrap gap-2">
+              {BALANCE_CHART_PERIOD_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`btn btn-xs border-0 px-3 ${balanceChartPeriod === option.value ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => void switchBalanceChartPeriod(option.value)}
+                  disabled={pendingChartPeriod != null}
+                >
+                  {pendingChartPeriod === option.value ? (
+                    <span className="loading loading-spinner loading-xs" />
+                  ) : (
+                    t(option.labelKey)
+                  )}
+                </button>
+              ))}
+            </div>
+            {isChartLoading ? (
+              <div className="mt-3">
+                <div className="h-48 overflow-hidden rounded-lg bg-base-200/30 px-2 py-2">
+                  <svg viewBox="0 0 640 150" className="h-full w-full" role="img" aria-label={t('wallet.balanceChartLoading')}>
+                    <defs>
+                      <linearGradient id="loading-balance-line" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" stopColor="currentColor" stopOpacity="0.3" />
+                        <stop offset="50%" stopColor="currentColor" stopOpacity="0.9" />
+                        <stop offset="100%" stopColor="currentColor" stopOpacity="0.3" />
+                      </linearGradient>
+                    </defs>
+                    <line
+                      x1="24"
+                      y1="75"
+                      x2="616"
+                      y2="75"
+                      stroke="url(#loading-balance-line)"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      className="text-base-content/70"
+                    />
+                  </svg>
+                </div>
+              </div>
+            ) : chartLine.length === 0 ? (
+              <p className="m-0 mt-3 text-sm text-base-content/60">{t('wallet.balanceChartEmpty')}</p>
+            ) : (
+              <div className="mt-2 h-48 overflow-hidden p-0">
+                <Liveline
+                  data={chartLine}
+                  value={latestChartValue}
+                  theme={resolvedTheme}
+                  color={chartColor}
+                  badge={false}
+                  window={chartWindow}
+                  formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
+                  formatTime={(time) => formatChartTimeLabel(time, i18n.language, chartBucketSeconds)}
+                  grid={false}
+                  scrub
+                  fill
+                  padding={{ top: 6, right: 6, bottom: 6, left: 6 }}
+                />
+              </div>
+            )}
+          </>
         )}
       </section>
 
-      <section className="mt-6 grid grid-cols-2 gap-3">
-        <button
-          ref={topUpButtonRef}
-          type="button"
-          className="btn btn-outline h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
-          onClick={openTopUpModal}
-        >
-          {t('wallet.topUp')}
-        </button>
-        <button
-          ref={transferButtonRef}
-          type="button"
-          className="btn btn-outline h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
-          onClick={openTransferModal}
-        >
-          {t('wallet.transfer')}
-        </button>
-      </section>
+      {!shouldShowBalanceEmptyState ? (
+        <section className="mt-6 grid grid-cols-2 gap-3">
+          <button
+            ref={topUpButtonRef}
+            type="button"
+            className="btn btn-outline h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
+            onClick={openTopUpModal}
+          >
+            {t('wallet.topUp')}
+          </button>
+          <button
+            ref={transferButtonRef}
+            type="button"
+            className="btn btn-outline h-auto min-h-12 px-3 py-3 text-center text-base leading-tight font-semibold whitespace-normal"
+            onClick={openTransferModal}
+          >
+            {t('wallet.transfer')}
+          </button>
+        </section>
+      ) : null}
 
       <section className="flex flex-col gap-4">
         {shouldShowLoading && (
@@ -986,14 +1240,40 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
             </article>
 
             <article className="border-b border-base-300 py-5">
-              <div className="flex flex-col gap-1">
-                <h3 className="m-0 text-sm text-base-content">{t('wallet.cryptos')}</h3>
-                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                  {formatUsdAdaptive(stableAndCryptos.cryptosUsd, i18n.language)}
-                </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-col gap-1">
+                  <h3 className="m-0 text-sm text-base-content">{t('wallet.cryptos')}</h3>
+                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                    {formatUsdAdaptive(
+                      hasActiveCryptoFilters ? stableAndCryptos.filteredCryptosUsd : stableAndCryptos.cryptosUsd,
+                      i18n.language,
+                    )}
+                  </p>
+                  {hasActiveCryptoFilters ? (
+                    <p className="m-0 text-xs text-base-content/55">{t('wallet.cryptoManageFilterActive')}</p>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className={`btn btn-ghost btn-sm min-h-0 px-2 text-sm ${hasActiveCryptoFilters ? 'text-primary' : ''}`}
+                    onClick={() => openCryptoTools('filter')}
+                  >
+                    {t('wallet.cryptoManageFilter')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm min-h-0 px-2 text-sm"
+                    onClick={() => openCryptoTools('add')}
+                  >
+                    {t('wallet.cryptoManageAdd')}
+                  </button>
+                </div>
               </div>
               <div className="mt-3 flex flex-col">
-                {stableAndCryptos.cryptoHoldings.map((asset) => {
+                {stableAndCryptos.filteredCryptoHoldings.length === 0 && hasActiveCryptoFilters ? (
+                  <p className="m-0 py-3 text-sm text-base-content/60">{t('wallet.cryptoManageNoAssets')}</p>
+                ) : stableAndCryptos.filteredCryptoHoldings.map((asset) => {
                   const resolvedPriceChangePct = asset.priceChangePct ?? detailPriceChangeByHoldingKey[asset.key] ?? null;
                   const changeClassName =
                     Number(resolvedPriceChangePct ?? 0) > 0
@@ -1016,6 +1296,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                       }
                       leftPrimary={asset.name || t('wallet.token')}
                       leftSecondary={`${asset.amountText} ${asset.symbol}`}
+                      leftTertiary={asset.networkLabelText}
                       rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
                       rightSecondary={<span className={changeClassName}>{formatPct(resolvedPriceChangePct)}</span>}
                     />
@@ -1027,23 +1308,55 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
             <article className="border-b border-base-300 py-5">
               <div className="flex flex-col gap-1">
                 <h3 className="m-0 text-sm text-base-content">{t('wallet.perpsAccount')}</h3>
-                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                  {perpsAccountValue}
-                </p>
+                {isPerpsActivated ? (
+                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                    {perpsAccountValue}
+                  </p>
+                ) : (
+                  <AccountIntroBlock kind="perps" text={t('wallet.perpsAccountIntro')} />
+                )}
               </div>
             </article>
 
             <article className="border-b border-base-300 py-5">
               <div className="flex flex-col gap-1">
                 <h3 className="m-0 text-sm text-base-content">{t('wallet.predictionAccount')}</h3>
-                <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                  {predictionAccountValue}
-                </p>
+                {isPredictionActivated ? (
+                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                    {predictionAccountValue}
+                  </p>
+                ) : (
+                  <>
+                    <AccountIntroBlock kind="prediction" text={t('wallet.predictionAccountIntro')} />
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => void handleActivatePredictionAccount()}
+                        disabled={isActivatingPrediction}
+                      >
+                        {isActivatingPrediction ? <span className="loading loading-spinner loading-xs" /> : null}
+                        {t('wallet.predictionActivate')}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </article>
           </div>
         )}
       </section>
+
+      <WalletCryptoToolsModal
+        visible={cryptoToolsMode != null}
+        mode={cryptoToolsMode}
+        supportedChains={transferSupportedChains}
+        currentFilterState={cryptoFilterState}
+        existingAssetKeys={new Set(holdings.flatMap((asset) => asset.chainAssetIds).filter(Boolean))}
+        onClose={closeCryptoTools}
+        onFilterChange={handleCryptoFilterChange}
+        onAddAsset={handleTrackedAssetAdd}
+      />
 
       {isModalOpen && (
         <Modal visible={modalVisible} originRect={modalOriginRect} onClose={closeActiveModal}>

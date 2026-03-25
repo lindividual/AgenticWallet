@@ -54,6 +54,17 @@ export function initializeAgentSchema(sql: SqlStorage): void {
   );
 
   sql.exec(
+    `CREATE TABLE IF NOT EXISTS prediction_api_keys (
+      account_key TEXT PRIMARY KEY,
+      encrypted_api_key TEXT NOT NULL,
+      encrypted_secret TEXT NOT NULL,
+      encrypted_passphrase TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+
+  sql.exec(
     `CREATE TABLE IF NOT EXISTS user_events (
       id TEXT PRIMARY KEY,
       event_type TEXT NOT NULL,

@@ -71,7 +71,7 @@ import {
   buildWalletContextToolResult,
 } from '../agent/runtimeToolFormat';
 import type { ArticleRelatedAssetRef } from '../services/articleRelatedAssets';
-import { encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
+import { decryptString, encodeBase64, encryptString, generatePrivateKeyHex } from '../utils/crypto';
 import { buildMergedPortfolioHoldings, fetchWalletPortfolio } from '../services/market';
 import { APP_CONFIG } from '../config/appConfig';
 import { normalizeMarketChain, toContractKey } from '../services/assetIdentity';
@@ -221,6 +221,12 @@ type WalletChainAccountRow = {
   chain_id: number | null;
   protocol: WalletProtocol;
   address: string;
+};
+
+type PredictionApiKeyCreds = {
+  key: string;
+  secret: string;
+  passphrase: string;
 };
 
 type RecommendationState = {
@@ -391,6 +397,26 @@ export class UserAgentDO extends DurableObject<Bindings> {
   async deleteWalletRpc(userId: string): Promise<{ ok: true }> {
     this.ensureOwner(userId);
     this.deleteWallet();
+    return { ok: true };
+  }
+
+  async getPredictionApiKeyRpc(userId: string): Promise<{ creds: PredictionApiKeyCreds | null }> {
+    this.ensureOwner(userId);
+    return { creds: await this.getPredictionApiKey() };
+  }
+
+  async upsertPredictionApiKeyRpc(
+    userId: string,
+    creds: PredictionApiKeyCreds,
+  ): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    await this.savePredictionApiKey(creds);
+    return { ok: true };
+  }
+
+  async deletePredictionApiKeyRpc(userId: string): Promise<{ ok: true }> {
+    this.ensureOwner(userId);
+    this.deletePredictionApiKey();
     return { ok: true };
   }
 
@@ -1170,6 +1196,62 @@ export class UserAgentDO extends DurableObject<Bindings> {
     };
   }
 
+  private async getPredictionApiKey(): Promise<PredictionApiKeyCreds | null> {
+    const row = this.ctx.storage.sql
+      .exec(
+        `SELECT encrypted_api_key, encrypted_secret, encrypted_passphrase
+         FROM prediction_api_keys
+         WHERE account_key = ?
+         LIMIT 1`,
+        'default',
+      )
+      .toArray()[0] as {
+        encrypted_api_key?: string | null;
+        encrypted_secret?: string | null;
+        encrypted_passphrase?: string | null;
+      } | undefined;
+
+    const encryptedKey = normalizeSqlString(row?.encrypted_api_key);
+    const encryptedSecret = normalizeSqlString(row?.encrypted_secret);
+    const encryptedPassphrase = normalizeSqlString(row?.encrypted_passphrase);
+    if (!encryptedKey || !encryptedSecret || !encryptedPassphrase) return null;
+
+    return {
+      key: await decryptString(encryptedKey, this.env.APP_SECRET),
+      secret: await decryptString(encryptedSecret, this.env.APP_SECRET),
+      passphrase: await decryptString(encryptedPassphrase, this.env.APP_SECRET),
+    };
+  }
+
+  private async savePredictionApiKey(creds: PredictionApiKeyCreds): Promise<void> {
+    const now = new Date().toISOString();
+    const [encryptedKey, encryptedSecret, encryptedPassphrase] = await Promise.all([
+      encryptString(creds.key, this.env.APP_SECRET),
+      encryptString(creds.secret, this.env.APP_SECRET),
+      encryptString(creds.passphrase, this.env.APP_SECRET),
+    ]);
+    this.ctx.storage.sql.exec(
+      `INSERT INTO prediction_api_keys (
+         account_key, encrypted_api_key, encrypted_secret, encrypted_passphrase, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(account_key) DO UPDATE SET
+         encrypted_api_key = excluded.encrypted_api_key,
+         encrypted_secret = excluded.encrypted_secret,
+         encrypted_passphrase = excluded.encrypted_passphrase,
+         updated_at = excluded.updated_at`,
+      'default',
+      encryptedKey,
+      encryptedSecret,
+      encryptedPassphrase,
+      now,
+      now,
+    );
+  }
+
+  private deletePredictionApiKey(): void {
+    this.ctx.storage.sql.exec('DELETE FROM prediction_api_keys');
+  }
+
   private saveWallet(
     wallet: WalletSummary,
     encryptedPrivateKey: string,
@@ -1225,6 +1307,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
     this.ctx.storage.sql.exec('DELETE FROM wallet');
     this.ctx.storage.sql.exec('DELETE FROM wallet_chain_accounts');
     this.ctx.storage.sql.exec('DELETE FROM wallet_protocol_keys');
+    this.ctx.storage.sql.exec('DELETE FROM prediction_api_keys');
   }
 
   private async createWallet(): Promise<WalletWithPrivateKey> {

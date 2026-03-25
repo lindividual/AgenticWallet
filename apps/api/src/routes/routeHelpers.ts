@@ -52,8 +52,8 @@ const PERPS_ERROR_STATUS_RULES = [
 const PREDICTION_ERROR_STATUS_RULES = [
   {
     status: 400,
-    startsWith: ['invalid_', 'unsupported_', 'prediction_order_rejected'],
-    includes: ['prediction_order_rejected'],
+    startsWith: ['invalid_', 'unsupported_', 'prediction_order_rejected', 'prediction_activation_required'],
+    includes: ['prediction_order_rejected', 'prediction_activation_required'],
   },
   {
     status: 404,

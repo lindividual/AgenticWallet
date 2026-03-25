@@ -319,6 +319,7 @@ export type PerpsOpenOrderSnapshot = {
 
 export type PerpsAccountSnapshot = {
   available: boolean;
+  activationState: 'active' | 'inactive' | 'unavailable';
   provider: 'hyperliquid';
   userAddress: string | null;
   balanceUsd: number | null;
@@ -329,6 +330,27 @@ export type PerpsAccountSnapshot = {
   openOrderCount: number;
   positions: PerpsPositionSnapshot[];
   openOrders: PerpsOpenOrderSnapshot[];
+  error: string | null;
+  updatedAt: string;
+};
+
+export type PredictionAccountSnapshot = {
+  available: boolean;
+  activationState: 'active' | 'inactive' | 'unavailable';
+  chainId: number;
+  chain: 'polygon';
+  signatureType: 'proxy' | 'eoa' | 'gnosis-safe';
+  eoaAddress: string | null;
+  proxyAddress: string | null;
+  depositAddress: string | null;
+  collateralSymbol: 'USDC';
+  collateralTokenAddress: string;
+  collateralDecimals: number;
+  balanceRaw: string | null;
+  balance: string | null;
+  balanceUsd: number | null;
+  allowanceRaw: string | null;
+  allowance: string | null;
   error: string | null;
   updatedAt: string;
 };

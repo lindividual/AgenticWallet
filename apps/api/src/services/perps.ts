@@ -297,6 +297,7 @@ export async function getPerpsAccount(env: Bindings, userId: string): Promise<Pe
   if (!userAddress) {
     return {
       available: false,
+      activationState: 'inactive',
       provider: 'hyperliquid',
       userAddress: null,
       balanceUsd: null,
@@ -314,9 +315,10 @@ export async function getPerpsAccount(env: Bindings, userId: string): Promise<Pe
 
   const info = createInfoClient(env);
   const universe = await getUniverseMap(env).catch(() => new Map<string, UniverseEntry>());
-  const [accountState, openOrders] = await Promise.all([
+  const [accountState, openOrders, userFills] = await Promise.all([
     info.clearinghouseState({ user: userAddress }),
     info.openOrders({ user: userAddress }).catch(() => []),
+    info.userFills({ user: userAddress }).catch(() => []),
   ]);
 
   const positions = accountState.assetPositions.flatMap((row) => {
@@ -357,15 +359,21 @@ export async function getPerpsAccount(env: Bindings, userId: string): Promise<Pe
   }));
 
   const unrealizedPnlUsd = positions.reduce((sum, item) => sum + Number(item.unrealizedPnlUsd ?? 0), 0);
+  const hasActivationSignals =
+    Number(accountState.marginSummary.accountValue ?? 0) > 0
+    || mappedOrders.length > 0
+    || positions.length > 0
+    || (Array.isArray(userFills) && userFills.length > 0);
   return {
-    available: true,
+    available: hasActivationSignals,
+    activationState: hasActivationSignals ? 'active' : 'inactive',
     provider: 'hyperliquid',
     userAddress,
-    balanceUsd: toFiniteNumber(accountState.marginSummary.accountValue),
-    withdrawableUsd: toFiniteNumber(accountState.withdrawable),
-    marginUsedUsd: toFiniteNumber(accountState.marginSummary.totalMarginUsed),
-    totalPositionNotionalUsd: toFiniteNumber(accountState.marginSummary.totalNtlPos),
-    unrealizedPnlUsd: Number.isFinite(unrealizedPnlUsd) ? unrealizedPnlUsd : null,
+    balanceUsd: hasActivationSignals ? toFiniteNumber(accountState.marginSummary.accountValue) : null,
+    withdrawableUsd: hasActivationSignals ? toFiniteNumber(accountState.withdrawable) : null,
+    marginUsedUsd: hasActivationSignals ? toFiniteNumber(accountState.marginSummary.totalMarginUsed) : null,
+    totalPositionNotionalUsd: hasActivationSignals ? toFiniteNumber(accountState.marginSummary.totalNtlPos) : null,
+    unrealizedPnlUsd: hasActivationSignals && Number.isFinite(unrealizedPnlUsd) ? unrealizedPnlUsd : null,
     openOrderCount: mappedOrders.length,
     positions,
     openOrders: mappedOrders,
@@ -380,6 +388,7 @@ export async function getPerpsAccountSafe(env: Bindings, userId: string): Promis
   } catch (error) {
     return {
       available: false,
+      activationState: 'unavailable',
       provider: 'hyperliquid',
       userAddress: null,
       balanceUsd: null,

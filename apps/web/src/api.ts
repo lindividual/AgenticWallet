@@ -145,6 +145,7 @@ export type WalletMergedHolding = {
 
 export type PredictionAccountSnapshot = {
   available: boolean;
+  activationState: 'active' | 'inactive' | 'unavailable';
   chainId: number;
   chain: 'polygon';
   signatureType: 'proxy' | 'eoa' | 'gnosis-safe';
@@ -165,6 +166,7 @@ export type PredictionAccountSnapshot = {
 
 export type PerpsAccountSnapshot = {
   available: boolean;
+  activationState: 'active' | 'inactive' | 'unavailable';
   provider: 'hyperliquid';
   userAddress: string | null;
   balanceUsd: number | null;
@@ -906,6 +908,12 @@ export async function getPredictionAccount(params?: {
   if (params?.signatureType) query.set('signatureType', params.signatureType);
   const suffix = query.toString();
   return getJson<PredictionAccountSnapshot>(`/v1/prediction/account${suffix ? `?${suffix}` : ''}`, true);
+}
+
+export async function activatePredictionAccount(params?: {
+  signatureType?: 'proxy' | 'eoa' | 'gnosis-safe';
+}): Promise<PredictionAccountSnapshot> {
+  return postJson<PredictionAccountSnapshot>('/v1/prediction/activate', params ?? {}, true);
 }
 
 export async function getPredictionDepositInfo(): Promise<PredictionDepositInfo> {

@@ -3,10 +3,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import {
+  activatePredictionAccount,
   addMarketWatchlistAsset,
   cancelPerpsOrder,
   getPerpsAccount,
   getMarketWatchlist,
+  getPredictionAccount,
   getPredictionEventDetail,
   getPredictionEventKline,
   getTradeMarketDetail,
@@ -99,6 +101,37 @@ function buildSyntheticWatchKey(
   };
 }
 
+function MarketIntroBlock({
+  kind,
+  text,
+}: {
+  kind: 'perps' | 'prediction';
+  text: string;
+}) {
+  return (
+    <div className="mt-3 flex items-start gap-3 rounded-2xl bg-base-200/30 px-3 py-3">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-base-100 text-base-content shadow-sm">
+        {kind === 'perps' ? (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 16l5-5 4 4 7-7" />
+            <path d="M15 8h5v5" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M6 7.5h12" />
+            <path d="M6 12h7" />
+            <path d="M6 16.5h5" />
+            <circle cx="17.5" cy="15.5" r="2.5" />
+          </svg>
+        )}
+      </div>
+      <p className="m-0 flex-1 text-base leading-7 text-base-content/80">
+        {text}
+      </p>
+    </div>
+  );
+}
+
 export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
@@ -115,6 +148,7 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
   const [selectedPredictionOptionId, setSelectedPredictionOptionId] = useState<string | null>(null);
   const [predictionBetAmount, setPredictionBetAmount] = useState('5');
   const [pendingPredictionOptionId, setPendingPredictionOptionId] = useState<string | null>(null);
+  const [isActivatingPrediction, setIsActivatingPrediction] = useState(false);
   const [isWatchlistToggling, setIsWatchlistToggling] = useState(false);
   const [perpsSide, setPerpsSide] = useState<'long' | 'short'>('long');
   const [perpsSize, setPerpsSize] = useState('');
@@ -151,9 +185,17 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
     refetchInterval: 20_000,
     enabled: normalizedType === 'perp',
   });
+  const { data: predictionAccount, isFetching: isPredictionAccountFetching } = useQuery({
+    queryKey: ['prediction-account', 'eoa'],
+    queryFn: () => getPredictionAccount({ signatureType: 'eoa' }),
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+    enabled: normalizedType === 'prediction',
+  });
 
   const activeMarketItem = normalizedType === 'prediction' ? null : (detailItem as TradeBrowseMarketItem | null);
   const activePredictionItem = normalizedType === 'prediction' ? predictionDetail : null;
+  const isPredictionActivated = predictionAccount?.activationState === 'active';
   const isSummaryLoading = normalizedType === 'prediction' ? isPredictionDetailLoading : isDetailLoading;
   const predictionLayout = activePredictionItem?.layout === 'winner' ? 'winner' : 'binary';
   const predictionOutcomes = activePredictionItem?.outcomes ?? [];
@@ -397,6 +439,10 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
 
   async function submitPredictionBetOrder(option: PredictionBetTarget): Promise<void> {
     if (pendingPredictionOptionId != null) return;
+    if (!isPredictionActivated) {
+      showError(t('trade.predictionActivationRequired'));
+      return;
+    }
     if (!option.tokenId) {
       showError(t('trade.betTokenUnavailable'));
       return;
@@ -432,6 +478,23 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       showError(t('trade.betFailedRetry'));
     } finally {
       setPendingPredictionOptionId(null);
+    }
+  }
+
+  async function handleActivatePredictionAccount(): Promise<void> {
+    if (isActivatingPrediction) return;
+    setIsActivatingPrediction(true);
+    try {
+      await activatePredictionAccount({ signatureType: 'eoa' });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['prediction-account', 'eoa'] }),
+        queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] }),
+      ]);
+      showSuccess(t('wallet.predictionActivationSuccess'));
+    } catch {
+      showError(t('wallet.predictionActivationFailed'));
+    } finally {
+      setIsActivatingPrediction(false);
     }
   }
 
@@ -601,17 +664,38 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
       />
 
       {normalizedType === 'prediction' && (
-        <PredictionBetOptionsSection
-          layout={predictionLayout}
-          outcomes={predictionOutcomes}
-          selectedOptionId={selectedPredictionOption?.id ?? null}
-          onSelectOption={setSelectedPredictionOptionId}
-          betAmount={predictionBetAmount}
-          onBetAmountChange={setPredictionBetAmount}
-          onBet={(option) => void submitPredictionBetOrder(option)}
-          pendingOptionId={pendingPredictionOptionId}
-          locale={i18n.language}
-        />
+        isPredictionActivated ? (
+          <PredictionBetOptionsSection
+            layout={predictionLayout}
+            outcomes={predictionOutcomes}
+            selectedOptionId={selectedPredictionOption?.id ?? null}
+            onSelectOption={setSelectedPredictionOptionId}
+            betAmount={predictionBetAmount}
+            onBetAmountChange={setPredictionBetAmount}
+            onBet={(option) => void submitPredictionBetOrder(option)}
+            pendingOptionId={pendingPredictionOptionId}
+            locale={i18n.language}
+          />
+        ) : (
+          <section className="rounded-3xl border border-base-300 bg-base-100 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="m-0 text-lg font-semibold">{t('wallet.predictionAccount')}</h3>
+                <MarketIntroBlock kind="prediction" text={t('wallet.predictionAccountIntro')} />
+              </div>
+              {isPredictionAccountFetching ? <span className="loading loading-spinner loading-sm" /> : null}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary mt-4"
+              onClick={() => void handleActivatePredictionAccount()}
+              disabled={isActivatingPrediction}
+            >
+              {isActivatingPrediction ? <span className="loading loading-spinner loading-sm" /> : null}
+              {t('wallet.predictionActivate')}
+            </button>
+          </section>
+        )
       )}
 
       {normalizedType === 'perp' && activeMarketItem ? (
@@ -620,152 +704,156 @@ export function MarketDetailScreen({ marketType, itemId, onBack }: MarketDetailS
             <div>
               <h3 className="m-0 text-lg font-semibold">{t('trade.perpsTradePanelTitle')}</h3>
               <p className="m-0 mt-1 text-sm text-base-content/60">
-                {perpsAccount?.available ? t('trade.perpsTradePanelHint') : t('trade.perpsUnavailableHint')}
+                {perpsAccount?.activationState === 'active' ? t('trade.perpsTradePanelHint') : t('wallet.perpsAccountIntro')}
               </p>
             </div>
             {isPerpsAccountFetching ? <span className="loading loading-spinner loading-sm" /> : null}
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-2xl border border-base-300/80 bg-base-200/40 p-3">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.perpsAccountEquity')}</p>
-              <p className="m-0 mt-1 text-base font-semibold">
-                {perpsAccount?.available
-                  ? formatUsdAdaptive(Number(perpsAccount.balanceUsd ?? 0), i18n.language)
-                  : t('wallet.accountUnavailableValue')}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-base-300/80 bg-base-200/40 p-3">
-              <p className="m-0 text-xs text-base-content/60">{t('trade.perpsWithdrawable')}</p>
-              <p className="m-0 mt-1 text-base font-semibold">
-                {perpsAccount?.available
-                  ? formatUsdAdaptive(Number(perpsAccount.withdrawableUsd ?? 0), i18n.language)
-                  : t('wallet.accountUnavailableValue')}
-              </p>
-            </div>
-          </div>
-
-          {activePerpsPosition ? (
-            <div className="mt-4 rounded-2xl border border-base-300/80 bg-base-200/30 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-medium">{t('trade.perpsCurrentPosition')}</span>
-                <span className={activePerpsPosition.side === 'long' ? 'text-success' : 'text-error'}>
-                  {activePerpsPosition.side === 'long' ? t('trade.perpsLong') : t('trade.perpsShort')}
-                </span>
+          {perpsAccount?.activationState === 'active' ? (
+            <>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-base-300/80 bg-base-200/40 p-3">
+                  <p className="m-0 text-xs text-base-content/60">{t('trade.perpsAccountEquity')}</p>
+                  <p className="m-0 mt-1 text-base font-semibold">
+                    {formatUsdAdaptive(Number(perpsAccount.balanceUsd ?? 0), i18n.language)}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-base-300/80 bg-base-200/40 p-3">
+                  <p className="m-0 text-xs text-base-content/60">{t('trade.perpsWithdrawable')}</p>
+                  <p className="m-0 mt-1 text-base font-semibold">
+                    {formatUsdAdaptive(Number(perpsAccount.withdrawableUsd ?? 0), i18n.language)}
+                  </p>
+                </div>
               </div>
-              <p className="m-0 mt-2 text-base-content/70">
-                {activePerpsPosition.size} {activePerpsPosition.coin}
-                {' · '}
-                {formatUsdAdaptive(Number(activePerpsPosition.notionalUsd ?? 0), i18n.language)}
-              </p>
-              <p className="m-0 mt-1 text-base-content/70">
-                {t('trade.perpsUnrealizedPnl')}
-                {': '}
-                {formatUsdAdaptive(Number(activePerpsPosition.unrealizedPnlUsd ?? 0), i18n.language)}
-              </p>
-            </div>
-          ) : null}
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              className={`btn ${perpsSide === 'long' ? 'btn-success' : 'btn-outline'}`}
-              onClick={() => setPerpsSide('long')}
-              disabled={pendingPerpsSubmit}
-            >
-              {t('trade.perpsLong')}
-            </button>
-            <button
-              type="button"
-              className={`btn ${perpsSide === 'short' ? 'btn-error' : 'btn-outline'}`}
-              onClick={() => setPerpsSide('short')}
-              disabled={pendingPerpsSubmit}
-            >
-              {t('trade.perpsShort')}
-            </button>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-2">
-              <span className="text-sm text-base-content/70">{t('trade.perpsOrderSize', { symbol: activeMarketItem.symbol })}</span>
-              <input
-                className="input input-bordered w-full"
-                placeholder="0.01"
-                value={perpsSize}
-                inputMode="decimal"
-                onChange={(event) => setPerpsSize(event.target.value)}
-                disabled={pendingPerpsSubmit}
-              />
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-sm text-base-content/70">{t('trade.perpsLeverage')}</span>
-              <input
-                className="input input-bordered w-full"
-                placeholder="3"
-                value={perpsLeverage}
-                inputMode="numeric"
-                onChange={(event) => setPerpsLeverage(event.target.value)}
-                disabled={pendingPerpsSubmit}
-              />
-            </label>
-          </div>
-
-          <label className="mt-3 inline-flex items-center gap-2 text-sm text-base-content/75">
-            <input
-              type="checkbox"
-              className="checkbox checkbox-sm"
-              checked={perpsReduceOnly}
-              onChange={(event) => setPerpsReduceOnly(event.target.checked)}
-              disabled={pendingPerpsSubmit}
-            />
-            {t('trade.perpsReduceOnly')}
-          </label>
-
-          <button
-            type="button"
-            className="btn btn-primary mt-4 w-full"
-            onClick={() => void submitPerpsMarketOrder()}
-            disabled={pendingPerpsSubmit || !perpsAccount?.available}
-          >
-            {pendingPerpsSubmit ? <span className="loading loading-spinner loading-sm" /> : null}
-            {perpsReduceOnly ? t('trade.perpsReducePosition') : t('trade.perpsPlaceOrder')}
-          </button>
-
-          {activePerpsOrders.length > 0 ? (
-            <div className="mt-5">
-              <h4 className="m-0 text-sm font-medium text-base-content/75">{t('trade.perpsOpenOrders')}</h4>
-              <div className="mt-3 flex flex-col gap-2">
-                {activePerpsOrders.map((order) => (
-                  <div key={order.orderId} className="flex items-center justify-between gap-3 rounded-2xl border border-base-300/80 px-3 py-3 text-sm">
-                    <div className="min-w-0">
-                      <p className="m-0 font-medium">
-                        {order.side === 'long' ? t('trade.perpsLong') : t('trade.perpsShort')}
-                        {' · '}
-                        {order.size} {order.coin}
-                      </p>
-                      <p className="m-0 mt-1 text-base-content/60">
-                        {t('trade.perpsLimitPrice')}
-                        {': '}
-                        {order.limitPrice == null ? '--' : order.limitPrice}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => void handleCancelPerpsOrder(order.orderId)}
-                      disabled={pendingPerpsCancelOrderId === order.orderId}
-                    >
-                      {pendingPerpsCancelOrderId === order.orderId ? (
-                        <span className="loading loading-spinner loading-xs" />
-                      ) : (
-                        t('trade.remove')
-                      )}
-                    </button>
+              {activePerpsPosition ? (
+                <div className="mt-4 rounded-2xl border border-base-300/80 bg-base-200/30 p-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{t('trade.perpsCurrentPosition')}</span>
+                    <span className={activePerpsPosition.side === 'long' ? 'text-success' : 'text-error'}>
+                      {activePerpsPosition.side === 'long' ? t('trade.perpsLong') : t('trade.perpsShort')}
+                    </span>
                   </div>
-                ))}
+                  <p className="m-0 mt-2 text-base-content/70">
+                    {activePerpsPosition.size} {activePerpsPosition.coin}
+                    {' · '}
+                    {formatUsdAdaptive(Number(activePerpsPosition.notionalUsd ?? 0), i18n.language)}
+                  </p>
+                  <p className="m-0 mt-1 text-base-content/70">
+                    {t('trade.perpsUnrealizedPnl')}
+                    {': '}
+                    {formatUsdAdaptive(Number(activePerpsPosition.unrealizedPnlUsd ?? 0), i18n.language)}
+                  </p>
+                </div>
+              ) : null}
+
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  className={`btn ${perpsSide === 'long' ? 'btn-success' : 'btn-outline'}`}
+                  onClick={() => setPerpsSide('long')}
+                  disabled={pendingPerpsSubmit}
+                >
+                  {t('trade.perpsLong')}
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${perpsSide === 'short' ? 'btn-error' : 'btn-outline'}`}
+                  onClick={() => setPerpsSide('short')}
+                  disabled={pendingPerpsSubmit}
+                >
+                  {t('trade.perpsShort')}
+                </button>
               </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm text-base-content/70">{t('trade.perpsOrderSize', { symbol: activeMarketItem.symbol })}</span>
+                  <input
+                    className="input input-bordered w-full"
+                    placeholder="0.01"
+                    value={perpsSize}
+                    inputMode="decimal"
+                    onChange={(event) => setPerpsSize(event.target.value)}
+                    disabled={pendingPerpsSubmit}
+                  />
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm text-base-content/70">{t('trade.perpsLeverage')}</span>
+                  <input
+                    className="input input-bordered w-full"
+                    placeholder="3"
+                    value={perpsLeverage}
+                    inputMode="numeric"
+                    onChange={(event) => setPerpsLeverage(event.target.value)}
+                    disabled={pendingPerpsSubmit}
+                  />
+                </label>
+              </div>
+
+              <label className="mt-3 inline-flex items-center gap-2 text-sm text-base-content/75">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-sm"
+                  checked={perpsReduceOnly}
+                  onChange={(event) => setPerpsReduceOnly(event.target.checked)}
+                  disabled={pendingPerpsSubmit}
+                />
+                {t('trade.perpsReduceOnly')}
+              </label>
+
+              <button
+                type="button"
+                className="btn btn-primary mt-4 w-full"
+                onClick={() => void submitPerpsMarketOrder()}
+                disabled={pendingPerpsSubmit || !perpsAccount?.available}
+              >
+                {pendingPerpsSubmit ? <span className="loading loading-spinner loading-sm" /> : null}
+                {perpsReduceOnly ? t('trade.perpsReducePosition') : t('trade.perpsPlaceOrder')}
+              </button>
+
+              {activePerpsOrders.length > 0 ? (
+                <div className="mt-5">
+                  <h4 className="m-0 text-sm font-medium text-base-content/75">{t('trade.perpsOpenOrders')}</h4>
+                  <div className="mt-3 flex flex-col gap-2">
+                    {activePerpsOrders.map((order) => (
+                      <div key={order.orderId} className="flex items-center justify-between gap-3 rounded-2xl border border-base-300/80 px-3 py-3 text-sm">
+                        <div className="min-w-0">
+                          <p className="m-0 font-medium">
+                            {order.side === 'long' ? t('trade.perpsLong') : t('trade.perpsShort')}
+                            {' · '}
+                            {order.size} {order.coin}
+                          </p>
+                          <p className="m-0 mt-1 text-base-content/60">
+                            {t('trade.perpsLimitPrice')}
+                            {': '}
+                            {order.limitPrice == null ? '--' : order.limitPrice}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => void handleCancelPerpsOrder(order.orderId)}
+                          disabled={pendingPerpsCancelOrderId === order.orderId}
+                        >
+                          {pendingPerpsCancelOrderId === order.orderId ? (
+                            <span className="loading loading-spinner loading-xs" />
+                          ) : (
+                            t('trade.remove')
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="mt-1 rounded-2xl border border-dashed border-base-300 bg-base-200/20 p-3">
+              <MarketIntroBlock kind="perps" text={t('wallet.perpsAccountIntro')} />
             </div>
-          ) : null}
+          )}
         </section>
       ) : null}
 

@@ -15,7 +15,7 @@ import {
   keccak256,
   type Address,
 } from 'viem';
-import type { Bindings } from '../types';
+import type { Bindings, PredictionAccountSnapshot } from '../types';
 import { ensureWalletWithPrivateKey } from './wallet';
 import { decryptString } from '../utils/crypto';
 import { nowIso } from '../utils/time';
@@ -81,26 +81,6 @@ type PredictionOrderPostResponse = {
   transactionsHashes?: string[];
 };
 
-export type PredictionAccountSnapshot = {
-  available: boolean;
-  chainId: number;
-  chain: 'polygon';
-  signatureType: PredictionSignatureType['label'];
-  eoaAddress: string | null;
-  proxyAddress: string | null;
-  depositAddress: string | null;
-  collateralSymbol: 'USDC';
-  collateralTokenAddress: string;
-  collateralDecimals: number;
-  balanceRaw: string | null;
-  balance: string | null;
-  balanceUsd: number | null;
-  allowanceRaw: string | null;
-  allowance: string | null;
-  error: string | null;
-  updatedAt: string;
-};
-
 export type PredictionDepositInfo = {
   chainId: number;
   chain: 'polygon';
@@ -141,6 +121,12 @@ export type PredictionBetResult = {
   proxyAddress: string;
 };
 
+type UserAgentPredictionRpcStub = DurableObjectStub & {
+  getPredictionApiKeyRpc(userId: string): Promise<{ creds: PredictionApiKeyCreds | null }>;
+  upsertPredictionApiKeyRpc(userId: string, creds: PredictionApiKeyCreds): Promise<{ ok: true }>;
+  deletePredictionApiKeyRpc(userId: string): Promise<{ ok: true }>;
+};
+
 function resolvePolymarketHost(env: Bindings): string {
   const host = (env.PREDICTION_CLOB_HOST ?? '').trim() || DEFAULT_POLYMARKET_CLOB_HOST;
   return host.replace(/\/+$/, '');
@@ -176,6 +162,29 @@ function normalizeBigintString(raw: unknown): string | null {
     }
   }
   return null;
+}
+
+function getPredictionStub(env: Bindings, userId: string): UserAgentPredictionRpcStub {
+  const id = env.USER_AGENT.idFromName(userId);
+  return env.USER_AGENT.get(id) as UserAgentPredictionRpcStub;
+}
+
+async function getStoredPredictionApiKey(
+  env: Bindings,
+  userId: string,
+): Promise<PredictionApiKeyCreds | null> {
+  const stub = getPredictionStub(env, userId);
+  const result = await stub.getPredictionApiKeyRpc(userId);
+  return result.creds ?? null;
+}
+
+async function storePredictionApiKey(
+  env: Bindings,
+  userId: string,
+  creds: PredictionApiKeyCreds,
+): Promise<void> {
+  const stub = getPredictionStub(env, userId);
+  await stub.upsertPredictionApiKeyRpc(userId, creds);
 }
 
 function normalizeTokenId(raw: unknown): string {
@@ -703,6 +712,32 @@ function toOrderPayload(
   };
 }
 
+function buildInactivePredictionAccount(
+  signatureType: PredictionSignatureType['label'],
+  context: PredictionRuntimeContext,
+): PredictionAccountSnapshot {
+  return {
+    available: false,
+    activationState: 'inactive',
+    chainId: POLYMARKET_CHAIN_ID,
+    chain: 'polygon',
+    signatureType,
+    eoaAddress: context.signerAddress,
+    proxyAddress: context.proxyAddress,
+    depositAddress: context.proxyAddress,
+    collateralSymbol: 'USDC',
+    collateralTokenAddress: POLYMARKET_USDC_ADDRESS,
+    collateralDecimals: 6,
+    balanceRaw: null,
+    balance: null,
+    balanceUsd: null,
+    allowanceRaw: null,
+    allowance: null,
+    error: null,
+    updatedAt: nowIso(),
+  };
+}
+
 function parseOrderResult(payload: PredictionOrderPostResponse): {
   success: boolean;
   orderId: string | null;
@@ -735,7 +770,10 @@ export async function getPredictionAccount(
 ): Promise<PredictionAccountSnapshot> {
   const context = await toPredictionRuntimeContext(env, userId);
   const signatureType = resolvePredictionSignatureType(input?.signatureType, env.PREDICTION_SIGNATURE_TYPE);
-  const creds = await deriveOrCreateApiKey(context.host, context.signer);
+  const creds = await getStoredPredictionApiKey(env, userId);
+  if (!creds) {
+    return buildInactivePredictionAccount(signatureType.label, context);
+  }
   const rawBalance = await fetchBalanceAllowance(context, creds, signatureType.numeric);
   const parsed = parseBalanceAllowance(rawBalance);
   const balance = toDisplayUsdcAmount(parsed.balanceRaw);
@@ -744,6 +782,7 @@ export async function getPredictionAccount(
 
   return {
     available: true,
+    activationState: 'active',
     chainId: POLYMARKET_CHAIN_ID,
     chain: 'polygon',
     signatureType: signatureType.label,
@@ -773,6 +812,7 @@ export async function getPredictionAccountSafe(
   } catch (error) {
     return {
       available: false,
+      activationState: 'unavailable',
       chainId: POLYMARKET_CHAIN_ID,
       chain: 'polygon',
       signatureType: resolvePredictionSignatureType(input?.signatureType, env.PREDICTION_SIGNATURE_TYPE).label,
@@ -791,6 +831,17 @@ export async function getPredictionAccountSafe(
       updatedAt: nowIso(),
     };
   }
+}
+
+export async function activatePredictionAccount(
+  env: Bindings,
+  userId: string,
+  input?: { signatureType?: 'proxy' | 'eoa' | 'gnosis-safe' },
+): Promise<PredictionAccountSnapshot> {
+  const context = await toPredictionRuntimeContext(env, userId);
+  const creds = await deriveOrCreateApiKey(context.host, context.signer);
+  await storePredictionApiKey(env, userId, creds);
+  return getPredictionAccount(env, userId, input);
 }
 
 export async function getPredictionDepositInfo(
@@ -823,7 +874,10 @@ export async function placePredictionBet(
   const slippageBps = clampSlippageBps(input.slippageBps);
   const context = await toPredictionRuntimeContext(env, userId);
   const signatureType = resolvePredictionSignatureType(input.signatureType, env.PREDICTION_SIGNATURE_TYPE);
-  const creds = await deriveOrCreateApiKey(context.host, context.signer);
+  const creds = await getStoredPredictionApiKey(env, userId);
+  if (!creds) {
+    throw new Error('prediction_activation_required');
+  }
 
   const [tickSize, negRisk, feeRateBps, referencePrice] = await Promise.all([
     fetchTickSize(context.host, tokenId),

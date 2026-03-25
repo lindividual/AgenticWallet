@@ -10,6 +10,11 @@ import {
   type TradeBrowseMarketItem,
   type TradeBrowsePredictionItem,
 } from './tradeBrowse';
+import {
+  parseTopicArticleRuntimeStep,
+  type TopicArticleRuntimeToolCall,
+  type TopicArticleRuntimeToolName,
+} from './topicSpecialRuntime';
 import { deleteArticleMarkdownContent, putArticleMarkdownContent } from '../durableObjects/userAgentArticleContentStore';
 import type { Bindings } from '../types';
 
@@ -21,6 +26,7 @@ const SUMMARY_MAX_LENGTH = 180;
 const TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS = 3;
 const TOPIC_SPECIAL_ARTICLE_MAX_TOKENS = 1400;
 const TOPIC_SPECIAL_INTER_ARTICLE_DELAY_MS = 750;
+const TOPIC_SPECIAL_ARTICLE_RUNTIME_STEP_LIMIT = 6;
 const TOPIC_SPECIAL_MAX_SPOT_REFS = 4;
 const TOPIC_SPECIAL_MAX_PERP_REFS = 2;
 const TOPIC_SPECIAL_MAX_PREDICTION_REFS = 2;
@@ -54,40 +60,23 @@ const TOPIC_PREDICTION_STOPWORDS = new Set([
   'with',
 ]);
 
-const TOPIC_NEWS_KEYWORDS = [
-  'bitcoin',
-  'ethereum',
-  'crypto',
-  'meme',
-  'memecoin',
-  'stablecoin',
-  'etf',
-  'fed',
-  'interest rate',
-  'treasury',
-  'nasdaq',
-  's&p 500',
+const TOPIC_NEWS_QUERY_GROUPS = [
+  ['bitcoin', 'ethereum', 'crypto', 'stablecoin', 'etf', 'fed', 'treasury'],
+  ['solana', 'sui', 'ton', 'rwa', 'defi', 'layer 2', 'payment'],
+  ['meme', 'memecoin', 'doge', 'shib', 'pepe', 'bonk', 'wif'],
+  ['perpetual', 'futures', 'open interest', 'funding', 'liquidation', 'polymarket', 'regulation'],
+  ['stocks', 'equities', 'nasdaq', 's&p 500', 'gold', 'oil', 'silver', 'commodities'],
 ];
 
-const TOPIC_TWITTER_KEYWORDS = [
-  'bitcoin',
-  'ethereum',
-  'crypto',
-  'meme',
-  'memecoin',
-  'doge',
-  'dogecoin',
-  'shib',
-  'fed',
-  'rates',
-  'risk-on',
-  'risk-off',
-  'nasdaq',
-  'etf',
-  'stablecoin',
+const TOPIC_TWITTER_QUERY_GROUPS = [
+  ['bitcoin', 'ethereum', 'crypto', 'etf', 'stablecoin', 'fed'],
+  ['solana', 'sui', 'ton', 'rwa', 'defi', 'airdrop', 'payments'],
+  ['meme', 'memecoin', 'doge', 'shib', 'pepe', 'bonk', 'wif'],
+  ['perp', 'perpetual', 'funding', 'liquidation', 'polymarket', 'prediction', 'regulation'],
+  ['stocks', 'equities', 'nasdaq', 's&p', 'gold', 'oil', 'silver', 'commodities'],
 ];
 
-type TopicSpecialEditorId = 'majors' | 'meme' | 'perps' | 'prediction';
+type TopicSpecialEditorId = 'majors' | 'meme' | 'perps' | 'prediction' | 'crossasset';
 
 type TopicDraft = {
   editorId: TopicSpecialEditorId;
@@ -329,6 +318,11 @@ const TOPIC_SPECIAL_EDITOR_DEFINITIONS: TopicSpecialEditorDefinition[] = [
     label: 'Prediction Editor',
     summary: 'Owns event markets, catalyst repricing, regulatory timing, and narrative inflection topics.',
   },
+  {
+    id: 'crossasset',
+    label: 'Stocks & Commodities Editor',
+    summary: 'Owns equities, commodities, yields, and cross-asset transmission into crypto positioning and sector rotation.',
+  },
 ];
 
 let topicSpecialSchemaReady = false;
@@ -464,6 +458,142 @@ function buildTopicPreviewDebug(
   };
 }
 
+function dedupeNewsItems(items: NewsItem[]): NewsItem[] {
+  const seen = new Set<string>();
+  const output: NewsItem[] = [];
+  for (const item of items) {
+    const key = `${item.title.trim().toLowerCase()}|${item.source.trim().toLowerCase()}|${item.url.trim().toLowerCase()}`;
+    if (!item.title.trim() || seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+
+function dedupeTweetItems(items: TweetItem[]): TweetItem[] {
+  const seen = new Set<string>();
+  const output: TweetItem[] = [];
+  for (const item of items) {
+    const key = `${item.handle.trim().toLowerCase()}|${item.text.trim().toLowerCase()}`;
+    if (!item.text.trim() || seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+
+function scoreMarketAssetBreadth(asset: MarketTopAsset): number {
+  return (
+    Math.max(0, 20 - Number(asset.market_cap_rank ?? 20))
+    + Math.min(12, Math.abs(Number(asset.price_change_percentage_24h ?? 0)))
+    + Math.min(12, Math.log10(Math.max(1, Number(asset.turnover_24h ?? 0) + 1)))
+  );
+}
+
+function dedupeMarketAssets(items: MarketTopAsset[]): MarketTopAsset[] {
+  const byKey = new Map<string, MarketTopAsset>();
+  for (const item of items) {
+    const key = `${normalizeAssetSymbol(item.symbol) ?? item.symbol}:${item.chain}:${item.contract || 'native'}`;
+    const current = byKey.get(key);
+    if (!current || choosePreferredMarketAsset(item, current) || scoreMarketAssetBreadth(item) > scoreMarketAssetBreadth(current)) {
+      byKey.set(key, item);
+    }
+  }
+  return [...byKey.values()]
+    .sort((left, right) => scoreMarketAssetBreadth(right) - scoreMarketAssetBreadth(left))
+    .slice(0, 48);
+}
+
+function mapTradeBrowseSpotToMarketAsset(item: TradeBrowseMarketItem): MarketTopAsset | null {
+  const symbol = normalizeAssetSymbol(item.symbol);
+  const chain = item.chain?.trim() ?? '';
+  if (!symbol || !chain) return null;
+  return {
+    id: item.id,
+    asset_id: item.asset_id ?? `${chain}:${item.contract ?? 'native'}`,
+    chain_asset_id: `${chain}:${item.contract ?? 'native'}`,
+    chain,
+    contract: item.contract ?? '',
+    symbol,
+    name: item.name,
+    image: item.image,
+    current_price: item.currentPrice,
+    market_cap_rank: null,
+    market_cap: null,
+    price_change_percentage_24h: item.change24h,
+    turnover_24h: item.volume24h,
+    risk_level: null,
+  };
+}
+
+async function fetchTopicNewsItems(env: Bindings): Promise<NewsItem[]> {
+  const groups = await Promise.all(
+    TOPIC_NEWS_QUERY_GROUPS.map((keywords) => fetchOpenNewsCryptoNews(env, {
+      keywords,
+      limit: 8,
+    }).catch(() => [] as NewsItem[])),
+  );
+  return dedupeNewsItems(groups.flat()).slice(0, 24);
+}
+
+async function fetchTopicTwitterItems(env: Bindings): Promise<TweetItem[]> {
+  const groups = await Promise.all(
+    TOPIC_TWITTER_QUERY_GROUPS.map((keywords) => fetchOpenTwitterCryptoTweets(env, {
+      keywords,
+      limit: 8,
+    }).catch(() => [] as TweetItem[])),
+  );
+  return dedupeTweetItems(groups.flat())
+    .sort((left, right) => (right.likes + right.retweets * 2) - (left.likes + left.retweets * 2))
+    .slice(0, 18);
+}
+
+async function fetchTopicMarketAssets(
+  env: Bindings,
+  tradeBrowse: ReturnType<typeof buildEmptyTradeBrowseResponse> | Awaited<ReturnType<typeof fetchTradeBrowse>>,
+): Promise<MarketTopAsset[]> {
+  const [marketCap, topGainers, topLosers, topVolume, trending] = await Promise.all([
+    fetchTopMarketAssets(env, {
+      name: 'marketCap',
+      source: 'auto',
+      limit: 18,
+    }).catch(() => [] as MarketTopAsset[]),
+    fetchTopMarketAssets(env, {
+      name: 'topGainers',
+      source: 'auto',
+      limit: 18,
+    }).catch(() => [] as MarketTopAsset[]),
+    fetchTopMarketAssets(env, {
+      name: 'topLosers',
+      source: 'auto',
+      limit: 18,
+    }).catch(() => [] as MarketTopAsset[]),
+    fetchTopMarketAssets(env, {
+      name: 'topVolume',
+      source: 'auto',
+      limit: 18,
+    }).catch(() => [] as MarketTopAsset[]),
+    fetchTopMarketAssets(env, {
+      name: 'trending',
+      source: 'auto',
+      limit: 18,
+    }).catch(() => [] as MarketTopAsset[]),
+  ]);
+
+  const tradeBrowseSpotAssets = [...tradeBrowse.topMovers, ...tradeBrowse.trendings]
+    .map((item) => mapTradeBrowseSpotToMarketAsset(item))
+    .filter((item): item is MarketTopAsset => item != null);
+
+  return dedupeMarketAssets([
+    ...marketCap,
+    ...topGainers,
+    ...topLosers,
+    ...topVolume,
+    ...trending,
+    ...tradeBrowseSpotAssets,
+  ]);
+}
+
 export async function fetchTopicSpecialSourcePacket(
   env: Bindings,
   options?: {
@@ -476,27 +606,26 @@ export async function fetchTopicSpecialSourcePacket(
   const dateKey = slotKey.slice(0, 10);
   const existingTopicsToday = options?.existingTopicsToday ?? await listTopicTitlesForDate(env.DB, dateKey);
 
-  const [newsItems, twitterItems, rssHeadlines, marketAssets, memeHeatItems, tradeBrowse] = await Promise.all([
-    fetchOpenNewsCryptoNews(env, {
-      keywords: TOPIC_NEWS_KEYWORDS,
-      limit: 14,
-    }).catch(() => [] as NewsItem[]),
-    fetchOpenTwitterCryptoTweets(env, {
-      keywords: TOPIC_TWITTER_KEYWORDS,
-      limit: 10,
-    }).catch(() => [] as TweetItem[]),
+  const [rssHeadlines, memeHeatItems, tradeBrowse] = await Promise.all([
     fetchNewsHeadlines(env).catch(() => [] as string[]),
-    fetchTopMarketAssets(env, {
-      name: 'marketCap',
-      source: 'auto',
-      limit: 20,
-    }).catch(() => [] as MarketTopAsset[]),
     fetchDexScreenerMemeHeat().catch(() => [] as DexScreenerMemeHeatItem[]),
     fetchTradeBrowse(env).catch(() => buildEmptyTradeBrowseResponse()),
   ]);
+  const [newsItems, twitterItems, marketAssets] = await Promise.all([
+    fetchTopicNewsItems(env).catch(() => [] as NewsItem[]),
+    fetchTopicTwitterItems(env).catch(() => [] as TweetItem[]),
+    fetchTopicMarketAssets(env, tradeBrowse).catch(() => [] as MarketTopAsset[]),
+  ]);
 
   const sourceRefs = buildSourceReferences(newsItems, twitterItems, rssHeadlines);
-  const defaultAssets = buildDefaultAssetPool(marketAssets, newsItems, memeHeatItems, tradeBrowse.perps);
+  const defaultAssets = buildDefaultAssetPool(
+    marketAssets,
+    newsItems,
+    twitterItems,
+    memeHeatItems,
+    tradeBrowse.perps,
+    tradeBrowse.predictions,
+  );
 
   return {
     slotKey,
@@ -1677,7 +1806,7 @@ function buildChiefEditorPrompt(
     '',
     'Selection rules:',
     '- Prefer one strong brief per desk before doubling up on the same desk.',
-    '- Prefer coverage breadth across market regime, rotation, leverage, sentiment, and catalysts.',
+    '- Prefer coverage breadth across market regime, rotation, leverage, sentiment, catalysts, and cross-asset transmission.',
     '- Keep only briefs with a clear trigger, evidence trail, and concrete reason to read now.',
     '- Avoid generic market filler and redundant macro angles.',
     '',
@@ -2118,10 +2247,28 @@ async function buildTopicArticleMarkdown(
   }
 
   try {
+    return await buildTopicArticleMarkdownLooped(env, llmStatus, input, debug);
+  } catch (error) {
+    console.warn('topic_special_article_runtime_loop_failed_falling_back_to_one_shot', {
+      slotKey: input.slotKey,
+      topic: input.topic,
+      error: getLlmErrorInfo(error),
+    });
+    return buildTopicArticleMarkdownOneShot(env, llmStatus, input, debug);
+  }
+}
+
+async function buildTopicArticleMarkdownOneShot(
+  env: Bindings,
+  llmStatus: ReturnType<typeof getLlmStatus>,
+  input: TopicArticleInput,
+  debug?: TopicSpecialArticleDebugCollector,
+): Promise<string> {
+  try {
     const systemPrompt = [
       'You are the feature writer for a crypto wallet publication.',
       `The selected brief came from the "${input.editorLabel}" desk.`,
-      'Write a high-quality market topic article for readers who care about crypto, meme, derivatives, prediction markets, or cross-market flows.',
+      'Write a high-quality market topic article for readers who care about crypto, equities, commodities, meme, derivatives, prediction markets, or cross-market flows.',
       'The article should be strong enough to earn a click, keep the reader engaged, and improve investment decisions.',
       'Build a clear line of reasoning from evidence to implications.',
       'Do not force a crypto-TradFi bridge if the selected topic is best written as a crypto-only, meme-only, or TradFi-only story.',
@@ -2217,6 +2364,338 @@ async function buildTopicArticleMarkdown(
   }
 }
 
+type TopicArticleRuntimeToolDefinition = {
+  name: TopicArticleRuntimeToolName;
+  promptLine: string;
+  execute: (args: Record<string, string | null | undefined>) => string;
+};
+
+function stripTopicRuntimeJsonFences(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json|markdown|md)?\s*([\s\S]*?)```/i);
+  return (fenced?.[1] ?? trimmed).trim();
+}
+
+function resolveTopicRuntimeLimit(
+  raw: string | null | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(numeric)));
+}
+
+function tokenizeRuntimeQuery(raw: string | null | undefined): string[] {
+  const trimmed = raw?.trim();
+  if (!trimmed) return [];
+  return tokenizePredictionText(trimmed).slice(0, 8);
+}
+
+function buildTopicArticleRuntimeOverview(input: TopicArticleInput): string {
+  const recentTopics = input.existingTopicsToday
+    .filter((topic) => topic !== input.topic)
+    .slice(0, 6)
+    .join(' | ');
+  return [
+    'Tool result for read_packet_overview:',
+    `- Slot: ${input.slotKey}`,
+    `- Desk: ${input.editorLabel}`,
+    `- Topic hypothesis: ${input.topic}`,
+    `- Summary anchor: ${truncateLine(input.summary, 180)}`,
+    `- Chief note: ${truncateLine(input.chiefReason || 'Selected for strength, evidence, and reader usefulness.', 180)}`,
+    `- Related assets: ${input.relatedAssets.join(', ') || 'BTC, ETH, USDC'}`,
+    `- Packet counts: source_refs=${input.sourceRefs.length}; news=${input.newsItems.length}; social=${input.twitterItems.length}; meme=${input.memeHeatItems.length}; spot=${input.marketAssets.length}; perps=${input.perps.length}; predictions=${input.predictions.length}`,
+    `- Already covered today: ${recentTopics || 'none'}`,
+  ].join('\n');
+}
+
+function buildTopicArticleSourceRefsToolResult(
+  input: TopicArticleInput,
+  args: Record<string, string | null | undefined>,
+): string {
+  const keywords = tokenizeRuntimeQuery(args.query);
+  const limit = resolveTopicRuntimeLimit(args.limit, 6, 2, 10);
+  const selected = keywords.length > 0
+    ? filterLinesByKeywords(input.sourceRefs, keywords).slice(0, limit)
+    : input.sourceRefs.slice(0, limit);
+  return [
+    `Tool result for read_source_refs${args.query ? ` (query=${args.query})` : ''}:`,
+    formatBulletBlock(selected.map((line) => truncateLine(line, 180)), '- No source references available.'),
+  ].join('\n');
+}
+
+function buildTopicArticleNewsToolResult(
+  input: TopicArticleInput,
+  args: Record<string, string | null | undefined>,
+): string {
+  const query = args.query?.trim() || input.topic;
+  const limit = resolveTopicRuntimeLimit(args.limit, 6, 2, 10);
+  const ranked = rankNewsItemsForTopic(input.newsItems, query, input.summary, input.relatedAssets).slice(0, limit);
+  return [
+    `Tool result for read_news_signals${args.query ? ` (query=${args.query})` : ''}:`,
+    formatBulletBlock(ranked.map((item) => formatNewsSignalLine(item)), '- No directly relevant news signals available.'),
+  ].join('\n');
+}
+
+function buildTopicArticleSocialToolResult(
+  input: TopicArticleInput,
+  args: Record<string, string | null | undefined>,
+): string {
+  const query = args.query?.trim() || input.topic;
+  const limit = resolveTopicRuntimeLimit(args.limit, 5, 2, 8);
+  const ranked = rankTweetsForTopic(input.twitterItems, query, input.summary, input.relatedAssets).slice(0, limit);
+  return [
+    `Tool result for read_social_signals${args.query ? ` (query=${args.query})` : ''}:`,
+    formatBulletBlock(ranked.map((item) => formatTweetSignalLine(item)), '- No directly relevant social signals available.'),
+  ].join('\n');
+}
+
+function buildTopicArticleMemeToolResult(
+  input: TopicArticleInput,
+  args: Record<string, string | null | undefined>,
+): string {
+  const query = args.query?.trim() || input.topic;
+  const limit = resolveTopicRuntimeLimit(args.limit, 5, 2, 8);
+  const ranked = rankMemeHeatForTopic(input.memeHeatItems, query, input.summary, input.relatedAssets).slice(0, limit);
+  return [
+    `Tool result for read_meme_signals${args.query ? ` (query=${args.query})` : ''}:`,
+    formatBulletBlock(ranked.map((item) => formatMemeHeatLine(item)), '- No directly relevant meme heat signals available.'),
+  ].join('\n');
+}
+
+function buildTopicArticleSpotToolResult(
+  input: TopicArticleInput,
+  args: Record<string, string | null | undefined>,
+): string {
+  const query = args.query?.trim() || input.topic;
+  const limit = resolveTopicRuntimeLimit(args.limit, 6, 2, 10);
+  const ranked = rankSpotAssetsForTopic(input.marketAssets, query, input.summary, input.relatedAssets).slice(0, limit);
+  return [
+    `Tool result for read_spot_signals${args.query ? ` (query=${args.query})` : ''}:`,
+    formatBulletBlock(ranked.map((item) => formatMarketSignalLine(item)), '- No directly relevant spot signals available.'),
+  ].join('\n');
+}
+
+function buildTopicArticlePerpToolResult(
+  input: TopicArticleInput,
+  args: Record<string, string | null | undefined>,
+): string {
+  const query = args.query?.trim() || input.topic;
+  const limit = resolveTopicRuntimeLimit(args.limit, 4, 2, 8);
+  const ranked = rankPerpsForTopic(input.perps, query, input.summary, input.relatedAssets).slice(0, limit);
+  return [
+    `Tool result for read_perp_signals${args.query ? ` (query=${args.query})` : ''}:`,
+    formatBulletBlock(ranked.map((item) => formatPerpSignalLine(item)), '- No directly relevant perp signals available.'),
+  ].join('\n');
+}
+
+function buildTopicArticlePredictionToolResult(
+  input: TopicArticleInput,
+  args: Record<string, string | null | undefined>,
+): string {
+  const query = args.query?.trim() || input.topic;
+  const limit = resolveTopicRuntimeLimit(args.limit, 4, 2, 8);
+  const assetNamesBySymbol = new Map<string, string>();
+  for (const asset of input.marketAssets) {
+    if (asset.name?.trim()) assetNamesBySymbol.set(asset.symbol, asset.name.trim());
+  }
+  const ranked = input.predictions
+    .map((prediction) => ({
+      prediction,
+      score: scorePredictionCandidate(prediction, query, input.summary, input.relatedAssets, assetNamesBySymbol),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map((item) => item.prediction);
+  return [
+    `Tool result for read_prediction_signals${args.query ? ` (query=${args.query})` : ''}:`,
+    formatBulletBlock(ranked.map((item) => formatPredictionSignalLine(item)), '- No directly relevant prediction signals available.'),
+  ].join('\n');
+}
+
+function buildTopicArticleRuntimeToolDefinitions(input: TopicArticleInput): TopicArticleRuntimeToolDefinition[] {
+  return [
+    {
+      name: 'read_packet_overview',
+      promptLine: '- `read_packet_overview`: packet composition, desk angle, related assets, and already-covered topics.',
+      execute: () => buildTopicArticleRuntimeOverview(input),
+    },
+    {
+      name: 'read_source_refs',
+      promptLine: '- `read_source_refs`: anchor headlines and source lines. Optional arguments: `query`, `limit`.',
+      execute: (args) => buildTopicArticleSourceRefsToolResult(input, args),
+    },
+    {
+      name: 'read_news_signals',
+      promptLine: '- `read_news_signals`: ranked news signals for the topic or a sub-angle. Optional arguments: `query`, `limit`.',
+      execute: (args) => buildTopicArticleNewsToolResult(input, args),
+    },
+    {
+      name: 'read_social_signals',
+      promptLine: '- `read_social_signals`: ranked social signals by engagement and topical fit. Optional arguments: `query`, `limit`.',
+      execute: (args) => buildTopicArticleSocialToolResult(input, args),
+    },
+    {
+      name: 'read_meme_signals',
+      promptLine: '- `read_meme_signals`: meme heat, liquidity, and momentum clues. Optional arguments: `query`, `limit`.',
+      execute: (args) => buildTopicArticleMemeToolResult(input, args),
+    },
+    {
+      name: 'read_spot_signals',
+      promptLine: '- `read_spot_signals`: ranked spot market breadth, turnover, and price moves. Optional arguments: `query`, `limit`.',
+      execute: (args) => buildTopicArticleSpotToolResult(input, args),
+    },
+    {
+      name: 'read_perp_signals',
+      promptLine: '- `read_perp_signals`: perp volume and leverage-sensitive names. Optional arguments: `query`, `limit`.',
+      execute: (args) => buildTopicArticlePerpToolResult(input, args),
+    },
+    {
+      name: 'read_prediction_signals',
+      promptLine: '- `read_prediction_signals`: prediction-market odds and catalyst signals. Optional arguments: `query`, `limit`.',
+      execute: (args) => buildTopicArticlePredictionToolResult(input, args),
+    },
+  ];
+}
+
+function buildTopicArticleRuntimeSystemPrompt(toolDefinitions: TopicArticleRuntimeToolDefinition[]): string {
+  return [
+    'You are the feature writer for a crypto wallet publication.',
+    'You are writing inside a hidden server-side loop over a persisted source packet.',
+    'Use the tools to inspect only the evidence you need before drafting.',
+    'Return raw JSON only. Do not use code fences.',
+    'When you need more evidence, return {"type":"tool_call","tool":"tool_name","arguments":{...}}.',
+    'When you are ready, return {"type":"final","markdown":"..."} with the full article markdown.',
+    'Never mention the hidden loop, tool protocol, or internal packet mechanics.',
+    'Use only evidence supported by tool results. Do not fabricate numbers, flows, quotes, or timelines.',
+    'Do not default to BTC/ETH framing when the evidence is stronger in alt, meme, derivatives, or prediction markets.',
+    'The final markdown must end with a "## Related Assets" section using bullet symbols.',
+    'Available tools:',
+    ...toolDefinitions.map((definition) => definition.promptLine),
+  ].join('\n');
+}
+
+function buildTopicArticleRuntimeUserPrompt(input: TopicArticleInput): string {
+  return [
+    `Desk: ${input.editorLabel}`,
+    `Slot: ${input.slotKey}`,
+    `Topic hypothesis: ${input.topic}`,
+    `Summary anchor: ${input.summary}`,
+    `Chief editor note: ${input.chiefReason || 'Selected for strength, evidence, and reader usefulness.'}`,
+    `Priority assets: ${input.relatedAssets.join(', ') || 'BTC, ETH, USDC'}`,
+    '',
+    'Write a high-quality topic article that is strong enough to earn a click, sustain reader attention, and improve investment follow-through.',
+    'Build a clear line of reasoning from trigger to evidence to implication to what to watch next.',
+    'Choose the structure that fits the topic. A crypto-only, meme-only, derivatives-only, or catalyst-only framing is acceptable when that is the clearest article.',
+    'Before finishing, inspect the packet areas you need and avoid generic macro filler.',
+  ].join('\n');
+}
+
+async function buildTopicArticleMarkdownLooped(
+  env: Bindings,
+  llmStatus: ReturnType<typeof getLlmStatus>,
+  input: TopicArticleInput,
+  debug?: TopicSpecialArticleDebugCollector,
+): Promise<string> {
+  const toolDefinitions = buildTopicArticleRuntimeToolDefinitions(input);
+  const availableTools = toolDefinitions.map((definition) => definition.name);
+  const systemPrompt = buildTopicArticleRuntimeSystemPrompt(toolDefinitions);
+  const userPrompt = buildTopicArticleRuntimeUserPrompt(input);
+  const promptStats = buildPromptDebugStats(systemPrompt, userPrompt);
+  const llmMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
+
+  if (debug) {
+    debug.promptStats = promptStats;
+    debug.systemPrompt = captureDebugText(systemPrompt, 4000);
+    debug.userPrompt = captureDebugText(userPrompt);
+  }
+
+  console.log('topic_special_article_runtime_loop_started', {
+    ...promptStats,
+    slotKey: input.slotKey,
+    topic: input.topic,
+    toolCount: availableTools.length,
+    model: llmStatus.model,
+    baseUrl: llmStatus.baseUrl,
+  });
+
+  let lastResult: Awaited<ReturnType<typeof generateWithLlm>> | null = null;
+  for (let attempt = 0; attempt < TOPIC_SPECIAL_ARTICLE_RUNTIME_STEP_LIMIT; attempt += 1) {
+    const llmResult = await generateWithLlm(env, {
+      messages: llmMessages,
+      temperature: 0.45,
+      maxTokens: TOPIC_SPECIAL_ARTICLE_MAX_TOKENS,
+      retryAttempts: TOPIC_SPECIAL_LLM_RETRY_ATTEMPTS,
+      maxRetryDelayMs: 60_000,
+    });
+    lastResult = llmResult;
+    const parsed = parseTopicArticleRuntimeStep(llmResult.text, availableTools);
+    if (parsed.kind === 'tool_call') {
+      if (attempt >= TOPIC_SPECIAL_ARTICLE_RUNTIME_STEP_LIMIT - 1) {
+        throw new Error('topic_special_article_runtime_step_limit_exhausted');
+      }
+      const toolResult = executeTopicArticleRuntimeTool(parsed.toolCall, toolDefinitions);
+      llmMessages.push({ role: 'assistant', content: stripTopicRuntimeJsonFences(llmResult.text) });
+      llmMessages.push({ role: 'system', content: toolResult });
+      llmMessages.push({
+        role: 'system',
+        content: 'Continue the same article. Return raw JSON only. Either call another tool with {"type":"tool_call","tool":"...","arguments":{...}} or finish with {"type":"final","markdown":"..."}.',
+      });
+      continue;
+    }
+
+    const markdown = ensureRelatedAssetsSection(parsed.markdown, input.relatedAssets);
+    if (debug) {
+      debug.mode = 'llm';
+      debug.fallbackReason = null;
+      debug.requestId = llmResult.requestId ?? null;
+      debug.cfRay = llmResult.cfRay ?? null;
+      debug.provider = llmResult.provider ?? llmStatus.provider ?? null;
+      debug.model = llmResult.model ?? llmStatus.model ?? null;
+      debug.responseSnippet = captureDebugText(llmResult.text);
+      debug.markdownSnippet = captureDebugText(markdown);
+      debug.error = null;
+    }
+    console.log('topic_special_article_runtime_loop_succeeded', {
+      slotKey: input.slotKey,
+      topic: input.topic,
+      steps: attempt + 1,
+      requestId: llmResult.requestId ?? null,
+      cfRay: llmResult.cfRay ?? null,
+      fallbackFrom: llmResult.fallbackFrom ?? null,
+    });
+    return markdown;
+  }
+
+  if (debug && lastResult) {
+    debug.requestId = lastResult.requestId ?? null;
+    debug.cfRay = lastResult.cfRay ?? null;
+    debug.provider = lastResult.provider ?? llmStatus.provider ?? null;
+    debug.model = lastResult.model ?? llmStatus.model ?? null;
+  }
+  throw new Error('topic_special_article_runtime_exhausted');
+}
+
+function executeTopicArticleRuntimeTool(
+  toolCall: TopicArticleRuntimeToolCall,
+  toolDefinitions: TopicArticleRuntimeToolDefinition[],
+): string {
+  const definition = toolDefinitions.find((item) => item.name === toolCall.tool);
+  if (!definition) {
+    return `Tool result for ${toolCall.tool}: unavailable because the tool is not registered.`;
+  }
+  const text = definition.execute(toolCall.arguments);
+  const normalized = text.trim();
+  if (normalized.length <= 4_000) return normalized;
+  return `${normalized.slice(0, 3_900).trimEnd()}\n- Output truncated for safety.`;
+}
+
 function buildTopicArticlePrompt(input: TopicArticleInput): string {
   const evidencePacket = buildTopicArticleResearchPacket(input);
 
@@ -2229,7 +2708,7 @@ function buildTopicArticlePrompt(input: TopicArticleInput): string {
     `Priority assets: ${input.relatedAssets.join(', ') || 'BTC, ETH, USDC'}`,
     '',
     'Objective:',
-    '- Write a high-quality topic article that appeals to crypto, meme, or traditional finance readers.',
+    '- Write a high-quality topic article that appeals to crypto, equities, commodities, meme, or traditional finance readers.',
     '- The article should be compelling enough to earn a click, strong enough to sustain reading, and useful enough to influence investment follow-through.',
     '- Build a real argument from evidence instead of stacking empty claims.',
     '',
@@ -2487,6 +2966,231 @@ function collectPerpAssetSymbols(items: TradeBrowseMarketItem[]): string[] {
   );
 }
 
+function collectPredictionAssetSymbols(
+  items: TradeBrowsePredictionItem[],
+  marketAssets: MarketTopAsset[],
+): string[] {
+  const symbols = dedupeStrings(
+    marketAssets
+      .map((asset) => normalizeAssetSymbol(asset.symbol))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const assetNamesBySymbol = new Map<string, string>();
+  for (const asset of marketAssets) {
+    if (asset.name?.trim()) assetNamesBySymbol.set(asset.symbol, asset.name.trim());
+  }
+  return dedupeStrings(
+    items.map((item) => choosePredictionPrimarySymbol(item, symbols, assetNamesBySymbol)),
+  );
+}
+
+type TopicAssetSignalSource = 'news' | 'spot' | 'social' | 'meme' | 'perp' | 'prediction' | 'default';
+
+type TopicAssetPriority = {
+  score: number;
+  sources: Set<TopicAssetSignalSource>;
+};
+
+function addTopicAssetPriority(
+  priorities: Map<string, TopicAssetPriority>,
+  symbol: string | null | undefined,
+  score: number,
+  source: TopicAssetSignalSource,
+): void {
+  const normalized = normalizeAssetSymbol(symbol);
+  if (!normalized || !Number.isFinite(score) || score <= 0) return;
+  const current = priorities.get(normalized) ?? {
+    score: 0,
+    sources: new Set<TopicAssetSignalSource>(),
+  };
+  current.score += score;
+  current.sources.add(source);
+  priorities.set(normalized, current);
+}
+
+function buildTopicKnownAssetNames(marketAssets: MarketTopAsset[]): Map<string, string> {
+  const output = new Map<string, string>();
+  for (const asset of marketAssets) {
+    const symbol = normalizeAssetSymbol(asset.symbol);
+    if (!symbol || !asset.name?.trim()) continue;
+    output.set(symbol, asset.name.trim());
+  }
+  return output;
+}
+
+function matchKnownSymbolsInText(
+  text: string,
+  symbols: string[],
+  assetNamesBySymbol: Map<string, string>,
+  limit = 4,
+): string[] {
+  const haystack = ` ${normalizePredictionSearchText(text)} `;
+  const matched: string[] = [];
+  for (const symbol of symbols) {
+    if (matched.length >= limit) break;
+    const name = assetNamesBySymbol.get(symbol);
+    const normalizedName = name ? normalizePredictionSearchText(name) : '';
+    if ((normalizedName && haystack.includes(` ${normalizedName} `)) || haystack.includes(` ${symbol.toLowerCase()} `)) {
+      matched.push(symbol);
+    }
+  }
+  return dedupeStrings(matched);
+}
+
+function buildTopicAssetPriorities(input: TopicDraftGenerationInput): Map<string, TopicAssetPriority> {
+  const priorities = new Map<string, TopicAssetPriority>();
+  const knownSymbols = dedupeStrings(
+    input.marketAssets
+      .map((asset) => normalizeAssetSymbol(asset.symbol))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const assetNamesBySymbol = buildTopicKnownAssetNames(input.marketAssets);
+
+  for (const item of input.newsItems) {
+    addTopicAssetPriority(
+      priorities,
+      item.coin,
+      14 + Math.min(6, Number(item.rating ?? 0)),
+      'news',
+    );
+  }
+
+  for (const asset of input.marketAssets.slice(0, 48)) {
+    addTopicAssetPriority(
+      priorities,
+      asset.symbol,
+      Math.min(18, scoreMarketAssetBreadth(asset) / 1.8),
+      'spot',
+    );
+  }
+
+  for (const item of sortTweetsByEngagement(input.twitterItems).slice(0, 18)) {
+    const matchedSymbols = matchKnownSymbolsInText(
+      `${item.text} ${item.author} ${item.handle}`,
+      knownSymbols,
+      assetNamesBySymbol,
+      3,
+    );
+    if (matchedSymbols.length === 0) continue;
+    const perSymbolScore = (4 + Math.min(6, Math.log10(Math.max(1, item.likes + item.retweets * 2 + 1)))) / matchedSymbols.length;
+    for (const symbol of matchedSymbols) {
+      addTopicAssetPriority(priorities, symbol, perSymbolScore, 'social');
+    }
+  }
+
+  for (const item of input.memeHeatItems.slice(0, 20)) {
+    addTopicAssetPriority(
+      priorities,
+      item.symbol,
+      8 + Math.min(10, Number(item.heatScore ?? 0) / 10) + Math.min(4, Math.log10(Math.max(1, Number(item.volume24h ?? 0) + 1))),
+      'meme',
+    );
+  }
+
+  for (const item of input.perps.slice(0, 24)) {
+    addTopicAssetPriority(
+      priorities,
+      normalizePerpBaseSymbol(item.symbol),
+      8 + Math.min(8, Math.log10(Math.max(1, Number(item.volume24h ?? 0) + 1))) + Math.min(4, Math.abs(Number(item.change24h ?? 0)) / 8),
+      'perp',
+    );
+  }
+
+  const predictionSymbols = collectPredictionAssetSymbols(input.predictions, input.marketAssets);
+  const predictionAssetNames = buildTopicKnownAssetNames(input.marketAssets);
+  for (const item of input.predictions.slice(0, 20)) {
+    const symbol = choosePredictionPrimarySymbol(item, predictionSymbols, predictionAssetNames);
+    addTopicAssetPriority(
+      priorities,
+      symbol,
+      6 + Math.min(8, Math.log10(Math.max(1, Number(item.volume24h ?? 0) + 1))),
+      'prediction',
+    );
+  }
+
+  for (const asset of input.defaultAssets) {
+    addTopicAssetPriority(priorities, asset, 2, 'default');
+  }
+
+  return priorities;
+}
+
+function getTopicAssetPenalty(symbol: string): number {
+  if (TOPIC_STABLE_ASSETS.has(symbol)) return -8;
+  if (symbol === 'BTC') return -5;
+  if (symbol === 'ETH') return -4;
+  return 0;
+}
+
+function getEditorAssetBoost(
+  symbol: string,
+  editorId: TopicSpecialEditorId,
+  priority: TopicAssetPriority | undefined,
+): number {
+  if (!priority) return 0;
+  switch (editorId) {
+    case 'majors':
+      return (priority.sources.has('news') ? 6 : 0)
+        + (priority.sources.has('spot') ? 6 : 0)
+        + (priority.sources.has('default') ? 3 : 0)
+        + (TOPIC_STABLE_ASSETS.has(symbol) ? 4 : 0);
+    case 'meme':
+      return (priority.sources.has('meme') ? 12 : 0)
+        + (priority.sources.has('social') ? 5 : 0);
+    case 'perps':
+      return (priority.sources.has('perp') ? 12 : 0)
+        + (priority.sources.has('spot') ? 4 : 0);
+    case 'prediction':
+      return (priority.sources.has('prediction') ? 12 : 0)
+        + (priority.sources.has('news') ? 4 : 0);
+    case 'crossasset':
+      return (priority.sources.has('news') ? 8 : 0)
+        + (priority.sources.has('social') ? 4 : 0)
+        + (priority.sources.has('prediction') ? 4 : 0)
+        + (TOPIC_STABLE_ASSETS.has(symbol) ? 2 : 0);
+    default:
+      return 0;
+  }
+}
+
+function rankTopicAssetPool(
+  input: TopicDraftGenerationInput,
+  options: {
+    limit: number;
+    editorId?: TopicSpecialEditorId;
+    fallback: string[];
+  },
+): string[] {
+  const priorities = buildTopicAssetPriorities(input);
+  const candidateSymbols = dedupeStrings([
+    ...priorities.keys(),
+    ...collectNewsAssetSymbols(input.newsItems),
+    ...collectPerpAssetSymbols(input.perps),
+    ...collectPredictionAssetSymbols(input.predictions, input.marketAssets),
+    ...input.memeHeatItems.map((item) => normalizeAssetSymbol(item.symbol)).filter((value): value is string => Boolean(value)),
+    ...sanitizeAssetSymbols(input.defaultAssets),
+    ...sanitizeAssetSymbols(options.fallback),
+  ]);
+
+  const ranked = candidateSymbols
+    .map((symbol) => {
+      const priority = priorities.get(symbol);
+      const totalScore = (priority?.score ?? 0)
+        + ((priority?.sources.size ?? 0) * 3)
+        + getEditorAssetBoost(symbol, options.editorId ?? 'majors', priority)
+        + getTopicAssetPenalty(symbol);
+      return {
+        symbol,
+        totalScore,
+        sourceCount: priority?.sources.size ?? 0,
+      };
+    })
+    .sort((left, right) => right.totalScore - left.totalScore || right.sourceCount - left.sourceCount || left.symbol.localeCompare(right.symbol))
+    .map((item) => item.symbol);
+
+  return normalizeAssetSymbols(ranked, options.fallback).slice(0, options.limit);
+}
+
 function interleaveSymbolGroups(groups: string[][], limit: number): string[] {
   const queues = groups.map((group) => group.slice());
   const output: string[] = [];
@@ -2536,49 +3240,42 @@ function interleaveStringGroups(groups: string[][], limit: number): string[] {
 }
 
 function buildEditorCandidateAssets(editorId: TopicSpecialEditorId, input: TopicDraftGenerationInput): string[] {
-  const marketSymbols = input.marketAssets.slice(0, 12).map((asset) => asset.symbol);
-  const newsSymbols = collectNewsAssetSymbols(input.newsItems);
-  const perpSymbols = collectPerpAssetSymbols(
-    input.perps
-      .slice()
-      .sort((a, b) => Number(b.volume24h ?? 0) - Number(a.volume24h ?? 0))
-      .slice(0, 10),
-  );
-  const defaultSymbols = normalizeAssetSymbols(input.defaultAssets, []);
   switch (editorId) {
     case 'majors':
-      return normalizeAssetSymbols(
-        interleaveSymbolGroups(
-          [marketSymbols, newsSymbols, defaultSymbols, ['USDC', 'USDT', 'SOL', 'BNB', 'XRP']],
-          8,
-        ),
-        ['BTC', 'ETH', 'SOL', 'USDC', 'USDT'],
-      );
+      return rankTopicAssetPool(input, {
+        editorId,
+        limit: 10,
+        fallback: ['SOL', 'BNB', 'SUI', 'TON', 'XRP', 'BTC', 'ETH', 'USDC', 'USDT'],
+      });
     case 'meme':
-      return normalizeAssetSymbols(
-        input.memeHeatItems
-          .slice(0, 8)
-          .map((item) => item.symbol ?? item.name ?? ''),
-        ['DOGE', 'SHIB', 'PEPE', 'WIF', 'BONK'],
-      );
+      return rankTopicAssetPool(input, {
+        editorId,
+        limit: 10,
+        fallback: ['DOGE', 'PEPE', 'BONK', 'WIF', 'SHIB', 'FLOKI', 'BRETT'],
+      });
     case 'perps':
-      return normalizeAssetSymbols(
-        interleaveSymbolGroups(
-          [perpSymbols, marketSymbols, newsSymbols, ['SOL', 'DOGE', 'XRP', 'BNB']],
-          8,
-        ),
-        ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP'],
-      );
+      return rankTopicAssetPool(input, {
+        editorId,
+        limit: 10,
+        fallback: ['SOL', 'DOGE', 'XRP', 'BNB', 'SUI', 'TON', 'BTC', 'ETH'],
+      });
     case 'prediction':
-      return normalizeAssetSymbols(
-        interleaveSymbolGroups(
-          [newsSymbols, defaultSymbols, marketSymbols, ['USDC', 'TRUMP', 'SOL', 'ETH']],
-          8,
-        ),
-        ['BTC', 'ETH', 'SOL', 'USDC', 'TRUMP'],
-      );
+      return rankTopicAssetPool(input, {
+        editorId,
+        limit: 10,
+        fallback: ['USDC', 'TRUMP', 'SOL', 'BTC', 'ETH', 'SUI', 'TON'],
+      });
+    case 'crossasset':
+      return rankTopicAssetPool(input, {
+        editorId,
+        limit: 10,
+        fallback: ['BTC', 'ETH', 'SOL', 'USDC', 'XAU', 'OIL', 'SPY', 'QQQ'],
+      });
     default:
-      return normalizeAssetSymbols(input.defaultAssets, ['BTC', 'ETH', 'SOL', 'USDC']);
+      return rankTopicAssetPool(input, {
+        limit: 10,
+        fallback: ['SOL', 'BNB', 'SUI', 'TON', 'BTC', 'ETH', 'USDC'],
+      });
   }
 }
 
@@ -2598,6 +3295,7 @@ function buildTopicBeatResearchPacket(
   const memeKeywords = ['meme', 'memecoin', 'doge', 'dogecoin', 'shib', 'shiba', 'pepe', 'bonk', 'wif', 'pump'];
   const perpKeywords = ['perp', 'perpetual', 'futures', 'funding', 'basis', 'open interest', 'liquidation'];
   const predictionKeywords = ['polymarket', 'prediction', 'odds', 'election', 'approve', 'approval', 'cpi', 'fed', 'etf', 'bitcoin', 'ethereum', 'regulation', 'rate'];
+  const crossAssetKeywords = ['stocks', 'equities', 'nasdaq', 's&p', 'dow', 'gold', 'silver', 'oil', 'crude', 'copper', 'commodity', 'treasury', 'yields', 'dollar'];
 
   if (editorId === 'majors') {
     const newsItems = filterNewsItemsByKeywords(input.newsItems, majorKeywords).slice(0, newsLimit);
@@ -2658,6 +3356,44 @@ function buildTopicBeatResearchPacket(
       '',
       'Social detail:',
       formatBulletBlock(memeTweets.map((item) => formatTweetSignalLine(item)), '- No meme social signals available.'),
+    ].join('\n');
+  }
+
+  if (editorId === 'crossasset') {
+    const refs = filterLinesByKeywords(input.sourceRefs, crossAssetKeywords).slice(0, headlineLimit);
+    const newsItems = filterNewsItemsByKeywords(input.newsItems, crossAssetKeywords).slice(0, newsLimit);
+    const tweets = filterTweetsByKeywords(input.twitterItems, crossAssetKeywords).slice(0, socialLimit);
+    const spotAssets = input.marketAssets
+      .filter((asset) => candidateAssets.includes(asset.symbol))
+      .slice(0, marketLimit);
+    const perps = input.perps
+      .slice()
+      .sort((a, b) => Number(b.volume24h ?? 0) - Number(a.volume24h ?? 0))
+      .filter((item) => candidateAssets.includes(normalizePerpBaseSymbol(item.symbol) ?? ''))
+      .slice(0, 3);
+    const predictions = filterPredictionsByKeywords(input.predictions, [...crossAssetKeywords, 'fed', 'etf', 'cpi', 'rate']).slice(0, 3);
+    return [
+      `Current slot: ${input.slotKey}`,
+      '',
+      'Desk focus: stocks, commodities, yields, and how cross-asset moves are transmitting into crypto leadership and positioning.',
+      '',
+      'Headline tape:',
+      formatBulletBlock(refs.map((line) => truncateLine(line, 180)), '- No cross-asset headlines available.'),
+      '',
+      'News detail:',
+      formatBulletBlock(newsItems.map((item) => formatNewsSignalLine(item)), '- No stocks-or-commodities news signals available.'),
+      '',
+      'Social detail:',
+      formatBulletBlock(tweets.map((item) => formatTweetSignalLine(item)), '- No cross-asset social signals available.'),
+      '',
+      'Crypto sensitivity snapshot:',
+      formatBulletBlock(spotAssets.map((asset) => formatMarketSignalLine(asset)), '- No crypto sensitivity snapshot available.'),
+      '',
+      'Leverage context:',
+      formatBulletBlock(perps.map((item) => formatPerpSignalLine(item)), '- No cross-asset leverage context available.'),
+      '',
+      'Catalyst context:',
+      formatBulletBlock(predictions.map((item) => formatPredictionSignalLine(item)), '- No cross-asset catalyst context available.'),
     ].join('\n');
   }
 
@@ -3062,6 +3798,23 @@ function buildFallbackTopicDraftsForEditor(
           73,
         ),
       ];
+    case 'crossasset':
+      return [
+        createDraft(
+          'Stocks and Commodities Are Redrawing the Crypto Risk Map',
+          'The cleaner cross-asset read may now come from whether equities, yields, and commodities are reinforcing or fading the latest crypto rotation.',
+          ['stocks', 'equities', 'nasdaq', 'gold', 'oil', 'treasury', 'yields'],
+          ['BTC', 'ETH', 'SOL', 'XAU'],
+          81,
+        ),
+        createDraft(
+          'Gold, Oil, and Equity Leadership Are Starting to Matter Again',
+          'Crypto gets more actionable when moves in equities and commodities begin shaping which sectors absorb fresh risk first.',
+          ['gold', 'oil', 'stocks', 'commodities', 'nasdaq', 's&p', 'rotation'],
+          ['BTC', 'ETH', 'USDC', 'OIL'],
+          76,
+        ),
+      ];
     default:
       return [];
   }
@@ -3130,6 +3883,21 @@ function buildFallbackDeskFraming(editorId: TopicSpecialEditorId, relatedAssets:
         'Track whether event odds are leading headlines or merely echoing them.',
         'Check which assets and sectors are most exposed to the repricing.',
         'Be careful when the catalyst narrative expands faster than supporting evidence.',
+      ],
+    };
+  }
+  if (editorId === 'crossasset') {
+    return {
+      whyNow: 'The key is whether equities, commodities, and rates are reinforcing crypto risk appetite or quietly pulling it apart.',
+      contextHeading: 'Cross-Asset Context',
+      contextBody: `Stocks, commodities, and macro rates matter when they start changing the quality of crypto leadership rather than just the headline direction. In that setup, {primaryAssets} work as sensitivity gauges for a broader cross-asset regime shift.`,
+      bullish: 'equity and commodity leadership stays supportive long enough for {allAssets} to absorb fresh risk with better breadth',
+      neutral: 'cross-asset signals stay mixed, so crypto follows headlines without a clean regime confirmation',
+      risk: 'rates, equities, or commodities turn against the move and {allAssets} lose the macro tailwind that had been supporting them',
+      checklist: [
+        'Track whether equities, commodities, and yields are confirming the crypto move or diverging from it.',
+        'Watch which crypto sectors respond first when cross-asset leadership changes.',
+        'Avoid forcing a crypto-only conclusion when the cleaner signal is coming from the broader market.',
       ],
     };
   }
@@ -3226,23 +3994,30 @@ function buildSourceReferences(newsItems: NewsItem[], twitterItems: TweetItem[],
 function buildDefaultAssetPool(
   marketAssets: MarketTopAsset[],
   newsItems: NewsItem[],
+  twitterItems: TweetItem[],
   memeHeatItems: DexScreenerMemeHeatItem[],
   perps: TradeBrowseMarketItem[],
+  predictions: TradeBrowsePredictionItem[],
 ): string[] {
-  const marketSymbols = marketAssets
-    .map((asset) => normalizeAssetSymbol(asset.symbol))
-    .filter((value): value is string => Boolean(value))
-    .slice(0, 10);
-  const newsSymbols = collectNewsAssetSymbols(newsItems).slice(0, 8);
-  const memeSymbols = memeHeatItems
-    .map((item) => normalizeAssetSymbol(item.symbol))
-    .filter((value): value is string => Boolean(value))
-    .slice(0, 8);
-  const perpSymbols = collectPerpAssetSymbols(perps).slice(0, 8);
-  const deduped = interleaveSymbolGroups([marketSymbols, newsSymbols, memeSymbols, perpSymbols], 18)
-    .filter((item) => normalizeAssetSymbol(item) != null);
-  if (deduped.length >= 6) return deduped;
-  return dedupeStrings([...deduped, 'BTC', 'ETH', 'SOL', 'USDC', 'USDT', 'DOGE']);
+  return rankTopicAssetPool(
+    {
+      slotKey: '',
+      sourceRefs: [],
+      rssHeadlines: [],
+      defaultAssets: [],
+      newsItems,
+      twitterItems,
+      marketAssets,
+      memeHeatItems,
+      perps,
+      predictions,
+      existingTopicsToday: [],
+    },
+    {
+      limit: 22,
+      fallback: ['SOL', 'BNB', 'SUI', 'TON', 'DOGE', 'PEPE', 'BTC', 'ETH', 'USDC', 'USDT'],
+    },
+  );
 }
 
 type TopicRelatedRefCandidate = {
