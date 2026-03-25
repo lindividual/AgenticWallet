@@ -10,7 +10,6 @@ import {
   getWalletPortfolioSnapshots,
   type PortfolioSnapshotPeriod,
   type SimEvmBalance,
-  type TransferRecord,
   type WalletPortfolioResponse,
 } from '../../api';
 import { Modal } from '../modals/Modal';
@@ -784,7 +783,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
           supportedChains={transferSupportedChains}
           onBack={closeActiveModal}
           onClose={closeActiveModal}
-          onSubmitted={handleTransferSubmitted}
+          onCompleted={() => {
+            void refetch();
+          }}
           footerVisible={options.footerVisible}
           stageClassName={options.stageClassName}
         />
@@ -802,16 +803,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         stageClassName={options.stageClassName}
       />
     );
-  }
-
-  function handleTransferSubmitted(transfer: TransferRecord) {
-    console.log('[wallet-ui] transfer_submitted', {
-      id: transfer.id,
-      status: transfer.status,
-      txHash: transfer.txHash,
-      networkKey: transfer.networkKey,
-    });
-    void refetch();
   }
 
   function handleTradeSubmitted(result: { txHash: string; status: 'confirmed' | 'failed' | 'pending' }) {

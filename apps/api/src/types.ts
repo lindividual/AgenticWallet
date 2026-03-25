@@ -17,6 +17,8 @@ export type Bindings = {
   POLYGON_RPC_URL?: string;
   TRON_RPC_URL?: string;
   SOLANA_RPC_URL?: string;
+  BICONOMY_API_KEY?: string;
+  BICONOMY_API_BASE_URL?: string;
   BICONOMY_MEE_VERSION?: string;
   BICONOMY_BUNDLER_API_KEY?: string;
   BICONOMY_BUNDLER_URL?: string;
@@ -163,21 +165,23 @@ export type TransferSubmitRequest = TransferQuoteRequest & {
   idempotencyKey?: string;
 };
 
-export type CrossChainTransferSourceRequest = {
-  networkKey: WalletNetworkKey;
-  tokenAddress: string;
-  tokenSymbol?: string;
-  tokenDecimals?: number;
-};
+export type SupportedStablecoinSymbol = 'USDT' | 'USDC';
 
 export type CrossChainTransferQuoteRequest = {
   toAddress: string;
-  targetNetworkKey: WalletNetworkKey;
-  targetTokenAddress: string;
-  targetTokenSymbol?: string;
-  targetTokenDecimals?: number;
+  destinationNetworkKey: WalletNetworkKey;
+  destinationTokenSymbol: SupportedStablecoinSymbol;
   amount: string;
-  sources: CrossChainTransferSourceRequest[];
+  sourceNetworkKey?: WalletNetworkKey;
+};
+
+export type CrossChainTransferSourceOption = {
+  networkKey: WalletNetworkKey;
+  chainId: number;
+  tokenAddress: string;
+  tokenSymbol: SupportedStablecoinSymbol;
+  tokenDecimals: number;
+  availableAmountRaw: string;
 };
 
 export type CrossChainTransferLegQuote = {
@@ -206,17 +210,21 @@ export type CrossChainTransferLegQuote = {
 };
 
 export type CrossChainTransferQuoteResponse = {
+  executionMode: 'direct' | 'single_source_bridge' | 'multi_source_bridge' | 'insufficient_balance';
+  canSubmit: boolean;
   toAddress: string;
-  targetNetworkKey: WalletNetworkKey;
-  targetChainId: number;
-  targetTokenAddress: string;
-  targetTokenSymbol: string | null;
-  targetTokenDecimals: number;
+  destinationNetworkKey: WalletNetworkKey;
+  destinationChainId: number;
+  destinationTokenAddress: string;
+  destinationTokenSymbol: SupportedStablecoinSymbol;
+  destinationTokenDecimals: number;
   requestedAmountInput: string;
   requestedAmountRaw: string;
   estimatedReceivedAmountRaw: string;
-  fullyCovered: boolean;
   shortfallAmountRaw: string;
+  recommendedSourceNetworkKey: WalletNetworkKey | null;
+  selectedSourceNetworkKey: WalletNetworkKey | null;
+  availableSourceOptions: CrossChainTransferSourceOption[];
   legs: CrossChainTransferLegQuote[];
 };
 

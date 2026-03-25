@@ -364,7 +364,7 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
     () => new Map(supportedChains.map((item) => [item.networkKey, item.name] as const)),
     [supportedChains],
   );
-  const { data: portfolioData } = useQuery({
+  const { data: portfolioData, refetch: refetchPortfolio } = useQuery({
     queryKey: ['wallet-portfolio', walletFingerprint],
     queryFn: () => getWalletPortfolio(),
     enabled: Boolean(walletFingerprint),
@@ -840,8 +840,8 @@ export function WalletAssetDetailScreen({ auth, chain, contract, onBack, onOpenA
           supportedChains={transferSupportedChains}
           onBack={closeModal}
           onClose={closeModal}
-          onSubmitted={() => {
-            closeModal();
+          onCompleted={() => {
+            void refetchPortfolio();
           }}
           footerVisible={options.footerVisible}
           stageClassName={options.stageClassName}

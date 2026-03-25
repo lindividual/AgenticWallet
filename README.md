@@ -56,6 +56,8 @@ cp apps/webapp/.env.example apps/webapp/.env
   - `ARBITRUM_RPC_URL`
   - `OPTIMISM_RPC_URL`
   - `POLYGON_RPC_URL`
+  - `BICONOMY_API_KEY` (required for cross-chain stablecoin transfer quote/execute)
+  - `BICONOMY_API_BASE_URL` (optional, defaults to `https://api.biconomy.io`)
 - Optional LLM settings:
   - Direct Gemini call on Cloudflare AI Gateway:
     - `LLM_PROVIDER=gemini`

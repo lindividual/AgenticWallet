@@ -1,13 +1,13 @@
+import { createMeeClient } from '@biconomy/abstractjs';
 import {
-  createPublicClient,
   createWalletClient,
-  encodeFunctionData,
   formatUnits,
   http,
   isAddress,
   parseUnits,
   type Address,
   type Chain,
+  type Hash,
 } from 'viem';
 import { arbitrum, base, bsc, mainnet, optimism, polygon } from 'viem/chains';
 import type {
@@ -15,8 +15,10 @@ import type {
   CrossChainTransferLegQuote,
   CrossChainTransferQuoteRequest,
   CrossChainTransferQuoteResponse,
+  CrossChainTransferSourceOption,
   CrossChainTransferSubmitLegResult,
   CrossChainTransferSubmitResponse,
+  SupportedStablecoinSymbol,
 } from '../types';
 import { fetchWalletPortfolio } from './market';
 import { prepareTransfer, sendPreparedTransfer, waitForTransferReceipt } from './transfer';
@@ -31,136 +33,103 @@ import {
   ensureWalletForUser,
   getWalletChainAddress,
 } from './wallet';
+import {
+  buildStablecoinTransferPlan,
+  getStablecoinNetworkAsset,
+  type StablecoinBalance,
+  type StablecoinPlanSource,
+  type StablecoinTransferPlan,
+} from './stablecoinAbstraction';
+import { requiredEnv } from '../utils/env';
 
-const ERC20_ABI = [
-  {
-    type: 'function',
-    name: 'decimals',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ type: 'uint8' }],
-  },
-  {
-    type: 'function',
-    name: 'allowance',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'owner', type: 'address' },
-      { name: 'spender', type: 'address' },
-    ],
-    outputs: [{ type: 'uint256' }],
-  },
-  {
-    type: 'function',
-    name: 'approve',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'value', type: 'uint256' },
-    ],
-    outputs: [{ type: 'bool' }],
-  },
-] as const;
+const DEFAULT_CROSSCHAIN_SLIPPAGE = 0.01;
 
-type EvmPortfolioHolding = Awaited<ReturnType<typeof fetchWalletPortfolio>>['holdings'][number];
-
-type EvmChainRuntimeConfig = {
-  networkKey: string;
-  chain: Chain;
-  rpcUrl?: string;
+type BiconomyAuthorizationRequest = {
+  address: Address;
+  chainId: number;
+  nonce: number;
 };
 
-type LiFiGasCost = {
-  amountUSD?: string | number | null;
+type PlannedBridgeLeg = {
+  quote: CrossChainTransferLegQuote;
+  biconomyQuote: BiconomyQuoteResponse;
 };
 
-type LiFiFeeCost = {
-  amountUSD?: string | number | null;
+type PlannedDirectLeg = {
+  quote: CrossChainTransferLegQuote;
 };
 
-type LiFiQuoteResponse = {
-  tool?: string | null;
-  toolDetails?: {
-    name?: string | null;
-  };
-  action?: {
-    fromChainId?: number | string | null;
-    toChainId?: number | string | null;
-    fromToken?: {
-      address?: string | null;
-      symbol?: string | null;
-      decimals?: number | string | null;
-    };
-    toToken?: {
-      address?: string | null;
-      symbol?: string | null;
-      decimals?: number | string | null;
-    };
-    fromAmount?: string | null;
-    fromAddress?: string | null;
-    toAddress?: string | null;
-  };
-  estimate?: {
-    toAmount?: string | null;
-    toAmountMin?: string | null;
-    approvalAddress?: string | null;
-    gasCosts?: LiFiGasCost[] | null;
-    feeCosts?: LiFiFeeCost[] | null;
-    executionDuration?: number | string | null;
-  };
-  transactionRequest?: {
-    to?: string | null;
-    data?: string | null;
-    value?: string | null;
-    gasLimit?: string | null;
-    gasPrice?: string | null;
-    maxFeePerGas?: string | null;
-    maxPriorityFeePerGas?: string | null;
+type PlannedQuote = {
+  plan: StablecoinTransferPlan;
+  response: CrossChainTransferQuoteResponse;
+  directLeg: PlannedDirectLeg | null;
+  bridgeLeg: PlannedBridgeLeg | null;
+};
+
+type BiconomyRouteStep = {
+  type?: string | null;
+  protocol?: string | null;
+  sources?: string[] | null;
+};
+
+type BiconomyIntentResult = {
+  outputAmount?: string | null;
+  minOutputAmount?: string | null;
+  route?: {
+    summary?: string | null;
+    steps?: BiconomyRouteStep[] | null;
+    totalGasFeesUsd?: number | string | null;
+    totalBridgeFeesUsd?: number | string | null;
+    estimatedTime?: number | string | null;
   } | null;
 };
 
-type DirectPlanLeg = {
-  kind: 'direct';
-  quote: CrossChainTransferLegQuote;
+type BiconomyQuoteResponse = {
+  mode: 'eoa-7702';
+  ownerAddress: Address;
+  fee?: {
+    amount?: string | null;
+    token?: string | null;
+    chainId?: number | string | null;
+  } | null;
+  quoteType?: string | null;
+  quote?: Record<string, unknown> | null;
+  payloadToSign?: Array<Record<string, unknown>> | null;
+  returnedData?: BiconomyIntentResult[] | null;
 };
 
-type BridgePlanLeg = {
-  kind: 'bridge';
-  quote: CrossChainTransferLegQuote;
-  lifiQuote: LiFiQuoteResponse;
+type BiconomyExecuteResponse = {
+  success?: boolean;
+  supertxHash?: string | null;
+  error?: string | null;
 };
 
-type PlannedCrossChainTransfer = {
-  response: CrossChainTransferQuoteResponse;
-  legs: Array<DirectPlanLeg | BridgePlanLeg>;
+type BiconomyQuoteRequest = {
+  mode: 'eoa-7702';
+  ownerAddress: Address;
+  composeFlows: Array<{
+    type: '/instructions/intent-simple' | '/instructions/build';
+    data: Record<string, unknown>;
+    batch?: boolean;
+  }>;
+  feeToken?: {
+    address: Address;
+    chainId: number;
+  };
+  authorizations?: Array<Record<string, unknown>>;
+  simulate?: boolean;
 };
 
-type SourceCandidate = {
-  networkKey: string;
-  chainId: number;
-  tokenAddress: Address;
-  tokenSymbol: string | null;
-  tokenDecimals: number;
-  availableAmountRaw: bigint;
-  fromAddress: Address;
-  inputIndex: number;
+type BiconomyQuote412Response = {
+  authorizations?: BiconomyAuthorizationRequest[];
+  message?: string;
+  error?: string;
 };
 
 function normalizeText(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   return value ? value : null;
-}
-
-function normalizeFiniteNumber(raw: unknown): number | null {
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-function normalizePositiveInt(raw: unknown, fallback: number): number {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) return fallback;
-  return Math.trunc(value);
 }
 
 function parseBigintString(raw: string | null | undefined): bigint | null {
@@ -172,35 +141,6 @@ function parseBigintString(raw: string | null | undefined): bigint | null {
   }
 }
 
-function buildBridgeSendTransactionOverrides(request: NonNullable<LiFiQuoteResponse['transactionRequest']>):
-  | {
-    gas?: bigint;
-    gasPrice: bigint;
-  }
-  | {
-    gas?: bigint;
-    maxFeePerGas?: bigint;
-    maxPriorityFeePerGas?: bigint;
-  } {
-  const gas = parseBigintString(request.gasLimit) ?? undefined;
-  const gasPrice = parseBigintString(request.gasPrice) ?? undefined;
-  const maxFeePerGas = parseBigintString(request.maxFeePerGas) ?? undefined;
-  const maxPriorityFeePerGas = parseBigintString(request.maxPriorityFeePerGas) ?? undefined;
-
-  if (gasPrice !== undefined) {
-    return {
-      gas,
-      gasPrice,
-    };
-  }
-
-  return {
-    gas,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
-  };
-}
-
 function toAddressOrThrow(raw: string, field: string): Address {
   const normalized = raw.trim();
   if (!isAddress(normalized)) {
@@ -209,165 +149,281 @@ function toAddressOrThrow(raw: string, field: string): Address {
   return normalized;
 }
 
-function resolveEvmChainConfig(env: Bindings, networkKey: string): EvmChainRuntimeConfig {
+function convertAmountDecimals(value: bigint, fromDecimals: number, toDecimals: number): bigint {
+  if (fromDecimals === toDecimals) return value;
+  if (fromDecimals < toDecimals) {
+    return value * 10n ** BigInt(toDecimals - fromDecimals);
+  }
+  return value / 10n ** BigInt(fromDecimals - toDecimals);
+}
+
+function resolveEvmChainConfig(env: Bindings, networkKey: string): { chain: Chain; rpcUrl?: string } {
   if (networkKey === ETHEREUM_NETWORK_KEY) {
-    return { networkKey, chain: mainnet, rpcUrl: env.ETHEREUM_RPC_URL?.trim() || undefined };
+    return { chain: mainnet, rpcUrl: env.ETHEREUM_RPC_URL?.trim() || undefined };
   }
   if (networkKey === BASE_NETWORK_KEY) {
-    return { networkKey, chain: base, rpcUrl: env.BASE_RPC_URL?.trim() || undefined };
+    return { chain: base, rpcUrl: env.BASE_RPC_URL?.trim() || undefined };
   }
   if (networkKey === BNB_NETWORK_KEY) {
-    return { networkKey, chain: bsc, rpcUrl: env.BNB_RPC_URL?.trim() || undefined };
+    return { chain: bsc, rpcUrl: env.BNB_RPC_URL?.trim() || undefined };
   }
   if (networkKey === ARBITRUM_NETWORK_KEY) {
-    return { networkKey, chain: arbitrum, rpcUrl: env.ARBITRUM_RPC_URL?.trim() || undefined };
+    return { chain: arbitrum, rpcUrl: env.ARBITRUM_RPC_URL?.trim() || undefined };
   }
   if (networkKey === OPTIMISM_NETWORK_KEY) {
-    return { networkKey, chain: optimism, rpcUrl: env.OPTIMISM_RPC_URL?.trim() || undefined };
+    return { chain: optimism, rpcUrl: env.OPTIMISM_RPC_URL?.trim() || undefined };
   }
   if (networkKey === POLYGON_NETWORK_KEY) {
-    return { networkKey, chain: polygon, rpcUrl: env.POLYGON_RPC_URL?.trim() || undefined };
+    return { chain: polygon, rpcUrl: env.POLYGON_RPC_URL?.trim() || undefined };
   }
   throw new Error('unsupported_crosschain_network');
 }
 
-function getLiFiApiBaseUrl(env: Bindings): string {
-  return env.LIFI_API_BASE_URL?.trim() || 'https://li.quest';
+function getBiconomyApiBaseUrl(env: Bindings): string {
+  return env.BICONOMY_API_BASE_URL?.trim() || 'https://api.biconomy.io';
 }
 
-function resolveUsdTotal(items: Array<LiFiGasCost | LiFiFeeCost> | null | undefined): string | null {
-  const total = (items ?? []).reduce((acc, item) => acc + Number(item.amountUSD ?? 0), 0);
-  if (!Number.isFinite(total) || total <= 0) return null;
-  return total.toFixed(2);
+function resolveMeeSponsorshipEnabled(env: Bindings): boolean {
+  const raw = env.MEE_SPONSORSHIP_ENABLED?.trim().toLowerCase();
+  if (!raw) return false;
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return false;
 }
 
-async function getTokenDecimals(
-  env: Bindings,
-  networkKey: string,
-  tokenAddress: Address,
-): Promise<number> {
-  const { chain, rpcUrl } = resolveEvmChainConfig(env, networkKey);
-  const publicClient = createPublicClient({
-    chain,
-    transport: http(rpcUrl),
-  });
-  const decimals = await publicClient.readContract({
-    address: tokenAddress,
-    abi: ERC20_ABI,
-    functionName: 'decimals',
-    args: [],
-  });
-  return normalizePositiveInt(decimals, 18);
+function resolveMeeSimulationEnabled(env: Bindings): boolean {
+  const raw = env.MEE_ENABLE_SIMULATION?.trim().toLowerCase();
+  if (!raw) return true;
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return true;
 }
 
-async function fetchLiFiQuote(
-  env: Bindings,
-  input: {
-    fromChainId: number;
-    toChainId: number;
-    fromTokenAddress: Address;
-    toTokenAddress: Address;
-    fromAmountRaw: bigint;
-    fromAddress: Address;
-    toAddress: Address;
-  },
-): Promise<LiFiQuoteResponse> {
-  const url = new URL('/v1/quote', getLiFiApiBaseUrl(env));
-  url.searchParams.set('fromChain', String(input.fromChainId));
-  url.searchParams.set('toChain', String(input.toChainId));
-  url.searchParams.set('fromToken', input.fromTokenAddress);
-  url.searchParams.set('toToken', input.toTokenAddress);
-  url.searchParams.set('fromAmount', input.fromAmountRaw.toString());
-  url.searchParams.set('fromAddress', input.fromAddress);
-  url.searchParams.set('toAddress', input.toAddress);
-  url.searchParams.set('preset', 'stablecoin');
-  url.searchParams.set('order', 'CHEAPEST');
-  url.searchParams.set('integrator', 'agentic-wallet');
+function toSourceOption(source: StablecoinBalance): CrossChainTransferSourceOption {
+  return {
+    networkKey: source.networkKey,
+    chainId: source.chainId,
+    tokenAddress: source.tokenAddress,
+    tokenSymbol: source.symbol,
+    tokenDecimals: source.tokenDecimals,
+    availableAmountRaw: source.availableAmountRaw.toString(),
+  };
+}
 
-  const headers = new Headers({
+function buildBiconomyHeaders(env: Bindings): Headers {
+  const apiKey = requiredEnv(env.BICONOMY_API_KEY, 'BICONOMY_API_KEY');
+  return new Headers({
     Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'X-API-Key': apiKey,
   });
-  const apiKey = env.LIFI_API_KEY?.trim();
-  if (apiKey) {
-    headers.set('x-lifi-api-key', apiKey);
-  }
-
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers,
-  });
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 300);
-    throw new Error(`crosschain_quote_http_${response.status}:${detail}`);
-  }
-
-  const payload = (await response.json()) as LiFiQuoteResponse;
-  if (!payload.transactionRequest?.to || !payload.transactionRequest?.data) {
-    throw new Error('crosschain_quote_invalid_response');
-  }
-  if (!payload.action?.fromAmount || !payload.estimate?.toAmount) {
-    throw new Error('crosschain_quote_invalid_response');
-  }
-  return payload;
 }
 
-async function buildBridgePlanLeg(
-  env: Bindings,
-  params: {
-    candidate: SourceCandidate;
-    targetNetworkKey: string;
-    targetChainId: number;
-    targetTokenAddress: Address;
-    targetTokenSymbol: string | null;
-    targetTokenDecimals: number;
-    toAddress: Address;
-    requestedTargetAmountRaw: bigint;
-    desiredTargetAmountRaw: bigint;
-  },
-): Promise<BridgePlanLeg | null> {
-  const cache = new Map<string, LiFiQuoteResponse>();
+function buildBiconomyQuoteRequest(input: {
+  env: Bindings;
+  source: StablecoinPlanSource;
+  destinationTokenAddress: Address;
+  destinationChainId: number;
+  requestedAmountRaw: bigint;
+  toAddress: Address;
+  fromAmountRaw: bigint;
+}): BiconomyQuoteRequest {
+  const sponsorshipEnabled = resolveMeeSponsorshipEnabled(input.env);
+  return {
+    mode: 'eoa-7702',
+    ownerAddress: input.source.fromAddress,
+    ...(sponsorshipEnabled
+      ? {}
+      : {
+          feeToken: {
+            address: input.source.tokenAddress,
+            chainId: input.source.chainId,
+          },
+        }),
+    composeFlows: [
+      {
+        type: '/instructions/intent-simple',
+        data: {
+          srcChainId: input.source.chainId,
+          dstChainId: input.destinationChainId,
+          srcToken: input.source.tokenAddress,
+          dstToken: input.destinationTokenAddress,
+          amount: input.fromAmountRaw.toString(),
+          slippage: DEFAULT_CROSSCHAIN_SLIPPAGE,
+        },
+        batch: true,
+      },
+      {
+        type: '/instructions/build',
+        data: {
+          functionSignature: 'function transfer(address to, uint256 value)',
+          args: [
+            input.toAddress,
+            input.requestedAmountRaw.toString(),
+          ],
+          to: input.destinationTokenAddress,
+          chainId: input.destinationChainId,
+          value: '0',
+        },
+        batch: true,
+      },
+    ],
+    simulate: resolveMeeSimulationEnabled(input.env),
+  };
+}
 
-  const quoteForAmount = async (fromAmountRaw: bigint): Promise<LiFiQuoteResponse> => {
-    const cacheKey = fromAmountRaw.toString();
-    const cached = cache.get(cacheKey);
+async function fetchBiconomyQuoteRaw(
+  env: Bindings,
+  request: BiconomyQuoteRequest,
+): Promise<{
+  status: number;
+  payload: BiconomyQuoteResponse | BiconomyQuote412Response;
+}> {
+  const response = await fetch(new URL('/v1/quote', getBiconomyApiBaseUrl(env)).toString(), {
+    method: 'POST',
+    headers: buildBiconomyHeaders(env),
+    body: JSON.stringify(request),
+  });
+  const payload = await response.json() as unknown;
+  if (response.ok || response.status === 412) {
+    return {
+      status: response.status,
+      payload: payload as BiconomyQuoteResponse | BiconomyQuote412Response,
+    };
+  }
+
+  const detail = JSON.stringify(payload).slice(0, 300);
+  throw new Error(`crosschain_quote_http_${response.status}:${detail}`);
+}
+
+function extractBiconomyIntentResult(quote: BiconomyQuoteResponse): BiconomyIntentResult {
+  const result = quote.returnedData?.[0];
+  if (!result) {
+    throw new Error('crosschain_quote_invalid_response');
+  }
+  return result;
+}
+
+async function fetchBiconomyQuote(
+  env: Bindings,
+  walletClient: ReturnType<typeof createWalletClient>,
+  signerAddress: Address,
+  request: BiconomyQuoteRequest,
+): Promise<BiconomyQuoteResponse> {
+  let currentRequest = request;
+  let response = await fetchBiconomyQuoteRaw(env, currentRequest);
+
+  if (response.status === 412) {
+    const payload = response.payload as BiconomyQuote412Response;
+    const authorizations = Array.isArray(payload.authorizations) ? payload.authorizations : [];
+    if (authorizations.length === 0) {
+      throw new Error('crosschain_quote_invalid_response');
+    }
+
+    const signedAuthorizations = await Promise.all(
+      authorizations.map(async (item: BiconomyAuthorizationRequest) => {
+        const authorization = await walletClient.signAuthorization({
+          chainId: item.chainId,
+          address: item.address,
+          nonce: item.nonce,
+          account: signerAddress,
+        });
+        return {
+          ...authorization,
+          yParity: authorization.yParity,
+          v: authorization.v?.toString(),
+        };
+      }),
+    );
+
+    currentRequest = {
+      ...request,
+      authorizations: signedAuthorizations,
+    };
+    response = await fetchBiconomyQuoteRaw(env, currentRequest);
+  }
+
+  if (response.status !== 200) {
+    throw new Error('crosschain_quote_invalid_response');
+  }
+
+  const quote = response.payload as BiconomyQuoteResponse;
+  if (!quote.quote || !Array.isArray(quote.payloadToSign) || quote.payloadToSign.length === 0) {
+    throw new Error('crosschain_quote_invalid_response');
+  }
+  if (quote.quoteType !== 'simple') {
+    throw new Error(`unsupported_crosschain_quote_type_${quote.quoteType ?? 'unknown'}`);
+  }
+  extractBiconomyIntentResult(quote);
+  return quote;
+}
+
+async function buildSingleSourceBridgeLeg(
+  env: Bindings,
+  userId: string,
+  input: {
+    source: StablecoinPlanSource;
+    destinationNetworkKey: string;
+    destinationTokenSymbol: SupportedStablecoinSymbol;
+    requestedAmountRaw: bigint;
+    toAddress: Address;
+  },
+): Promise<PlannedBridgeLeg | null> {
+  const destination = getStablecoinNetworkAsset(input.destinationNetworkKey, input.destinationTokenSymbol);
+  if (!destination) {
+    throw new Error('unsupported_stablecoin_destination');
+  }
+
+  const source = input.source;
+  const clients = await buildBridgeExecutionClients(env, userId, source.networkKey);
+  const cache = new Map<string, BiconomyQuoteResponse>();
+
+  const quoteForAmount = async (fromAmountRaw: bigint): Promise<BiconomyQuoteResponse> => {
+    const key = fromAmountRaw.toString();
+    const cached = cache.get(key);
     if (cached) return cached;
-    const quote = await fetchLiFiQuote(env, {
-      fromChainId: params.candidate.chainId,
-      toChainId: params.targetChainId,
-      fromTokenAddress: params.candidate.tokenAddress,
-      toTokenAddress: params.targetTokenAddress,
+    const quote = await fetchBiconomyQuote(env, clients.walletClient, clients.signer.address, buildBiconomyQuoteRequest({
+      env,
+      source,
+      destinationTokenAddress: destination.tokenAddress,
+      destinationChainId: destination.chainId,
+      requestedAmountRaw: input.requestedAmountRaw,
+      toAddress: input.toAddress,
       fromAmountRaw,
-      fromAddress: params.candidate.fromAddress,
-      toAddress: params.toAddress,
-    });
-    cache.set(cacheKey, quote);
+    }));
+    cache.set(key, quote);
     return quote;
   };
 
-  const fullQuote = await quoteForAmount(params.candidate.availableAmountRaw);
-  const fullToAmountRaw = parseBigintString(fullQuote.estimate?.toAmount);
-  if (fullToAmountRaw === null || fullToAmountRaw <= 0n) {
+  const maxQuote = await quoteForAmount(source.selectedAmountRaw);
+  const maxIntent = extractBiconomyIntentResult(maxQuote);
+  const maxMinToAmountRaw = parseBigintString(maxIntent.minOutputAmount) ?? parseBigintString(maxIntent.outputAmount);
+  if (maxMinToAmountRaw === null || maxMinToAmountRaw < input.requestedAmountRaw) {
     return null;
   }
 
-  let selectedQuote = fullQuote;
-  if (fullToAmountRaw > params.desiredTargetAmountRaw) {
+  let selectedQuote = maxQuote;
+  let selectedFromAmountRaw = source.selectedAmountRaw;
+  if (maxMinToAmountRaw > input.requestedAmountRaw) {
     let low = 1n;
-    let high = params.candidate.availableAmountRaw;
-    let bestQuote = fullQuote;
+    let high = source.selectedAmountRaw;
+    let bestQuote = maxQuote;
+    let bestFromAmountRaw = source.selectedAmountRaw;
     let iterations = 0;
 
     while (low <= high && iterations < 16) {
       iterations += 1;
       const mid = (low + high) / 2n;
       const quote = await quoteForAmount(mid);
-      const toAmountRaw = parseBigintString(quote.estimate?.toAmount);
-      if (toAmountRaw === null || toAmountRaw <= 0n) {
+      const intent = extractBiconomyIntentResult(quote);
+      const minToAmountRaw = parseBigintString(intent.minOutputAmount) ?? parseBigintString(intent.outputAmount);
+      if (minToAmountRaw === null || minToAmountRaw <= 0n) {
         low = mid + 1n;
         continue;
       }
-      if (toAmountRaw >= params.desiredTargetAmountRaw) {
+      if (minToAmountRaw >= input.requestedAmountRaw) {
         bestQuote = quote;
+        bestFromAmountRaw = mid;
         high = mid - 1n;
       } else {
         low = mid + 1n;
@@ -375,237 +431,232 @@ async function buildBridgePlanLeg(
     }
 
     selectedQuote = bestQuote;
+    selectedFromAmountRaw = bestFromAmountRaw;
   }
 
-  const selectedFromAmountRaw = parseBigintString(selectedQuote.action?.fromAmount);
-  const selectedToAmountRaw = parseBigintString(selectedQuote.estimate?.toAmount);
-  if (selectedFromAmountRaw === null || selectedToAmountRaw === null || selectedFromAmountRaw <= 0n || selectedToAmountRaw <= 0n) {
+  const selectedIntent = extractBiconomyIntentResult(selectedQuote);
+  const selectedMinOutputRaw = parseBigintString(selectedIntent.minOutputAmount) ?? parseBigintString(selectedIntent.outputAmount);
+  if (selectedMinOutputRaw === null || selectedMinOutputRaw < input.requestedAmountRaw) {
     return null;
   }
-
-  const toAmountMinRaw = parseBigintString(selectedQuote.estimate?.toAmountMin);
-  const tool = normalizeText(selectedQuote.toolDetails?.name) ?? normalizeText(selectedQuote.tool) ?? null;
-  const quote: CrossChainTransferLegQuote = {
-    kind: 'bridge',
-    fromNetworkKey: params.candidate.networkKey,
-    fromChainId: params.candidate.chainId,
-    fromTokenAddress: params.candidate.tokenAddress,
-    fromTokenSymbol: params.candidate.tokenSymbol,
-    fromTokenDecimals: params.candidate.tokenDecimals,
-    fromAmountRaw: selectedFromAmountRaw.toString(),
-    fromAmountInput: formatUnits(selectedFromAmountRaw, params.candidate.tokenDecimals),
-    fromAddress: params.candidate.fromAddress,
-    toNetworkKey: params.targetNetworkKey,
-    toChainId: params.targetChainId,
-    toTokenAddress: params.targetTokenAddress,
-    toTokenSymbol: params.targetTokenSymbol,
-    toTokenDecimals: params.targetTokenDecimals,
-    toAmountRaw: selectedToAmountRaw.toString(),
-    toAmountMinRaw: toAmountMinRaw?.toString() ?? null,
-    recipientAddress: params.toAddress,
-    tool,
-    approvalAddress: normalizeText(selectedQuote.estimate?.approvalAddress),
-    estimatedDurationSeconds: normalizeFiniteNumber(selectedQuote.estimate?.executionDuration),
-    estimatedGasCostUsd: resolveUsdTotal(selectedQuote.estimate?.gasCosts),
-    estimatedFeeCostUsd: resolveUsdTotal(selectedQuote.estimate?.feeCosts),
-  };
+  const route = selectedIntent.route;
+  const routeSteps = route?.steps ?? [];
+  const tool =
+    normalizeText(route?.summary)
+    ?? normalizeText(routeSteps.map((step) => normalizeText(step.protocol)).filter((value): value is string => Boolean(value)).join(' -> '))
+    ?? 'biconomy';
 
   return {
-    kind: 'bridge',
-    quote,
-    lifiQuote: selectedQuote,
+    quote: {
+      kind: 'bridge',
+      fromNetworkKey: source.networkKey,
+      fromChainId: source.chainId,
+      fromTokenAddress: source.tokenAddress,
+      fromTokenSymbol: source.symbol,
+      fromTokenDecimals: source.tokenDecimals,
+      fromAmountRaw: selectedFromAmountRaw.toString(),
+      fromAmountInput: formatUnits(selectedFromAmountRaw, source.tokenDecimals),
+      fromAddress: source.fromAddress,
+      toNetworkKey: destination.networkKey,
+      toChainId: destination.chainId,
+      toTokenAddress: destination.tokenAddress,
+      toTokenSymbol: destination.symbol,
+      toTokenDecimals: destination.tokenDecimals,
+      toAmountRaw: input.requestedAmountRaw.toString(),
+      toAmountMinRaw: input.requestedAmountRaw.toString(),
+      recipientAddress: input.toAddress,
+      tool,
+      approvalAddress: null,
+      estimatedDurationSeconds: Number(route?.estimatedTime ?? 0) || null,
+      estimatedGasCostUsd: Number.isFinite(Number(route?.totalGasFeesUsd))
+        ? Number(route?.totalGasFeesUsd).toFixed(2)
+        : null,
+      estimatedFeeCostUsd: Number.isFinite(Number(route?.totalBridgeFeesUsd))
+        ? Number(route?.totalBridgeFeesUsd).toFixed(2)
+        : null,
+    },
+    biconomyQuote: selectedQuote,
   };
 }
 
-function buildDirectPlanLeg(
-  quote: CrossChainTransferLegQuote,
-): DirectPlanLeg {
-  return {
-    kind: 'direct',
-    quote,
-  };
-}
+async function buildAvailableStablecoinBalances(
+  env: Bindings,
+  userId: string,
+  symbol: SupportedStablecoinSymbol,
+): Promise<StablecoinBalance[]> {
+  const wallet = await ensureWalletForUser(env, userId);
+  const { holdings } = await fetchWalletPortfolio(env, wallet);
+  const output: StablecoinBalance[] = [];
 
-function sortCandidates(
-  candidates: SourceCandidate[],
-  targetNetworkKey: string,
-  targetTokenAddress: Address,
-): SourceCandidate[] {
-  return [...candidates].sort((left, right) => {
-    const leftIsDirect = left.networkKey === targetNetworkKey && left.tokenAddress.toLowerCase() === targetTokenAddress.toLowerCase();
-    const rightIsDirect = right.networkKey === targetNetworkKey && right.tokenAddress.toLowerCase() === targetTokenAddress.toLowerCase();
-    if (leftIsDirect !== rightIsDirect) {
-      return leftIsDirect ? -1 : 1;
+  for (const chainAccount of wallet.chainAccounts.filter((row) => row.protocol === 'evm')) {
+    const asset = getStablecoinNetworkAsset(chainAccount.networkKey, symbol);
+    if (!asset) continue;
+
+    const holding = holdings.find((item) =>
+      item.protocol === 'evm'
+      && item.network_key === chainAccount.networkKey
+      && normalizeText(item.address)?.toLowerCase() === asset.tokenAddress.toLowerCase(),
+    );
+    const availableAmountRaw = parseBigintString(normalizeText(holding?.amount) ?? '0') ?? 0n;
+    if (availableAmountRaw <= 0n) continue;
+
+    const fromAddress = getWalletChainAddress(wallet, chainAccount.networkKey);
+    if (!fromAddress || typeof fromAddress !== 'string' || !isAddress(fromAddress)) {
+      continue;
     }
-    return left.inputIndex - right.inputIndex;
-  });
+
+    output.push({
+      ...asset,
+      availableAmountRaw,
+      fromAddress: fromAddress as Address,
+    });
+  }
+
+  return output;
 }
 
-async function planCrossChainTransfer(
+function buildDirectLeg(plan: StablecoinTransferPlan, toAddress: Address): PlannedDirectLeg | null {
+  const source = plan.selectedSources[0];
+  if (!source) return null;
+
+  return {
+    quote: {
+      kind: 'direct',
+      fromNetworkKey: source.networkKey,
+      fromChainId: source.chainId,
+      fromTokenAddress: source.tokenAddress,
+      fromTokenSymbol: source.symbol,
+      fromTokenDecimals: source.tokenDecimals,
+      fromAmountRaw: source.selectedAmountRaw.toString(),
+      fromAmountInput: formatUnits(source.selectedAmountRaw, source.tokenDecimals),
+      fromAddress: source.fromAddress,
+      toNetworkKey: plan.destination.networkKey,
+      toChainId: plan.destination.chainId,
+      toTokenAddress: plan.destination.tokenAddress,
+      toTokenSymbol: plan.destination.symbol,
+      toTokenDecimals: plan.destination.tokenDecimals,
+      toAmountRaw: plan.requestedAmountRaw.toString(),
+      toAmountMinRaw: plan.requestedAmountRaw.toString(),
+      recipientAddress: toAddress,
+      tool: 'direct',
+      approvalAddress: null,
+      estimatedDurationSeconds: null,
+      estimatedGasCostUsd: null,
+      estimatedFeeCostUsd: null,
+    },
+  };
+}
+
+async function planQuote(
   env: Bindings,
   userId: string,
   input: CrossChainTransferQuoteRequest,
-): Promise<PlannedCrossChainTransfer> {
+): Promise<PlannedQuote> {
   const toAddress = toAddressOrThrow(input.toAddress, 'to_address');
-  const targetTokenAddress = toAddressOrThrow(input.targetTokenAddress, 'target_token_address');
-  const targetTokenSymbol = normalizeText(input.targetTokenSymbol)?.toUpperCase() ?? null;
-  const wallet = await ensureWalletForUser(env, userId);
-  const targetChain = resolveEvmChainConfig(env, input.targetNetworkKey);
-  const targetTokenDecimals = Number.isFinite(input.targetTokenDecimals)
-    ? Number(input.targetTokenDecimals)
-    : await getTokenDecimals(env, input.targetNetworkKey, targetTokenAddress);
+  const destination = getStablecoinNetworkAsset(input.destinationNetworkKey, input.destinationTokenSymbol);
+  if (!destination) {
+    throw new Error('unsupported_stablecoin_destination');
+  }
 
-  const requestedTargetAmountRaw = parseUnits(input.amount.trim(), targetTokenDecimals);
-  if (requestedTargetAmountRaw <= 0n) {
+  const requestedAmountRaw = parseUnits(input.amount.trim(), destination.tokenDecimals);
+  if (requestedAmountRaw <= 0n) {
     throw new Error('invalid_amount');
   }
 
-  if (!Array.isArray(input.sources) || input.sources.length === 0) {
-    throw new Error('invalid_crosschain_sources');
-  }
+  const availableSources = await buildAvailableStablecoinBalances(env, userId, input.destinationTokenSymbol);
+  const plan = buildStablecoinTransferPlan({
+    destinationNetworkKey: input.destinationNetworkKey,
+    destinationTokenSymbol: input.destinationTokenSymbol,
+    requestedAmountRaw,
+    availableSources,
+    sourceNetworkKey: input.sourceNetworkKey,
+  });
 
-  const { holdings } = await fetchWalletPortfolio(env, wallet);
-  const candidates: SourceCandidate[] = [];
+  let directLeg: PlannedDirectLeg | null = null;
+  let bridgeLeg: PlannedBridgeLeg | null = null;
+  let estimatedReceivedAmountRaw = plan.estimatedReceivedAmountRaw;
 
-  for (let index = 0; index < input.sources.length; index += 1) {
-    const source = input.sources[index];
-    const sourceChain = resolveEvmChainConfig(env, source.networkKey);
-    const sourceTokenAddress = toAddressOrThrow(source.tokenAddress, 'source_token_address');
-    const portfolioHolding = holdings.find((row) => {
-      if (row.protocol !== 'evm') return false;
-      if ((row.network_key ?? '').trim().toLowerCase() !== source.networkKey.trim().toLowerCase()) return false;
-      return normalizeText(row.address)?.toLowerCase() === sourceTokenAddress.toLowerCase();
-    });
-
-    const availableAmountRaw = parseBigintString(normalizeText(portfolioHolding?.amount) ?? '0') ?? 0n;
-    if (availableAmountRaw <= 0n) {
-      continue;
-    }
-
-    const fromAddress = getWalletChainAddress(wallet, source.networkKey);
-    if (!fromAddress || typeof fromAddress !== 'string' || !isAddress(fromAddress)) {
-      throw new Error('wallet_not_found');
-    }
-
-    const tokenDecimals = Number.isFinite(source.tokenDecimals)
-      ? Number(source.tokenDecimals)
-      : Number.isFinite(portfolioHolding?.decimals)
-        ? Number(portfolioHolding?.decimals)
-        : await getTokenDecimals(env, source.networkKey, sourceTokenAddress);
-
-    candidates.push({
-      networkKey: source.networkKey.trim().toLowerCase(),
-      chainId: sourceChain.chain.id,
-      tokenAddress: sourceTokenAddress,
-      tokenSymbol: normalizeText(source.tokenSymbol)?.toUpperCase() ?? normalizeText(portfolioHolding?.symbol)?.toUpperCase() ?? null,
-      tokenDecimals,
-      availableAmountRaw,
-      fromAddress: fromAddress as Address,
-      inputIndex: index,
-    });
-  }
-
-  if (!candidates.length) {
-    throw new Error('crosschain_source_balance_not_found');
-  }
-
-  const sortedCandidates = sortCandidates(candidates, input.targetNetworkKey, targetTokenAddress);
-  const plannedLegs: Array<DirectPlanLeg | BridgePlanLeg> = [];
-  let remainingTargetAmountRaw = requestedTargetAmountRaw;
-
-  for (const candidate of sortedCandidates) {
-    if (remainingTargetAmountRaw <= 0n) {
-      break;
-    }
-
-    const isDirect = candidate.networkKey === input.targetNetworkKey
-      && candidate.tokenAddress.toLowerCase() === targetTokenAddress.toLowerCase();
-
-    if (isDirect) {
-      const selectedFromAmountRaw = candidate.availableAmountRaw < remainingTargetAmountRaw
-        ? candidate.availableAmountRaw
-        : remainingTargetAmountRaw;
-      if (selectedFromAmountRaw <= 0n) {
-        continue;
-      }
-
-      const directQuote = await prepareTransfer(env, userId, {
-        networkKey: candidate.networkKey,
+  if (plan.executionMode === 'direct') {
+    directLeg = buildDirectLeg(plan, toAddress);
+  } else if (plan.executionMode === 'single_source_bridge') {
+    const source = plan.selectedSources[0];
+    if (source) {
+      bridgeLeg = await buildSingleSourceBridgeLeg(env, userId, {
+        source,
+        destinationNetworkKey: input.destinationNetworkKey,
+        destinationTokenSymbol: input.destinationTokenSymbol,
+        requestedAmountRaw,
         toAddress,
-        amount: formatUnits(selectedFromAmountRaw, candidate.tokenDecimals),
-        tokenAddress: candidate.tokenAddress,
-        tokenSymbol: candidate.tokenSymbol ?? targetTokenSymbol ?? undefined,
-        tokenDecimals: candidate.tokenDecimals,
       });
-
-      plannedLegs.push(buildDirectPlanLeg({
-        kind: 'direct',
-        fromNetworkKey: candidate.networkKey,
-        fromChainId: candidate.chainId,
-        fromTokenAddress: candidate.tokenAddress,
-        fromTokenSymbol: candidate.tokenSymbol,
-        fromTokenDecimals: candidate.tokenDecimals,
-        fromAmountRaw: selectedFromAmountRaw.toString(),
-        fromAmountInput: formatUnits(selectedFromAmountRaw, candidate.tokenDecimals),
-        fromAddress: candidate.fromAddress,
-        toNetworkKey: input.targetNetworkKey,
-        toChainId: targetChain.chain.id,
-        toTokenAddress: targetTokenAddress,
-        toTokenSymbol: targetTokenSymbol,
-        toTokenDecimals: targetTokenDecimals,
-        toAmountRaw: selectedFromAmountRaw.toString(),
-        toAmountMinRaw: selectedFromAmountRaw.toString(),
-        recipientAddress: toAddress,
-        tool: 'direct',
-        approvalAddress: null,
-        estimatedDurationSeconds: null,
-        estimatedGasCostUsd: null,
-        estimatedFeeCostUsd: directQuote.quote.estimatedFeeWei,
-      }));
-      remainingTargetAmountRaw -= selectedFromAmountRaw;
-      continue;
+      if (bridgeLeg) {
+        estimatedReceivedAmountRaw = BigInt(bridgeLeg.quote.toAmountRaw);
+      }
     }
-
-    const bridgeLeg = await buildBridgePlanLeg(env, {
-      candidate,
-      targetNetworkKey: input.targetNetworkKey,
-      targetChainId: targetChain.chain.id,
-      targetTokenAddress,
-      targetTokenSymbol,
-      targetTokenDecimals,
-      toAddress,
-      requestedTargetAmountRaw,
-      desiredTargetAmountRaw: remainingTargetAmountRaw,
-    });
-    if (!bridgeLeg) {
-      continue;
-    }
-
-    plannedLegs.push(bridgeLeg);
-    remainingTargetAmountRaw -= BigInt(bridgeLeg.quote.toAmountRaw);
   }
 
-  const estimatedReceivedAmountRaw = plannedLegs.reduce((total, leg) => total + BigInt(leg.quote.toAmountRaw), 0n);
-  const response: CrossChainTransferQuoteResponse = {
-    toAddress,
-    targetNetworkKey: input.targetNetworkKey,
-    targetChainId: targetChain.chain.id,
-    targetTokenAddress,
-    targetTokenSymbol,
-    targetTokenDecimals,
-    requestedAmountInput: input.amount.trim(),
-    requestedAmountRaw: requestedTargetAmountRaw.toString(),
-    estimatedReceivedAmountRaw: estimatedReceivedAmountRaw.toString(),
-    fullyCovered: estimatedReceivedAmountRaw >= requestedTargetAmountRaw,
-    shortfallAmountRaw: estimatedReceivedAmountRaw >= requestedTargetAmountRaw
-      ? '0'
-      : (requestedTargetAmountRaw - estimatedReceivedAmountRaw).toString(),
-    legs: plannedLegs.map((leg) => leg.quote),
-  };
+  const selectedSourceNetworkKey = plan.selectedSourceNetworkKey
+    ?? bridgeLeg?.quote.fromNetworkKey
+    ?? directLeg?.quote.fromNetworkKey
+    ?? null;
+  const shortfallAmountRaw = estimatedReceivedAmountRaw >= requestedAmountRaw ? 0n : requestedAmountRaw - estimatedReceivedAmountRaw;
 
   return {
-    response,
-    legs: plannedLegs,
+    plan: {
+      ...plan,
+      estimatedReceivedAmountRaw,
+      shortfallAmountRaw,
+    },
+    response: {
+      executionMode: plan.executionMode,
+      canSubmit: plan.executionMode === 'direct' || plan.executionMode === 'single_source_bridge',
+      toAddress,
+      destinationNetworkKey: destination.networkKey,
+      destinationChainId: destination.chainId,
+      destinationTokenAddress: destination.tokenAddress,
+      destinationTokenSymbol: destination.symbol,
+      destinationTokenDecimals: destination.tokenDecimals,
+      requestedAmountInput: input.amount.trim(),
+      requestedAmountRaw: requestedAmountRaw.toString(),
+      estimatedReceivedAmountRaw: estimatedReceivedAmountRaw.toString(),
+      shortfallAmountRaw: shortfallAmountRaw.toString(),
+      recommendedSourceNetworkKey: plan.recommendedSourceNetworkKey,
+      selectedSourceNetworkKey,
+      availableSourceOptions: plan.availableSources.map(toSourceOption),
+      legs: directLeg
+        ? [directLeg.quote]
+        : bridgeLeg
+          ? [bridgeLeg.quote]
+          : plan.selectedSources.map((source) => ({
+            kind: source.networkKey === destination.networkKey ? 'direct' : 'bridge',
+            fromNetworkKey: source.networkKey,
+            fromChainId: source.chainId,
+            fromTokenAddress: source.tokenAddress,
+            fromTokenSymbol: source.symbol,
+            fromTokenDecimals: source.tokenDecimals,
+            fromAmountRaw: source.selectedAmountRaw.toString(),
+            fromAmountInput: formatUnits(source.selectedAmountRaw, source.tokenDecimals),
+            fromAddress: source.fromAddress,
+            toNetworkKey: destination.networkKey,
+            toChainId: destination.chainId,
+            toTokenAddress: destination.tokenAddress,
+            toTokenSymbol: destination.symbol,
+            toTokenDecimals: destination.tokenDecimals,
+            toAmountRaw: convertAmountDecimals(
+              source.selectedAmountRaw,
+              source.tokenDecimals,
+              destination.tokenDecimals,
+            ).toString(),
+            toAmountMinRaw: null,
+            recipientAddress: toAddress,
+            tool: null,
+            approvalAddress: null,
+            estimatedDurationSeconds: null,
+            estimatedGasCostUsd: null,
+            estimatedFeeCostUsd: null,
+          })),
+    },
+    directLeg,
+    bridgeLeg,
   };
 }
 
@@ -614,102 +665,89 @@ export async function quoteCrossChainTransfer(
   userId: string,
   input: CrossChainTransferQuoteRequest,
 ): Promise<CrossChainTransferQuoteResponse> {
-  const planned = await planCrossChainTransfer(env, userId, input);
+  const planned = await planQuote(env, userId, input);
   return planned.response;
 }
 
 async function buildBridgeExecutionClients(env: Bindings, userId: string, networkKey: string) {
   const { chain, rpcUrl } = resolveEvmChainConfig(env, networkKey);
-  const { wallet, signer } = await buildEvmWalletExecutionContext(env, userId);
+  const { wallet, signer, account } = await buildEvmWalletExecutionContext(env, userId);
   const fromAddress = getWalletChainAddress(wallet, networkKey) ?? signer.address;
-  const publicClient = createPublicClient({
-    chain,
-    transport: http(rpcUrl),
-  });
   const walletClient = createWalletClient({
     account: signer,
     chain,
     transport: http(rpcUrl),
   });
+  const meeClient = await createMeeClient({ account });
   return {
-    chain,
     signer,
+    meeClient,
     fromAddress: fromAddress as Address,
-    publicClient,
     walletClient,
   };
 }
 
-async function executeBridgePlanLeg(
+async function executeBridgeLeg(
   env: Bindings,
   userId: string,
-  leg: BridgePlanLeg,
+  leg: PlannedBridgeLeg,
 ): Promise<CrossChainTransferSubmitLegResult> {
   const clients = await buildBridgeExecutionClients(env, userId, leg.quote.fromNetworkKey);
-  const approvalAddress = normalizeText(leg.quote.approvalAddress);
-  let approvalTxHash: string | null = null;
-
-  if (approvalAddress) {
-    const allowance = await clients.publicClient.readContract({
-      address: leg.quote.fromTokenAddress as Address,
-      abi: ERC20_ABI,
-      functionName: 'allowance',
-      args: [clients.fromAddress, approvalAddress as Address],
-    });
-
-    if (allowance < BigInt(leg.quote.fromAmountRaw)) {
-      approvalTxHash = await clients.walletClient.sendTransaction({
-        account: clients.signer,
-        to: leg.quote.fromTokenAddress as Address,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: 'approve',
-          args: [approvalAddress as Address, BigInt(leg.quote.fromAmountRaw)],
-        }),
-      });
-
-      await clients.publicClient.waitForTransactionReceipt({
-        hash: approvalTxHash as `0x${string}`,
-        confirmations: 1,
-        timeout: 120_000,
-      });
-    }
-  }
-
-  const request = leg.lifiQuote.transactionRequest;
-  if (!request?.to || !request.data) {
+  const payloads = leg.biconomyQuote.payloadToSign;
+  if (!Array.isArray(payloads) || payloads.length === 0) {
     throw new Error('crosschain_quote_invalid_response');
   }
 
-  const feeOverrides = buildBridgeSendTransactionOverrides(request);
-  const transactionBase = {
-    account: clients.signer,
-    to: request.to as Address,
-    value: parseBigintString(request.value) ?? 0n,
-    data: request.data as `0x${string}`,
-  };
-  const txHash = 'gasPrice' in feeOverrides
-    ? await clients.walletClient.sendTransaction({
-      ...transactionBase,
-      gas: feeOverrides.gas,
-      gasPrice: feeOverrides.gasPrice,
-    })
-    : await clients.walletClient.sendTransaction({
-      ...transactionBase,
-      gas: feeOverrides.gas,
-      maxFeePerGas: feeOverrides.maxFeePerGas,
-      maxPriorityFeePerGas: feeOverrides.maxPriorityFeePerGas,
-    });
+  const signedPayloads = await Promise.all(
+    payloads.map(async (payload) => {
+      const message = typeof payload.message === 'string'
+        ? payload.message
+        : typeof payload.signablePayload === 'object' && payload.signablePayload !== null && typeof (payload.signablePayload as { message?: unknown }).message === 'string'
+          ? (payload.signablePayload as { message: string }).message
+          : null;
+      if (!message) {
+        throw new Error('crosschain_quote_invalid_response');
+      }
+      const signature = await clients.walletClient.signMessage({
+        account: clients.signer,
+        message,
+      });
+      return {
+        ...payload,
+        signature,
+      };
+    }),
+  );
+
+  const executeResponse = await fetch(new URL('/v1/execute', getBiconomyApiBaseUrl(env)).toString(), {
+    method: 'POST',
+    headers: buildBiconomyHeaders(env),
+    body: JSON.stringify({
+      ...leg.biconomyQuote,
+      payloadToSign: signedPayloads,
+    }),
+  });
+  const executePayload = await executeResponse.json() as BiconomyExecuteResponse;
+  if (!executeResponse.ok) {
+    const detail = JSON.stringify(executePayload).slice(0, 300);
+    throw new Error(`crosschain_execute_http_${executeResponse.status}:${detail}`);
+  }
+  if (!executePayload.success || !executePayload.supertxHash) {
+    throw new Error(`crosschain_execute_failed:${executePayload.error ?? 'unknown_error'}`);
+  }
 
   let sourceStatus: CrossChainTransferSubmitLegResult['sourceStatus'] = 'submitted';
   try {
-    const receipt = await clients.publicClient.waitForTransactionReceipt({
-      hash: txHash as `0x${string}`,
-      confirmations: 1,
-      timeout: 120_000,
+    const receipt = await clients.meeClient.waitForSupertransactionReceipt({
+      hash: executePayload.supertxHash as Hash,
     });
-    sourceStatus = receipt.status === 'success' ? 'confirmed' : 'failed';
+    if (receipt.transactionStatus === 'SUCCESS' || receipt.transactionStatus === 'MINED_SUCCESS') {
+      sourceStatus = 'confirmed';
+    } else if (receipt.transactionStatus === 'FAILED' || receipt.transactionStatus === 'MINED_FAIL') {
+      sourceStatus = 'failed';
+    } else {
+      sourceStatus = 'pending';
+    }
   } catch {
     sourceStatus = 'pending';
   }
@@ -717,8 +755,8 @@ async function executeBridgePlanLeg(
   return {
     kind: 'bridge',
     fromNetworkKey: leg.quote.fromNetworkKey,
-    txHash,
-    approvalTxHash,
+    txHash: executePayload.supertxHash,
+    approvalTxHash: null,
     sourceStatus,
     tool: leg.quote.tool,
   };
@@ -729,49 +767,52 @@ export async function submitCrossChainTransfer(
   userId: string,
   input: CrossChainTransferQuoteRequest,
 ): Promise<CrossChainTransferSubmitResponse> {
-  const planned = await planCrossChainTransfer(env, userId, input);
+  const planned = await planQuote(env, userId, input);
+
+  if (planned.plan.executionMode === 'insufficient_balance') {
+    throw new Error('insufficient_balance');
+  }
+  if (planned.plan.executionMode === 'multi_source_bridge') {
+    throw new Error('multi_source_bridge_not_supported_yet');
+  }
+
   const results: CrossChainTransferSubmitLegResult[] = [];
 
-  for (const leg of planned.legs) {
-    if (leg.kind === 'direct') {
-      const prepared = await prepareTransfer(env, userId, {
-        networkKey: leg.quote.fromNetworkKey,
-        toAddress: leg.quote.recipientAddress,
-        amount: leg.quote.fromAmountInput,
-        tokenAddress: leg.quote.fromTokenAddress,
-        tokenSymbol: leg.quote.fromTokenSymbol ?? undefined,
-        tokenDecimals: leg.quote.fromTokenDecimals,
-      });
-      const txHash = await sendPreparedTransfer(prepared);
-      const status = await waitForTransferReceipt(prepared, txHash);
-      results.push({
-        kind: 'direct',
-        fromNetworkKey: leg.quote.fromNetworkKey,
-        txHash,
-        approvalTxHash: null,
-        sourceStatus: status,
-        tool: 'direct',
-      });
-      continue;
-    }
-
-    results.push(await executeBridgePlanLeg(env, userId, leg));
+  if (planned.directLeg) {
+    const prepared = await prepareTransfer(env, userId, {
+      networkKey: planned.directLeg.quote.fromNetworkKey,
+      toAddress: planned.directLeg.quote.recipientAddress,
+      amount: planned.directLeg.quote.fromAmountInput,
+      tokenAddress: planned.directLeg.quote.fromTokenAddress,
+      tokenSymbol: planned.directLeg.quote.fromTokenSymbol ?? undefined,
+      tokenDecimals: planned.directLeg.quote.fromTokenDecimals,
+    });
+    const txHash = await sendPreparedTransfer(prepared);
+    const status = await waitForTransferReceipt(prepared, txHash);
+    results.push({
+      kind: 'direct',
+      fromNetworkKey: planned.directLeg.quote.fromNetworkKey,
+      txHash,
+      approvalTxHash: null,
+      sourceStatus: status,
+      tool: 'direct',
+    });
+  } else if (planned.bridgeLeg) {
+    results.push(await executeBridgeLeg(env, userId, planned.bridgeLeg));
   }
 
   const hasFailure = results.some((item) => item.sourceStatus === 'failed');
   const hasPending = results.some((item) => item.sourceStatus === 'pending' || item.sourceStatus === 'submitted');
   const hasBridge = results.some((item) => item.kind === 'bridge');
 
-  const status: CrossChainTransferSubmitResponse['status'] = hasFailure
-    ? 'failed'
-    : hasPending
-      ? 'pending'
-      : hasBridge
-        ? 'submitted'
-        : 'confirmed';
-
   return {
-    status,
+    status: hasFailure
+      ? 'failed'
+      : hasPending
+        ? 'pending'
+        : hasBridge
+          ? 'submitted'
+          : 'confirmed',
     quote: planned.response,
     legs: results,
   };

@@ -350,6 +350,84 @@ export type TransferRecord = {
   confirmedAt: string | null;
 };
 
+export type SupportedStablecoinSymbol = 'USDT' | 'USDC';
+
+export type CrossChainTransferQuoteRequest = {
+  toAddress: string;
+  destinationNetworkKey: string;
+  destinationTokenSymbol: SupportedStablecoinSymbol;
+  amount: string;
+  sourceNetworkKey?: string;
+};
+
+export type CrossChainTransferSourceOption = {
+  networkKey: string;
+  chainId: number;
+  tokenAddress: string;
+  tokenSymbol: SupportedStablecoinSymbol;
+  tokenDecimals: number;
+  availableAmountRaw: string;
+};
+
+export type CrossChainTransferLegQuote = {
+  kind: 'direct' | 'bridge';
+  fromNetworkKey: string;
+  fromChainId: number;
+  fromTokenAddress: string;
+  fromTokenSymbol: string | null;
+  fromTokenDecimals: number;
+  fromAmountRaw: string;
+  fromAmountInput: string;
+  fromAddress: string;
+  toNetworkKey: string;
+  toChainId: number;
+  toTokenAddress: string;
+  toTokenSymbol: string | null;
+  toTokenDecimals: number;
+  toAmountRaw: string;
+  toAmountMinRaw: string | null;
+  recipientAddress: string;
+  tool: string | null;
+  approvalAddress: string | null;
+  estimatedDurationSeconds: number | null;
+  estimatedGasCostUsd: string | null;
+  estimatedFeeCostUsd: string | null;
+};
+
+export type CrossChainTransferQuoteResponse = {
+  executionMode: 'direct' | 'single_source_bridge' | 'multi_source_bridge' | 'insufficient_balance';
+  canSubmit: boolean;
+  toAddress: string;
+  destinationNetworkKey: string;
+  destinationChainId: number;
+  destinationTokenAddress: string;
+  destinationTokenSymbol: SupportedStablecoinSymbol;
+  destinationTokenDecimals: number;
+  requestedAmountInput: string;
+  requestedAmountRaw: string;
+  estimatedReceivedAmountRaw: string;
+  shortfallAmountRaw: string;
+  recommendedSourceNetworkKey: string | null;
+  selectedSourceNetworkKey: string | null;
+  availableSourceOptions: CrossChainTransferSourceOption[];
+  legs: CrossChainTransferLegQuote[];
+};
+
+export type CrossChainTransferSubmitLegResult = {
+  kind: 'direct' | 'bridge';
+  fromNetworkKey: string;
+  txHash: string;
+  approvalTxHash: string | null;
+  sourceStatus: 'confirmed' | 'failed' | 'pending' | 'submitted';
+  tool: string | null;
+};
+
+export type CrossChainTransferSubmitResponse = {
+  status: 'confirmed' | 'failed' | 'pending' | 'submitted';
+  quote: CrossChainTransferQuoteResponse;
+  legs: CrossChainTransferSubmitLegResult[];
+};
+
 export type TradeQuoteRequest = {
   networkKey: string;
   sellTokenAddress: string;
@@ -785,6 +863,18 @@ export async function submitTransfer(
   request: TransferQuoteRequest & { idempotencyKey?: string },
 ): Promise<{ transfer: TransferRecord; deduped: boolean }> {
   return postJson<{ transfer: TransferRecord; deduped: boolean }>('/v1/transfer/submit', request, true);
+}
+
+export async function quoteCrossChainTransfer(
+  request: CrossChainTransferQuoteRequest,
+): Promise<CrossChainTransferQuoteResponse> {
+  return postJson<CrossChainTransferQuoteResponse>('/v1/crosschain-transfer/quote', request, true);
+}
+
+export async function submitCrossChainTransfer(
+  request: CrossChainTransferQuoteRequest,
+): Promise<CrossChainTransferSubmitResponse> {
+  return postJson<CrossChainTransferSubmitResponse>('/v1/crosschain-transfer/submit', request, true);
 }
 
 export async function quoteTrade(request: TradeQuoteRequest): Promise<TradeQuoteResponse> {

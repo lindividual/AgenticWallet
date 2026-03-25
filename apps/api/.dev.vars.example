@@ -9,6 +9,10 @@ ARBITRUM_RPC_URL=https://arb-mainnet.g.alchemy.com/v2/replace
 OPTIMISM_RPC_URL=https://opt-mainnet.g.alchemy.com/v2/replace
 POLYGON_RPC_URL=https://polygon-mainnet.g.alchemy.com/v2/replace
 TRON_RPC_URL=https://api.trongrid.io
+# Required for Biconomy Supertransaction API-backed cross-chain stablecoin transfers
+BICONOMY_API_KEY=
+# Optional Biconomy API override (defaults to https://api.biconomy.io)
+BICONOMY_API_BASE_URL=
 # Optional, defaults to 2.2.1 for broad chain compatibility
 BICONOMY_MEE_VERSION=2.2.1
 # Optional, used by abstractjs Nexus client (bundler URL can also be provided directly)
