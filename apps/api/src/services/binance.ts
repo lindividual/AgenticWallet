@@ -8,21 +8,25 @@ const BINANCE_WEB3_TOKEN_META_URL = `${BINANCE_WEB3_BASE}/bapi/defi/v1/public/wa
 const BINANCE_WEB3_TOKEN_DYNAMIC_URL = `${BINANCE_WEB3_BASE}/bapi/defi/v4/public/wallet-direct/buw/wallet/market/token/dynamic/info`;
 const BINANCE_WEB3_KLINE_URL = 'https://dquery.sintral.io/u-kline/v1/k-line/candles';
 const BINANCE_CHAIN_ID_TO_MARKET_CHAIN: Record<string, string> = {
+  CT_0: 'btc',
   '1': 'eth',
   '56': 'bnb',
   '8453': 'base',
   '42161': 'arbitrum',
   '10': 'optimism',
   '137': 'matic',
+  CT_195: 'tron',
   CT_501: 'sol',
 };
 const MARKET_CHAIN_TO_BINANCE_CHAIN_ID: Record<string, string> = {
+  btc: 'CT_0',
   eth: '1',
   bnb: '56',
   base: '8453',
   arbitrum: '42161',
   optimism: '10',
   matic: '137',
+  tron: 'CT_195',
   sol: 'CT_501',
 };
 const MARKET_CHAIN_TO_BINANCE_KLINE_PLATFORM: Record<string, string> = {

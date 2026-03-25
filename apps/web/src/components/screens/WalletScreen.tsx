@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
 import type { LivelinePoint } from 'liveline';
-import { ChevronDown, ChevronUp, Funnel, Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, Funnel, Plus } from 'lucide-react';
 import {
   activatePredictionAccount,
   getAppConfig,
@@ -308,6 +308,7 @@ function AccountIntroBlock({
       <p className="m-0 flex-1 text-base leading-7 text-base-content/80">
         {text}
       </p>
+      <ChevronRight className="h-4 w-4 shrink-0 text-base-content/35" aria-hidden="true" />
     </div>
   );
 }
