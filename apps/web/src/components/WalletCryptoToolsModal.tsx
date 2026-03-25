@@ -50,6 +50,7 @@ export function WalletCryptoToolsModal({
 }: WalletCryptoToolsModalProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess } = useToast();
+  const [filterPanel, setFilterPanel] = useState<'main' | 'chain'>('main');
   const [addMode, setAddMode] = useState<'search' | 'manual'>('search');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<MarketSearchResult[]>([]);
@@ -82,6 +83,7 @@ export function WalletCryptoToolsModal({
 
   useEffect(() => {
     if (!visible) {
+      setFilterPanel('main');
       setQuery('');
       setResults([]);
       setIsSearching(false);
@@ -206,13 +208,35 @@ export function WalletCryptoToolsModal({
     <Modal visible originRect={null} onClose={onClose}>
       <div className="flex min-h-0 flex-1 flex-col">
         <header className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="m-0 text-lg font-semibold">
-              {mode === 'filter' ? t('wallet.cryptoManageFilterTitle') : t('wallet.cryptoManageAddTitle')}
-            </h3>
-            <p className="m-0 mt-1 text-sm text-base-content/60">
-              {mode === 'filter' ? t('wallet.cryptoManageFilterHint') : t('wallet.cryptoManageAddHint')}
-            </p>
+          <div className="flex items-start gap-3">
+            {mode === 'filter' && filterPanel === 'chain' ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm -ml-2 mt-0.5 px-2"
+                onClick={() => setFilterPanel('main')}
+                aria-label={t('wallet.back')}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+              </button>
+            ) : null}
+            <div>
+              <h3 className="m-0 text-lg font-semibold">
+                {mode === 'filter'
+                  ? filterPanel === 'chain'
+                    ? t('wallet.cryptoManageChainTitle')
+                    : t('wallet.cryptoManageFilterTitle')
+                  : t('wallet.cryptoManageAddTitle')}
+              </h3>
+              <p className="m-0 mt-1 text-sm text-base-content/60">
+                {mode === 'filter'
+                  ? filterPanel === 'chain'
+                    ? t('wallet.cryptoManageChainHint')
+                    : t('wallet.cryptoManageFilterHint')
+                  : t('wallet.cryptoManageAddHint')}
+              </p>
+            </div>
           </div>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
             {t('common.close')}
@@ -220,47 +244,96 @@ export function WalletCryptoToolsModal({
         </header>
 
         {mode === 'filter' ? (
-          <div className="mt-6 flex flex-1 flex-col gap-5 overflow-y-auto">
-            <section className="rounded-3xl border border-base-300 bg-base-100 p-4">
-              <p className="m-0 text-sm font-semibold text-base-content">{t('wallet.cryptoManageNetwork')}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
+          filterPanel === 'chain' ? (
+            <div className="mt-6 flex flex-1 flex-col overflow-y-auto">
+              <div className="overflow-hidden rounded-3xl border border-base-300 bg-base-100">
                 <button
                   type="button"
-                  className={`btn btn-sm border-0 ${currentFilterState.networkKey ? 'btn-ghost' : 'btn-primary'}`}
-                  onClick={() => onFilterChange({ ...currentFilterState, networkKey: '' })}
+                  className={`flex w-full items-center justify-between border-b border-base-300 px-4 py-4 text-left transition-colors hover:bg-base-200/60 ${!currentFilterState.networkKey ? 'text-primary' : ''}`}
+                  onClick={() => {
+                    onFilterChange({ ...currentFilterState, networkKey: '' });
+                    setFilterPanel('main');
+                  }}
                 >
-                  {t('wallet.cryptoManageAllNetworks')}
+                  <span className="text-sm font-semibold">{t('wallet.cryptoManageAllChains')}</span>
+                  {!currentFilterState.networkKey ? (
+                    <span aria-hidden="true">✓</span>
+                  ) : null}
                 </button>
-                {supportedSpotChains.map((chain) => (
-                  <button
-                    key={chain.networkKey}
-                    type="button"
-                    className={`btn btn-sm border-0 ${currentFilterState.networkKey === chain.networkKey ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => onFilterChange({ ...currentFilterState, networkKey: chain.networkKey })}
-                  >
-                    {chain.name}
-                  </button>
-                ))}
+                {supportedSpotChains.map((chain, index) => {
+                  const isActive = currentFilterState.networkKey === chain.networkKey;
+                  return (
+                    <button
+                      key={chain.networkKey}
+                      type="button"
+                      className={`flex w-full items-center justify-between px-4 py-4 text-left transition-colors hover:bg-base-200/60 ${index < supportedSpotChains.length - 1 ? 'border-b border-base-300' : ''} ${isActive ? 'text-primary' : ''}`}
+                      onClick={() => {
+                        onFilterChange({ ...currentFilterState, networkKey: chain.networkKey });
+                        setFilterPanel('main');
+                      }}
+                    >
+                      <span className="text-sm font-semibold">{chain.name}</span>
+                      {isActive ? <span aria-hidden="true">✓</span> : null}
+                    </button>
+                  );
+                })}
               </div>
-            </section>
+            </div>
+          ) : (
+            <div className="mt-6 flex flex-1 flex-col gap-4 overflow-y-auto">
+              <section className="rounded-3xl border border-base-300 bg-base-100 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="m-0 text-sm font-semibold text-base-content">{t('wallet.cryptoManageHideSmall')}</p>
+                    <p className="m-0 mt-1 text-sm text-base-content/60">
+                      {t('wallet.cryptoManageHideSmallHint', { amount: '$1' })}
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="toggle toggle-primary mt-1"
+                    checked={currentFilterState.hideSmallBalances}
+                    onChange={(event) => onFilterChange({ ...currentFilterState, hideSmallBalances: event.target.checked })}
+                  />
+                </div>
+              </section>
 
-            <section className="rounded-3xl border border-base-300 bg-base-100 p-4">
-              <div className="flex items-start justify-between gap-3">
+              <section className="rounded-3xl border border-base-300 bg-base-100 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="m-0 text-sm font-semibold text-base-content">{t('wallet.cryptoManageHideHighRisk')}</p>
+                    <p className="m-0 mt-1 text-sm text-base-content/60">
+                      {t('wallet.cryptoManageHideHighRiskHint')}
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="toggle toggle-primary mt-1"
+                    checked={currentFilterState.hideHighRisk}
+                    onChange={(event) => onFilterChange({ ...currentFilterState, hideHighRisk: event.target.checked })}
+                  />
+                </div>
+              </section>
+
+              <button
+                type="button"
+                className="flex items-center justify-between rounded-3xl border border-base-300 bg-base-100 px-4 py-4 text-left transition-colors hover:bg-base-200/60"
+                onClick={() => setFilterPanel('chain')}
+              >
                 <div>
-                  <p className="m-0 text-sm font-semibold text-base-content">{t('wallet.cryptoManageHideSmall')}</p>
+                  <p className="m-0 text-sm font-semibold text-base-content">{t('wallet.cryptoManageChainLabel')}</p>
                   <p className="m-0 mt-1 text-sm text-base-content/60">
-                    {t('wallet.cryptoManageHideSmallHint', { amount: '$1' })}
+                    {currentFilterState.networkKey
+                      ? supportedSpotChains.find((chain) => chain.networkKey === currentFilterState.networkKey)?.name ?? currentFilterState.networkKey
+                      : t('wallet.cryptoManageAllChains')}
                   </p>
                 </div>
-                <input
-                  type="checkbox"
-                  className="toggle toggle-primary mt-1"
-                  checked={currentFilterState.hideSmallBalances}
-                  onChange={(event) => onFilterChange({ ...currentFilterState, hideSmallBalances: event.target.checked })}
-                />
-              </div>
-            </section>
-          </div>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-5 w-5 text-base-content/45" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 6l6 6-6 6" />
+                </svg>
+              </button>
+            </div>
+          )
         ) : (
           <div className="mt-6 flex min-h-0 flex-1 flex-col">
             <div className="flex gap-2">

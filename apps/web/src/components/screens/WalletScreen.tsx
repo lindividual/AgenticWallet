@@ -7,10 +7,12 @@ import {
   activatePredictionAccount,
   getAppConfig,
   getCoinDetailsBatch,
+  getTokenSecurityAudit,
   getWalletPortfolio,
   getWalletPortfolioSnapshots,
   type PortfolioSnapshotPeriod,
   type SimEvmBalance,
+  type TokenSecurityAudit,
   type WalletPortfolioResponse,
 } from '../../api';
 import { Modal } from '../modals/Modal';
@@ -199,6 +201,8 @@ const STABLE_ASSET_IDS = new Set(['coingecko:usd-coin', 'coingecko:tether']);
 const STABLE_SYMBOLS = new Set(['USDC', 'USDT']);
 const PRICE_CHANGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PRICE_CHANGE_FAILED_CACHE_TTL_MS = 60 * 1000;
+const SECURITY_AUDIT_CACHE_TTL_MS = 10 * 60 * 1000;
+const SECURITY_AUDIT_FAILED_CACHE_TTL_MS = 2 * 60 * 1000;
 const SMALL_ASSET_USD_THRESHOLD = 1;
 
 function resolvePriceChangeLookupParams(
@@ -212,6 +216,23 @@ function resolvePriceChangeLookupParams(
     : /^0x[a-f0-9]{40}$/.test(contractCandidate);
   if (!chain || !isValidContract) return null;
   if (contractCandidate === '0x0000000000000000000000000000000000000000') return null;
+  return {
+    cacheKey: `${chain}:${contractCandidate}`,
+    chain,
+    contract: contractCandidate,
+  };
+}
+
+function resolveSecurityAuditLookupParams(
+  asset: WalletHoldingListItem,
+): { cacheKey: string; chain: string; contract: string } | null {
+  const transferAsset = asset.transferAsset as SimEvmBalance & { market_chain?: string; contract_key?: string };
+  const chain = (transferAsset.market_chain ?? transferAsset.chain ?? '').trim().toLowerCase();
+  const contractCandidate = normalizeContractForChain(chain, transferAsset.contract_key ?? transferAsset.address);
+  const isSupportedContract = chain === 'sol' || chain === 'tron'
+    ? contractCandidate !== 'native'
+    : /^0x[a-f0-9]{40}$/.test(contractCandidate);
+  if (!chain || !isSupportedContract) return null;
   return {
     cacheKey: `${chain}:${contractCandidate}`,
     chain,
@@ -306,11 +327,13 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const [isStablesExpanded, setIsStablesExpanded] = useState(false);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
   const [detailPriceChangeByHoldingKey, setDetailPriceChangeByHoldingKey] = useState<Record<string, number | null>>({});
+  const [highRiskByHoldingKey, setHighRiskByHoldingKey] = useState<Record<string, boolean>>({});
   const [cryptoToolsMode, setCryptoToolsMode] = useState<'filter' | 'add' | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openRafRef = useRef<number | null>(null);
   const modalSwitchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const detailPriceChangeCacheRef = useRef<Map<string, { value: number | null; expiresAt: number }>>(new Map());
+  const securityAuditCacheRef = useRef<Map<string, { value: TokenSecurityAudit | null; expiresAt: number }>>(new Map());
   const topUpButtonRef = useRef<HTMLButtonElement | null>(null);
   const transferButtonRef = useRef<HTMLButtonElement | null>(null);
   const walletAddress = auth.wallet?.address ?? auth.wallet?.chainAccounts?.[0]?.address ?? '';
@@ -395,6 +418,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   useEffect(() => {
     setCachedPortfolio(null);
     setDetailPriceChangeByHoldingKey({});
+    setHighRiskByHoldingKey({});
     setIsStablesExpanded(false);
   }, [walletFingerprint]);
 
@@ -671,6 +695,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
       if (cryptoFilterState.hideSmallBalances && asset.valueUsd < SMALL_ASSET_USD_THRESHOLD) {
         return false;
       }
+      if (cryptoFilterState.hideHighRisk && highRiskByHoldingKey[asset.key]) {
+        return false;
+      }
       return true;
     });
     const stablesUsd = stableHoldings.reduce((sum, item) => sum + Number(item.valueUsd ?? 0), 0);
@@ -684,7 +711,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
       cryptosUsd,
       filteredCryptosUsd,
     };
-  }, [cryptoFilterState, holdings]);
+  }, [cryptoFilterState, highRiskByHoldingKey, holdings]);
 
   const chartLine = useMemo<LivelinePoint[]>(
     () => snapshotsToLivelinePoints(snapshotData?.points),
@@ -806,10 +833,87 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     };
   }, [stableAndCryptos.cryptoHoldings]);
 
+  useEffect(() => {
+    if (!cryptoFilterState.hideHighRisk) return;
+
+    let cancelled = false;
+    const now = Date.now();
+    const cache = securityAuditCacheRef.current;
+    const pendingByCacheKey = new Map<string, { cacheKey: string; chain: string; contract: string; holdingKeys: string[] }>();
+    const resolvedUpdates: Record<string, boolean> = {};
+
+    for (const asset of stableAndCryptos.cryptoHoldings) {
+      const lookupParams = resolveSecurityAuditLookupParams(asset);
+      if (!lookupParams) {
+        resolvedUpdates[asset.key] = false;
+        continue;
+      }
+
+      const cached = cache.get(lookupParams.cacheKey);
+      if (cached && cached.expiresAt > now) {
+        resolvedUpdates[asset.key] = Boolean(cached.value?.highRisk);
+        continue;
+      }
+
+      const existing = pendingByCacheKey.get(lookupParams.cacheKey);
+      if (existing) {
+        existing.holdingKeys.push(asset.key);
+      } else {
+        pendingByCacheKey.set(lookupParams.cacheKey, {
+          cacheKey: lookupParams.cacheKey,
+          chain: lookupParams.chain,
+          contract: lookupParams.contract,
+          holdingKeys: [asset.key],
+        });
+      }
+    }
+
+    if (Object.keys(resolvedUpdates).length > 0) {
+      setHighRiskByHoldingKey((prev) => ({ ...prev, ...resolvedUpdates }));
+    }
+    if (pendingByCacheKey.size === 0) return;
+
+    const pendingItems = [...pendingByCacheKey.values()];
+    void Promise.allSettled(
+      pendingItems.map(async (item) => ({
+        cacheKey: item.cacheKey,
+        audit: await getTokenSecurityAudit(item.chain, item.contract),
+      })),
+    ).then((results) => {
+      if (cancelled) return;
+
+      const nowTs = Date.now();
+      const updates: Record<string, boolean> = {};
+      for (let index = 0; index < pendingItems.length; index += 1) {
+        const pending = pendingItems[index];
+        const result = results[index];
+        if (result.status === 'fulfilled') {
+          cache.set(pending.cacheKey, { value: result.value.audit, expiresAt: nowTs + SECURITY_AUDIT_CACHE_TTL_MS });
+          for (const holdingKey of pending.holdingKeys) {
+            updates[holdingKey] = Boolean(result.value.audit?.highRisk);
+          }
+        } else {
+          cache.set(pending.cacheKey, { value: null, expiresAt: nowTs + SECURITY_AUDIT_FAILED_CACHE_TTL_MS });
+          for (const holdingKey of pending.holdingKeys) {
+            updates[holdingKey] = false;
+          }
+        }
+      }
+
+      setHighRiskByHoldingKey((prev) => ({ ...prev, ...updates }));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cryptoFilterState.hideHighRisk, stableAndCryptos.cryptoHoldings]);
+
   const shouldShowLoading = isLoading && !portfolioData;
   const shouldShowError = isError && !portfolioData;
   const shouldShowBalanceEmptyState = !shouldShowLoading && !shouldShowError && totalBalance <= 0 && holdings.length === 0;
-  const hasActiveCryptoFilters = Boolean(cryptoFilterState.networkKey || cryptoFilterState.hideSmallBalances);
+  const hasActiveCryptoFilters = Boolean(
+    cryptoFilterState.networkKey || cryptoFilterState.hideSmallBalances || cryptoFilterState.hideHighRisk,
+  );
 
   useEffect(
     () => () => {

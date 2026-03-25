@@ -4,6 +4,7 @@ import { inferWalletProtocolFromAddress, normalizeContractForChain, normalizeWal
 export type WalletCryptoFilterState = {
   networkKey: string;
   hideSmallBalances: boolean;
+  hideHighRisk: boolean;
 };
 
 export type WalletAddedAsset = {
@@ -30,6 +31,7 @@ export type WalletAddedAssetInput = {
 const DEFAULT_FILTER_STATE: WalletCryptoFilterState = {
   networkKey: '',
   hideSmallBalances: false,
+  hideHighRisk: false,
 };
 
 function buildWalletStorageKey(walletAddress: string, suffix: string): string | null {
@@ -45,6 +47,7 @@ function normalizeFilterState(raw: unknown): WalletCryptoFilterState {
   return {
     networkKey: typeof candidate.networkKey === 'string' ? candidate.networkKey.trim() : '',
     hideSmallBalances: Boolean(candidate.hideSmallBalances),
+    hideHighRisk: Boolean(candidate.hideHighRisk),
   };
 }
 
