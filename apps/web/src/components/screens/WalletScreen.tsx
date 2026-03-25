@@ -42,6 +42,7 @@ import { getHiddenWalletAssetKeys } from '../../utils/walletHiddenAssets';
 import {
   getWalletAddedAssets,
   getWalletCryptoFilterState,
+  removeWalletAddedAsset,
   setWalletCryptoFilterState,
   upsertWalletAddedAsset,
   type WalletAddedAsset,
@@ -1030,6 +1031,11 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     setTrackedAssets(nextAssets);
   }
 
+  function handleTrackedAssetRemove(chain: string, contract: string) {
+    const nextAssets = removeWalletAddedAsset(walletAddress, chain, contract);
+    setTrackedAssets(nextAssets);
+  }
+
   function openReceiveModal() {
     switchModalContent('receive', 1);
   }
@@ -1456,10 +1462,12 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         mode={cryptoToolsMode}
         supportedChains={transferSupportedChains}
         currentFilterState={cryptoFilterState}
+        addedAssets={trackedAssets}
         existingAssetKeys={new Set(holdings.flatMap((asset) => asset.chainAssetIds).filter(Boolean))}
         onClose={closeCryptoTools}
         onFilterChange={handleCryptoFilterChange}
         onAddAsset={handleTrackedAssetAdd}
+        onRemoveAsset={handleTrackedAssetRemove}
       />
 
       {isModalOpen && (

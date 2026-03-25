@@ -4,7 +4,7 @@ import { getCoinDetail, searchMarketTokens, type AppConfigResponse, type MarketS
 import { useToast } from '../contexts/ToastContext';
 import { buildChainAssetId } from '../utils/assetIdentity';
 import { normalizeContractForChain, normalizeMarketChain } from '../utils/chainIdentity';
-import type { WalletAddedAssetInput, WalletCryptoFilterState } from '../utils/walletTrackedAssets';
+import type { WalletAddedAsset, WalletAddedAssetInput, WalletCryptoFilterState } from '../utils/walletTrackedAssets';
 import { CachedIconImage } from './CachedIconImage';
 import { Modal } from './modals/Modal';
 
@@ -13,10 +13,12 @@ type WalletCryptoToolsModalProps = {
   mode: 'filter' | 'add' | null;
   supportedChains: AppConfigResponse['supportedChains'];
   currentFilterState: WalletCryptoFilterState;
+  addedAssets: WalletAddedAsset[];
   existingAssetKeys: Set<string>;
   onClose: () => void;
   onFilterChange: (nextState: WalletCryptoFilterState) => void;
   onAddAsset: (input: WalletAddedAssetInput) => void;
+  onRemoveAsset: (chain: string, contract: string) => void;
 };
 
 function formatPct(value: number | null | undefined): string {
@@ -38,15 +40,24 @@ function getAssetKey(chain: string | null | undefined, contract: string | null |
   return buildChainAssetId(chain, contract).trim();
 }
 
+function truncateMiddle(value: string, leading = 6, trailing = 4): string {
+  const normalized = value.trim();
+  if (!normalized) return '--';
+  if (normalized.length <= leading + trailing + 3) return normalized;
+  return `${normalized.slice(0, leading)}...${normalized.slice(-trailing)}`;
+}
+
 export function WalletCryptoToolsModal({
   visible,
   mode,
   supportedChains,
   currentFilterState,
+  addedAssets,
   existingAssetKeys,
   onClose,
   onFilterChange,
   onAddAsset,
+  onRemoveAsset,
 }: WalletCryptoToolsModalProps) {
   const { t, i18n } = useTranslation();
   const { showError, showSuccess } = useToast();
@@ -159,6 +170,11 @@ export function WalletCryptoToolsModal({
     });
     showSuccess(t('wallet.cryptoManageAddSuccess', { symbol: item.symbol || t('wallet.token') }));
     onClose();
+  }
+
+  function handleRemoveAddedAsset(asset: WalletAddedAsset): void {
+    onRemoveAsset(asset.chain, asset.contract);
+    showSuccess(t('wallet.cryptoManageRemoveSuccess', { symbol: asset.symbol || t('wallet.token') }));
   }
 
   async function handleManualAdd(): Promise<void> {
@@ -352,6 +368,85 @@ export function WalletCryptoToolsModal({
                 {t('wallet.cryptoManageManualMode')}
               </button>
             </div>
+
+            <section className="mt-4 rounded-3xl border border-base-300 bg-base-100 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="m-0 text-sm font-semibold text-base-content">
+                    {t('wallet.cryptoManageAddedSectionTitle')}
+                  </p>
+                  <p className="m-0 mt-1 text-sm text-base-content/60">
+                    {t('wallet.cryptoManageAddedSectionHint')}
+                  </p>
+                </div>
+                <span className="rounded-full bg-base-200 px-2.5 py-1 text-xs font-semibold text-base-content/70">
+                  {addedAssets.length}
+                </span>
+              </div>
+
+              {addedAssets.length === 0 ? (
+                <p className="m-0 mt-3 text-sm text-base-content/50">
+                  {t('wallet.cryptoManageAddedSectionEmpty')}
+                </p>
+              ) : (
+                <div className="mt-3 max-h-56 overflow-y-auto">
+                  <div className="overflow-hidden rounded-2xl border border-base-300">
+                    {addedAssets.map((asset) => {
+                      const chainLabel =
+                        supportedChainByMarketChain.get(normalizeMarketChain(asset.chain))?.name
+                        ?? asset.networkKey
+                        ?? asset.chain.toUpperCase();
+                      const fallback = (
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
+                          {(asset.symbol || asset.name || '?')[0]?.toUpperCase() ?? '?'}
+                        </div>
+                      );
+
+                      return (
+                        <div
+                          key={getAssetKey(asset.chain, asset.contract)}
+                          className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3 last:border-b-0"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            {asset.image ? (
+                              <CachedIconImage
+                                src={asset.image}
+                                alt={asset.symbol || asset.name}
+                                className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                                loading="lazy"
+                                fallback={fallback}
+                              />
+                            ) : fallback}
+                            <div className="min-w-0">
+                              <p className="m-0 truncate text-sm font-semibold text-base-content">
+                                {asset.symbol || t('wallet.token')}
+                              </p>
+                              <p className="m-0 mt-0.5 truncate text-xs text-base-content/55">
+                                {asset.name || truncateMiddle(asset.contract, 10, 8)}
+                              </p>
+                              <p className="m-0 mt-1 text-xs text-base-content/45">
+                                {chainLabel}
+                                {asset.contract && asset.contract !== 'native'
+                                  ? ` · ${truncateMiddle(asset.contract, 6, 4)}`
+                                  : ''}
+                              </p>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs shrink-0 text-error hover:bg-error/10"
+                            onClick={() => handleRemoveAddedAsset(asset)}
+                          >
+                            {t('trade.remove')}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </section>
 
             {addMode === 'search' ? (
               <>

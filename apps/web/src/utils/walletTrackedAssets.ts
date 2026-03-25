@@ -154,3 +154,22 @@ export function upsertWalletAddedAsset(
   writeStorageValue(buildWalletStorageKey(walletAddress, 'tracked-assets'), nextAssets);
   return nextAssets;
 }
+
+export function removeWalletAddedAsset(
+  walletAddress: string,
+  chain: string,
+  contract: string,
+): WalletAddedAsset[] {
+  const currentAssets = getWalletAddedAssets(walletAddress);
+  const normalizedChain = chain.trim().toLowerCase();
+  const normalizedContract = normalizeContractForChain(normalizedChain, contract);
+  if (!normalizedChain) return currentAssets;
+
+  const targetChainAssetId = buildChainAssetId(normalizedChain, normalizedContract).trim();
+  const nextAssets = currentAssets.filter(
+    (item) => buildChainAssetId(item.chain, item.contract).trim() !== targetChainAssetId,
+  );
+
+  writeStorageValue(buildWalletStorageKey(walletAddress, 'tracked-assets'), nextAssets);
+  return nextAssets;
+}
