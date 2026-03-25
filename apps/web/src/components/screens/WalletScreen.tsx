@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Liveline } from 'liveline';
 import type { LivelinePoint } from 'liveline';
+import { ChevronDown, ChevronUp, Funnel, Plus } from 'lucide-react';
 import {
   activatePredictionAccount,
   getAppConfig,
@@ -88,12 +89,12 @@ type WalletHoldingListItem = {
   amountText: string;
   priceChangePct: number | null;
   networkKeys: string[];
-  networkLabelText: string;
   isManualAdded: boolean;
   transferAsset: SimEvmBalance;
 };
 
 const WALLET_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
+const WALLET_HEADER_ICON_BUTTON_CLASS_NAME = 'btn btn-ghost btn-sm h-9 min-h-0 w-9 rounded-full px-0 text-base-content/70 transition-colors hover:bg-base-200/80 hover:text-base-content';
 
 function normalizeAssetId(raw: string | null | undefined): string | null {
   const value = (raw ?? '').trim().toLowerCase();
@@ -288,8 +289,8 @@ function AccountIntroBlock({
   text: string;
 }) {
   return (
-    <div className="mt-2 flex items-start gap-3 rounded-2xl bg-base-200/35 px-3 py-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-base-100 text-base-content shadow-sm">
+    <div className="mt-2 flex items-center gap-3 rounded-2xl bg-base-200/35 px-3 py-3">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center text-base-content">
         {kind === 'perps' ? (
           <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M4 16l5-5 4 4 7-7" />
@@ -527,7 +528,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                 amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
                 priceChangePct: null,
                 networkKeys,
-                networkLabelText: chainLabels.join(' · '),
                 isManualAdded: false,
                 transferAsset: primary,
               } satisfies WalletHoldingListItem];
@@ -601,7 +601,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                 amountText: chainLabels.length > 1 ? formatDisplayAmount(totalAmount) : formatTokenAmount(primary.amount, primary.decimals),
                 priceChangePct: null,
                 networkKeys,
-                networkLabelText: chainLabels.join(' · '),
                 isManualAdded: false,
                 transferAsset: primary,
               } satisfies WalletHoldingListItem];
@@ -623,7 +622,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         ? supportedChainByNetworkKey.get(trackedAsset.networkKey) ?? null
         : supportedChainByMarketChain.get(normalizeMarketChain(trackedAsset.chain)) ?? null;
       const networkKey = trackedAsset.networkKey ?? chainConfig?.networkKey ?? `${trackedAsset.chain}-manual`;
-      const networkLabel = chainConfig?.name ?? trackedAsset.chain.toUpperCase();
       const symbol = (detail?.symbol ?? trackedAsset.symbol ?? '').trim().toUpperCase() || t('wallet.unknownAsset');
       const name = (detail?.name ?? trackedAsset.name ?? t('wallet.token')).trim();
       const contract = detail?.contract?.trim() || trackedAsset.contract;
@@ -661,7 +659,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         amountText: '0',
         priceChangePct: detail?.priceChange24h ?? null,
         networkKeys: [networkKey],
-        networkLabelText: networkLabel,
         isManualAdded: true,
         transferAsset: syntheticTransferAsset,
       });
@@ -1307,23 +1304,24 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         {!shouldShowLoading && !shouldShowError && (
           <div className="flex flex-col">
             <article className="border-b border-base-300 py-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex flex-col gap-1">
-                  <h3 className="m-0 text-sm text-base-content">{t('wallet.stables')}</h3>
+              <div className="flex flex-col gap-1">
+                <h3 className="m-0 text-sm text-base-content">{t('wallet.stables')}</h3>
+                <div className="flex items-center justify-between gap-3">
                   <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
                     {formatUsdAdaptive(stableAndCryptos.stablesUsd, i18n.language)}
                   </p>
+                  {stableAndCryptos.stableHoldings.length > 0 ? (
+                    <button
+                      type="button"
+                      className={WALLET_HEADER_ICON_BUTTON_CLASS_NAME}
+                      aria-label={isStablesExpanded ? t('common.less') : t('common.more')}
+                      aria-expanded={isStablesExpanded}
+                      onClick={() => setIsStablesExpanded((value) => !value)}
+                    >
+                      {isStablesExpanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+                    </button>
+                  ) : null}
                 </div>
-                {stableAndCryptos.stableHoldings.length > 0 ? (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm min-h-0 px-2 text-sm"
-                    aria-expanded={isStablesExpanded}
-                    onClick={() => setIsStablesExpanded((value) => !value)}
-                  >
-                    {isStablesExpanded ? t('common.less') : t('common.more')}
-                  </button>
-                ) : null}
               </div>
               {isStablesExpanded && stableAndCryptos.stableHoldings.length > 0 ? (
                 <div className="mt-3 flex flex-col">
@@ -1350,35 +1348,41 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
             </article>
 
             <article className="border-b border-base-300 py-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex flex-col gap-1">
-                  <h3 className="m-0 text-sm text-base-content">{t('wallet.cryptos')}</h3>
+              <div className="flex flex-col gap-1">
+                <h3 className="m-0 text-sm text-base-content">{t('wallet.cryptos')}</h3>
+                <div className="flex items-center justify-between gap-3">
                   <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
                     {formatUsdAdaptive(
                       hasActiveCryptoFilters ? stableAndCryptos.filteredCryptosUsd : stableAndCryptos.cryptosUsd,
                       i18n.language,
                     )}
                   </p>
-                  {hasActiveCryptoFilters ? (
-                    <p className="m-0 text-xs text-base-content/55">{t('wallet.cryptoManageFilterActive')}</p>
-                  ) : null}
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      className={[
+                        WALLET_HEADER_ICON_BUTTON_CLASS_NAME,
+                        hasActiveCryptoFilters ? 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary' : '',
+                      ].filter(Boolean).join(' ')}
+                      onClick={() => openCryptoTools('filter')}
+                      aria-label={t('wallet.cryptoManageFilter')}
+                      aria-pressed={hasActiveCryptoFilters}
+                    >
+                      <Funnel size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className={WALLET_HEADER_ICON_BUTTON_CLASS_NAME}
+                      onClick={() => openCryptoTools('add')}
+                      aria-label={t('wallet.cryptoManageAdd')}
+                    >
+                      <Plus size={16} aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className={`btn btn-ghost btn-sm min-h-0 px-2 text-sm ${hasActiveCryptoFilters ? 'text-primary' : ''}`}
-                    onClick={() => openCryptoTools('filter')}
-                  >
-                    {t('wallet.cryptoManageFilter')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm min-h-0 px-2 text-sm"
-                    onClick={() => openCryptoTools('add')}
-                  >
-                    {t('wallet.cryptoManageAdd')}
-                  </button>
-                </div>
+                {hasActiveCryptoFilters ? (
+                  <p className="m-0 text-xs text-base-content/55">{t('wallet.cryptoManageFilterActive')}</p>
+                ) : null}
               </div>
               <div className="mt-3 flex flex-col">
                 {stableAndCryptos.filteredCryptoHoldings.length === 0 && hasActiveCryptoFilters ? (
@@ -1406,7 +1410,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                       }
                       leftPrimary={asset.name || t('wallet.token')}
                       leftSecondary={`${asset.amountText} ${asset.symbol}`}
-                      leftTertiary={asset.networkLabelText}
                       rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
                       rightSecondary={<span className={changeClassName}>{formatPct(resolvedPriceChangePct)}</span>}
                     />

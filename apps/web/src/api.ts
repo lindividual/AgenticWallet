@@ -1169,6 +1169,17 @@ export async function searchMarketTokens(q: string, limit = 20): Promise<MarketS
   return response.results;
 }
 
+export async function searchWalletAddableTokens(q: string, limit = 20): Promise<MarketSearchResult[]> {
+  const query = new URLSearchParams();
+  query.set('q', q.trim());
+  query.set('limit', String(limit));
+  const response = await getJson<{ results: MarketSearchResult[] }>(
+    `/v1/market/token-search?${query.toString()}`,
+    true,
+  );
+  return response.results;
+}
+
 export async function getAgentRecommendations(): Promise<{ recommendations: AgentRecommendation[] }> {
   return getJson<{ recommendations: AgentRecommendation[] }>('/v1/agent/recommendations', true);
 }

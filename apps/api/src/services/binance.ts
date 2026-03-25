@@ -11,18 +11,27 @@ const BINANCE_CHAIN_ID_TO_MARKET_CHAIN: Record<string, string> = {
   '1': 'eth',
   '56': 'bnb',
   '8453': 'base',
+  '42161': 'arbitrum',
+  '10': 'optimism',
+  '137': 'matic',
   CT_501: 'sol',
 };
 const MARKET_CHAIN_TO_BINANCE_CHAIN_ID: Record<string, string> = {
   eth: '1',
   bnb: '56',
   base: '8453',
+  arbitrum: '42161',
+  optimism: '10',
+  matic: '137',
   sol: 'CT_501',
 };
 const MARKET_CHAIN_TO_BINANCE_KLINE_PLATFORM: Record<string, string> = {
   eth: 'eth',
   bnb: 'bsc',
   base: 'base',
+  arbitrum: 'arbitrum',
+  optimism: 'optimism',
+  matic: 'polygon',
   sol: 'solana',
 };
 const BINANCE_WEB3_WRAPPED_NATIVE_CONTRACTS: Record<string, string> = {
@@ -179,6 +188,20 @@ function normalizeBinanceChainIdForMarketChain(chain: string): string | null {
   const value = normalizeText(chain)?.toLowerCase();
   if (!value) return null;
   return MARKET_CHAIN_TO_BINANCE_CHAIN_ID[value] ?? null;
+}
+
+export function resolveBinanceSearchChainIds(chains?: string[]): string[] {
+  const sourceChains = Array.isArray(chains) && chains.length > 0
+    ? chains
+    : Object.keys(MARKET_CHAIN_TO_BINANCE_CHAIN_ID);
+  const uniqueChainIds = new Set<string>();
+
+  for (const chain of sourceChains) {
+    const chainId = normalizeBinanceChainIdForMarketChain(chain);
+    if (chainId) uniqueChainIds.add(chainId);
+  }
+
+  return [...uniqueChainIds];
 }
 
 function toBinanceNativeContract(chain: string): string {
@@ -595,13 +618,18 @@ export async function fetchBinanceWeb3TokenKlines(
 export async function searchBinanceSpotTokens(
   query: string,
   limit = 20,
+  options?: {
+    chains?: string[];
+  },
 ): Promise<BinanceSpotSearchItem[]> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) return [];
+  const chainIds = resolveBinanceSearchChainIds(options?.chains);
+  if (chainIds.length === 0) return [];
 
   const searchParams = new URLSearchParams({
     keyword: normalizedQuery,
-    chainIds: '1,56,8453,CT_501',
+    chainIds: chainIds.join(','),
     orderBy: 'volume24h',
   });
   const response = await fetch(`${BINANCE_WEB3_SEARCH_URL}?${searchParams.toString()}`, {

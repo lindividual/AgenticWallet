@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { getSupportedMarketChains } from '../config/appConfig';
 import type { AppEnv } from '../types';
 import type { BitgetTokenDetail, BitgetTokenSecurityAudit, MarketTopAsset } from '../services/bitgetWallet';
 import {
@@ -11,6 +12,7 @@ import {
   fetchBinanceTokenDynamicInfo,
   fetchBinanceTokenMeta,
   fetchBinanceWeb3TokenKlines,
+  resolveBinanceSearchChainIds,
   searchBinanceSpotTokens,
 } from '../services/binance';
 import {
@@ -339,6 +341,21 @@ function toSpotSearchItem(item: Awaited<ReturnType<typeof searchBinanceSpotToken
     chain: normalizeMarketChain(item.chain),
     contract: item.nativeAddressFlag ? '' : item.contract,
   };
+}
+
+async function buildBinanceTokenSearchResults(
+  env: AppEnv['Bindings'],
+  query: string,
+  limit: number,
+  options?: {
+    chains?: string[];
+  },
+): Promise<MarketSearchResultItem[]> {
+  const rows = await searchBinanceSpotTokens(query, limit, { chains: options?.chains });
+  const items = rows
+    .map(toSpotSearchItem)
+    .filter((item): item is MarketSearchResultItem => item != null);
+  return applyCoinIdentityToSearchItems(env, items);
 }
 
 async function applyCoinIdentityToSearchItems(
@@ -803,6 +820,23 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       .slice(0, limit)
       .map((candidate) => candidate.item);
 
+    return c.json({ results });
+  });
+
+  app.get('/v1/market/token-search', async (c) => {
+    const q = normalizeText(c.req.query('q')) ?? '';
+    const limit = Math.min(toValidSize(c.req.query('limit'), 20), 50);
+    if (!q) return c.json({ results: [] });
+
+    const supportedChains = getSupportedMarketChains();
+    const supportedBinanceChainIds = resolveBinanceSearchChainIds(supportedChains);
+    if (supportedBinanceChainIds.length === 0) {
+      return c.json({ results: [] });
+    }
+
+    const results = await buildBinanceTokenSearchResults(c.env, q, limit, {
+      chains: supportedChains,
+    });
     return c.json({ results });
   });
 

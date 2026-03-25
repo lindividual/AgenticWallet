@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getCoinDetail, searchMarketTokens, type AppConfigResponse, type MarketSearchResult } from '../api';
+import { getCoinDetail, searchWalletAddableTokens, type AppConfigResponse, type MarketSearchResult } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { buildChainAssetId } from '../utils/assetIdentity';
 import { normalizeContractForChain, normalizeMarketChain } from '../utils/chainIdentity';
@@ -123,7 +123,7 @@ export function WalletCryptoToolsModal({
 
     setIsSearching(true);
     try {
-      const items = await searchMarketTokens(trimmed, 20);
+      const items = await searchWalletAddableTokens(trimmed, 20);
       setResults(items);
     } catch {
       setResults([]);
@@ -219,6 +219,74 @@ export function WalletCryptoToolsModal({
   }
 
   if (!visible || !mode) return null;
+
+  const addedAssetsSection = (
+    <section className="mt-4 rounded-3xl border border-base-300 bg-base-100 p-4">
+      <p className="m-0 text-sm font-semibold text-base-content">
+        {t('wallet.cryptoManageAddedSectionTitle')}
+      </p>
+
+      {addedAssets.length === 0 ? (
+        <p className="m-0 mt-3 text-sm text-base-content/50">
+          {t('wallet.cryptoManageAddedSectionEmpty')}
+        </p>
+      ) : (
+        <div className="mt-3 max-h-56 overflow-y-auto">
+          <div className="overflow-hidden rounded-2xl border border-base-300">
+            {addedAssets.map((asset) => {
+              const chainLabel =
+                supportedChainByMarketChain.get(normalizeMarketChain(asset.chain))?.name
+                ?? asset.networkKey
+                ?? asset.chain.toUpperCase();
+              const fallback = (
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
+                  {(asset.symbol || asset.name || '?')[0]?.toUpperCase() ?? '?'}
+                </div>
+              );
+
+              return (
+                <div
+                  key={getAssetKey(asset.chain, asset.contract)}
+                  className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3 last:border-b-0"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    {asset.image ? (
+                      <CachedIconImage
+                        src={asset.image}
+                        alt={asset.symbol || asset.name}
+                        className="h-10 w-10 rounded-full bg-base-300 object-cover"
+                        loading="lazy"
+                        fallback={fallback}
+                      />
+                    ) : fallback}
+                    <div className="min-w-0">
+                      <p className="m-0 truncate text-sm font-semibold text-base-content">
+                        {asset.symbol || t('wallet.token')}
+                      </p>
+                      <p className="m-0 mt-1 text-xs text-base-content/45">
+                        {chainLabel}
+                        {asset.contract && asset.contract !== 'native'
+                          ? ` · ${truncateMiddle(asset.contract, 6, 4)}`
+                          : ''}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs shrink-0 text-error hover:bg-error/10"
+                    onClick={() => handleRemoveAddedAsset(asset)}
+                  >
+                    {t('trade.remove')}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <Modal visible originRect={null} onClose={onClose}>
@@ -369,85 +437,6 @@ export function WalletCryptoToolsModal({
               </button>
             </div>
 
-            <section className="mt-4 rounded-3xl border border-base-300 bg-base-100 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="m-0 text-sm font-semibold text-base-content">
-                    {t('wallet.cryptoManageAddedSectionTitle')}
-                  </p>
-                  <p className="m-0 mt-1 text-sm text-base-content/60">
-                    {t('wallet.cryptoManageAddedSectionHint')}
-                  </p>
-                </div>
-                <span className="rounded-full bg-base-200 px-2.5 py-1 text-xs font-semibold text-base-content/70">
-                  {addedAssets.length}
-                </span>
-              </div>
-
-              {addedAssets.length === 0 ? (
-                <p className="m-0 mt-3 text-sm text-base-content/50">
-                  {t('wallet.cryptoManageAddedSectionEmpty')}
-                </p>
-              ) : (
-                <div className="mt-3 max-h-56 overflow-y-auto">
-                  <div className="overflow-hidden rounded-2xl border border-base-300">
-                    {addedAssets.map((asset) => {
-                      const chainLabel =
-                        supportedChainByMarketChain.get(normalizeMarketChain(asset.chain))?.name
-                        ?? asset.networkKey
-                        ?? asset.chain.toUpperCase();
-                      const fallback = (
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
-                          {(asset.symbol || asset.name || '?')[0]?.toUpperCase() ?? '?'}
-                        </div>
-                      );
-
-                      return (
-                        <div
-                          key={getAssetKey(asset.chain, asset.contract)}
-                          className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3 last:border-b-0"
-                        >
-                          <div className="flex min-w-0 items-center gap-3">
-                            {asset.image ? (
-                              <CachedIconImage
-                                src={asset.image}
-                                alt={asset.symbol || asset.name}
-                                className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                                loading="lazy"
-                                fallback={fallback}
-                              />
-                            ) : fallback}
-                            <div className="min-w-0">
-                              <p className="m-0 truncate text-sm font-semibold text-base-content">
-                                {asset.symbol || t('wallet.token')}
-                              </p>
-                              <p className="m-0 mt-0.5 truncate text-xs text-base-content/55">
-                                {asset.name || truncateMiddle(asset.contract, 10, 8)}
-                              </p>
-                              <p className="m-0 mt-1 text-xs text-base-content/45">
-                                {chainLabel}
-                                {asset.contract && asset.contract !== 'native'
-                                  ? ` · ${truncateMiddle(asset.contract, 6, 4)}`
-                                  : ''}
-                              </p>
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-xs shrink-0 text-error hover:bg-error/10"
-                            onClick={() => handleRemoveAddedAsset(asset)}
-                          >
-                            {t('trade.remove')}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </section>
-
             {addMode === 'search' ? (
               <>
                 <div className="relative mt-4">
@@ -476,7 +465,7 @@ export function WalletCryptoToolsModal({
                     spellCheck={false}
                   />
                 </div>
-                <p className="m-0 mt-3 text-sm text-base-content/55">{t('wallet.cryptoManageSearchHint')}</p>
+                {addedAssetsSection}
 
                 <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
                   {isSearching ? (
@@ -577,6 +566,8 @@ export function WalletCryptoToolsModal({
                   />
                   <p className="m-0 mt-2 text-sm text-base-content/55">{t('wallet.cryptoManageManualHint')}</p>
                 </div>
+
+                {addedAssetsSection}
 
                 <div className="mt-auto pt-2">
                   <button
