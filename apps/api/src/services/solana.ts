@@ -15,13 +15,13 @@ import {
 } from '@solana/web3.js';
 import type { Bindings } from '../types';
 import { fetchWithTimeout } from '../utils/fetch';
-import { buildAssetId, buildChainAssetId, contractKeyToUpstreamContract } from './assetIdentity';
+import { contractKeyToUpstreamContract } from './assetIdentity';
+import { resolveTokenDetails } from './tokenDetails';
 import { ensureWalletWithPrivateKey, SOLANA_NETWORK_KEY, SVM_PROTOCOL } from './wallet';
 import { decodeBase64, encodeBase64 } from '../utils/crypto';
 import { decryptString } from '../utils/crypto';
 
 const SOLANA_RPC_DEFAULT = 'https://api.mainnet-beta.solana.com';
-const JUPITER_API_DEFAULT = 'https://lite-api.jup.ag';
 const JUPITER_SWAP_API_DEFAULT = 'https://api.jup.ag';
 const TOKEN_PROGRAM_IDS = [TOKEN_PROGRAM_ID.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58()];
 const SOLANA_FETCH_TIMEOUT_MS = 15_000;
@@ -38,24 +38,6 @@ type RpcEnvelope<T> = {
     code?: number;
     message?: string;
   };
-};
-
-type JupiterTokenSearchRow = {
-  id?: string;
-  address?: string;
-  symbol?: string;
-  name?: string;
-  icon?: string;
-  logoURI?: string;
-  decimals?: number;
-};
-
-type JupiterPriceRow = {
-  usdPrice?: number | string;
-  price?: number | string;
-  blockId?: number | string;
-  decimals?: number | string;
-  priceChange24h?: number | string;
 };
 
 export type SolanaPortfolioHolding = {
@@ -77,36 +59,10 @@ export type SolanaPortfolioHolding = {
   url: string | null;
 };
 
-type SolanaTokenMetadata = {
-  contract: string;
-  symbol: string;
-  name: string;
-  decimals: number;
-  image: string | null;
-};
-
-export type SolanaTokenDetail = {
-  asset_id: string;
-  chain_asset_id: string;
-  chain: string;
-  contract: string;
-  symbol: string;
-  name: string;
-  image: string | null;
-  decimals: number;
-  priceChange24h: number | null;
-  currentPriceUsd: number | null;
-};
-
 function normalizeText(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   return value || null;
-}
-
-function normalizeFiniteNumber(raw: unknown): number | null {
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
 }
 
 function normalizePositiveInt(raw: unknown, fallback: number): number {
@@ -117,10 +73,6 @@ function normalizePositiveInt(raw: unknown, fallback: number): number {
 
 export function getSolanaRpcUrl(env: Bindings): string {
   return env.SOLANA_RPC_URL?.trim() || SOLANA_RPC_DEFAULT;
-}
-
-function getJupiterTokenApiBaseUrl(env: Bindings): string {
-  return env.JUPITER_API_BASE_URL?.trim() || JUPITER_API_DEFAULT;
 }
 
 function getJupiterSwapApiBaseUrl(env: Bindings): string {
@@ -386,136 +338,20 @@ export async function waitForSolanaSignature(
   return 'pending';
 }
 
-async function fetchJupiterTokenMetadata(env: Bindings, contract: string): Promise<SolanaTokenMetadata | null> {
-  if (contract === 'native' || isWrappedSolMint(contract)) {
-    return {
-      contract,
-      symbol: SOLANA_NATIVE_SYMBOL,
-      name: SOLANA_NATIVE_NAME,
-      decimals: SOLANA_NATIVE_DECIMALS,
-      image: null,
-    };
-  }
-
-  const url = new URL('/tokens/v2/search', getJupiterTokenApiBaseUrl(env));
-  url.searchParams.set('query', contract);
-  url.searchParams.set('limit', '10');
-  const response = await fetchWithTimeout(url.toString(), {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-    },
-  }, SOLANA_FETCH_TIMEOUT_MS);
-  if (!response.ok) {
-    return null;
-  }
-  const rows = (await response.json()) as JupiterTokenSearchRow[];
-  const matched = rows.find((row) => normalizeText(row.id ?? row.address) === contract) ?? rows[0];
-  if (!matched) return null;
-  return {
-    contract,
-    symbol: normalizeText(matched.symbol) ?? contract.slice(0, 6),
-    name: normalizeText(matched.name) ?? contract,
-    decimals: normalizePositiveInt(matched.decimals, SOLANA_NATIVE_DECIMALS),
-    image: normalizeText(matched.icon) ?? normalizeText(matched.logoURI),
-  };
-}
-
-async function fetchJupiterPrices(
-  env: Bindings,
-  contracts: string[],
-): Promise<Map<string, { priceUsd: number | null; priceChange24h: number | null }>> {
-  const normalizedContracts = [...new Set(contracts.map((item) => normalizeText(item)).filter((item): item is string => Boolean(item)))];
-  if (!normalizedContracts.length) return new Map();
-
-  const url = new URL('/price/v3', getJupiterTokenApiBaseUrl(env));
-  url.searchParams.set('ids', normalizedContracts.join(','));
-  const response = await fetchWithTimeout(url.toString(), {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-    },
-  }, SOLANA_FETCH_TIMEOUT_MS);
-  if (!response.ok) {
-    return new Map();
-  }
-  const payload = (await response.json()) as Record<string, JupiterPriceRow> | { data?: Record<string, JupiterPriceRow> };
-  const data = (typeof payload === 'object' && payload && 'data' in payload && payload.data
-    ? payload.data
-    : payload) as Record<string, JupiterPriceRow>;
-  return new Map(
-    normalizedContracts.map((contract) => {
-      const row = data[contract];
-      return [
-        contract,
-        {
-          priceUsd: normalizeFiniteNumber(row?.usdPrice ?? row?.price),
-          priceChange24h: normalizeFiniteNumber(row?.priceChange24h),
-        },
-      ] as const;
-    }),
-  );
-}
-
-export async function fetchSolanaTokenDetails(
-  env: Bindings,
-  contracts: string[],
-): Promise<Map<string, SolanaTokenDetail>> {
-  const normalizedContracts = [...new Set(contracts.map((item) => contractKeyToUpstreamContract(item, SOLANA_MARKET_CHAIN) || 'native'))];
-  const [metadataRows, priceRows] = await Promise.all([
-    Promise.all(normalizedContracts.map((contract) => fetchJupiterTokenMetadata(env, contract))),
-    fetchJupiterPrices(env, normalizedContracts.map((contract) => (contract === 'native' ? WRAPPED_SOL_MINT : contract))),
-  ]);
-
-  const output = new Map<string, SolanaTokenDetail>();
-  for (let index = 0; index < normalizedContracts.length; index += 1) {
-    const contract = normalizedContracts[index];
-    const metadata = metadataRows[index];
-    if (!metadata) continue;
-    const priceLookupKey = contract === 'native' ? WRAPPED_SOL_MINT : contract;
-    const price = priceRows.get(priceLookupKey);
-    const detail: SolanaTokenDetail = {
-      asset_id: buildAssetId(SOLANA_MARKET_CHAIN, contract),
-      chain_asset_id: buildChainAssetId(SOLANA_MARKET_CHAIN, contract),
-      chain: SOLANA_MARKET_CHAIN,
-      contract,
-      symbol: metadata.symbol,
-      name: metadata.name,
-      image: metadata.image,
-      decimals: metadata.decimals,
-      currentPriceUsd: price?.priceUsd ?? null,
-      priceChange24h: price?.priceChange24h ?? null,
-    };
-    output.set(contract, detail);
-  }
-
-  if (!output.has('native')) {
-    const nativePrice = priceRows.get(WRAPPED_SOL_MINT);
-    output.set('native', {
-      asset_id: buildAssetId(SOLANA_MARKET_CHAIN, 'native'),
-      chain_asset_id: buildChainAssetId(SOLANA_MARKET_CHAIN, 'native'),
-      chain: SOLANA_MARKET_CHAIN,
-      contract: 'native',
-      symbol: SOLANA_NATIVE_SYMBOL,
-      name: SOLANA_NATIVE_NAME,
-      image: null,
-      decimals: SOLANA_NATIVE_DECIMALS,
-      currentPriceUsd: nativePrice?.priceUsd ?? null,
-      priceChange24h: nativePrice?.priceChange24h ?? null,
-    });
-  }
-
-  return output;
-}
-
 export async function fetchSolanaPortfolio(env: Bindings, owner: string): Promise<SolanaPortfolioHolding[]> {
   const [nativeBalance, tokenAccounts] = await Promise.all([
     getSolanaNativeBalanceLamports(env, owner),
     getSolanaTokenAccountsByOwner(env, owner),
   ]);
 
-  const contracts = ['native', ...tokenAccounts.map((row) => row.mint)];
-  const details = await fetchSolanaTokenDetails(env, contracts);
+  const detailRows = await resolveTokenDetails(
+    env,
+    ['native', ...tokenAccounts.map((row) => row.mint)].map((contract) => ({
+      chain: SOLANA_MARKET_CHAIN,
+      contract: contractKeyToUpstreamContract(contract, SOLANA_MARKET_CHAIN) || 'native',
+    })),
+  ).catch(() => []);
+  const details = new Map(detailRows.map((row) => [row.contract || 'native', row.detail] as const));
 
   const holdings: SolanaPortfolioHolding[] = [];
   const nativeDetail = details.get('native');
@@ -533,9 +369,9 @@ export async function fetchSolanaPortfolio(env: Bindings, owner: string): Promis
       amount,
       symbol: nativeDetail.symbol,
       name: nativeDetail.name,
-      decimals: nativeDetail.decimals,
+      decimals: SOLANA_NATIVE_DECIMALS,
       price_usd: priceUsd,
-      value_usd: priceUsd == null ? null : Number(bigintToDecimalString(nativeBalance, nativeDetail.decimals)) * priceUsd,
+      value_usd: priceUsd == null ? null : Number(bigintToDecimalString(nativeBalance, SOLANA_NATIVE_DECIMALS)) * priceUsd,
       logo: nativeDetail.image,
       logo_uri: nativeDetail.image,
       url: null,

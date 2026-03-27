@@ -76,15 +76,12 @@ import { buildMergedPortfolioHoldings, fetchWalletPortfolio } from '../services/
 import { APP_CONFIG } from '../config/appConfig';
 import { normalizeMarketChain, toContractKey } from '../services/assetIdentity';
 import {
-  fetchBitgetTokenDetail,
   fetchBitgetTokenKline,
   fetchBitgetTokenSecurityAudit,
   type BitgetKlineCandle,
-  type BitgetTokenDetail,
   type BitgetTokenSecurityAudit,
 } from '../services/bitgetWallet';
-import { fetchTopMarketAssets } from '../services/marketTopAssets';
-import { fetchSolanaTokenDetails } from '../services/solana';
+import { resolveTokenDetail, type ResolvedTokenDetail } from '../services/tokenDetails';
 import { privateKeyToBitcoinSegwitAddress } from '../utils/bitcoin';
 import { evmAddressToTronAddress } from '../utils/tron';
 import { ensureTopicSpecialSchema } from '../services/topicSpecials';
@@ -3525,13 +3522,7 @@ export class UserAgentDO extends DurableObject<Bindings> {
       requestedContract: normalizedContract,
       requestedSymbol: tokenSymbol,
       requestedName: tokenName,
-      detail: detail
-        ? {
-            ...detail,
-            volume24h: null,
-            fdv: null,
-          }
-        : null,
+      detail,
       audit,
       candles,
       isInWatchlist,
@@ -3542,66 +3533,11 @@ export class UserAgentDO extends DurableObject<Bindings> {
   private async resolveTokenDetailForTool(
     tokenChain: string,
     tokenContract: string,
-    tokenSymbol?: string | null,
-  ): Promise<BitgetTokenDetail | null> {
+    _tokenSymbol?: string | null,
+  ): Promise<ResolvedTokenDetail | null> {
     const normalizedChain = normalizeMarketChain(tokenChain);
     const normalizedContract = toContractKey(tokenContract, normalizedChain);
-
-    if (normalizedChain === 'sol') {
-      const details = await fetchSolanaTokenDetails(this.env, [normalizedContract || 'native']);
-      const detail = details.get(normalizedContract || 'native') ?? details.get('native') ?? null;
-      if (!detail) return null;
-      return {
-        asset_id: detail.asset_id,
-        chain_asset_id: detail.chain_asset_id,
-        chain: detail.chain,
-        contract: detail.contract,
-        symbol: detail.symbol,
-        name: detail.name,
-        image: detail.image,
-        priceChange24h: detail.priceChange24h,
-        currentPriceUsd: detail.currentPriceUsd,
-        holders: null,
-        totalSupply: null,
-        liquidityUsd: null,
-        top10HolderPercent: null,
-        devHolderPercent: null,
-        lockLpPercent: null,
-      };
-    }
-
-    if (normalizedContract === 'native') {
-      const assets = await fetchTopMarketAssets(this.env, {
-        source: 'coingecko',
-        name: 'marketCap',
-        limit: 80,
-        chains: [normalizedChain],
-      }).catch(() => []);
-      const expectedSymbol = tokenSymbol?.trim().toUpperCase() ?? '';
-      const matched = assets.find((asset) => (
-        normalizeMarketChain(asset.chain) === normalizedChain && toContractKey(asset.contract || 'native', normalizedChain) === 'native'
-      )) ?? assets.find((asset) => expectedSymbol && asset.symbol.trim().toUpperCase() === expectedSymbol) ?? null;
-      if (!matched) return null;
-      return {
-        asset_id: matched.asset_id,
-        chain_asset_id: matched.chain_asset_id,
-        chain: matched.chain,
-        contract: matched.contract,
-        symbol: matched.symbol,
-        name: matched.name,
-        image: matched.image ?? null,
-        priceChange24h: matched.price_change_percentage_24h ?? null,
-        currentPriceUsd: matched.current_price ?? null,
-        holders: null,
-        totalSupply: null,
-        liquidityUsd: null,
-        top10HolderPercent: null,
-        devHolderPercent: null,
-        lockLpPercent: null,
-      };
-    }
-
-    return fetchBitgetTokenDetail(this.env, normalizedChain, normalizedContract);
+    return resolveTokenDetail(this.env, normalizedChain, normalizedContract);
   }
 
   private async executeReadWalletContextTool(): Promise<string> {

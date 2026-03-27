@@ -5,12 +5,12 @@ import { Liveline } from 'liveline';
 import type { LivelinePoint } from 'liveline';
 import { ChevronDown, ChevronRight, ChevronUp, Funnel, Plus } from 'lucide-react';
 import {
-  activatePredictionAccount,
   getAppConfig,
   getCoinDetailsBatch,
   getTokenSecurityAudit,
   getWalletPortfolio,
   getWalletPortfolioSnapshots,
+  type CoinDetailBatchItem,
   type PortfolioSnapshotPeriod,
   type SimEvmBalance,
   type TokenSecurityAudit,
@@ -24,6 +24,7 @@ import { TransferContent } from '../modals/TransferContent';
 import { snapshotRect, type RectSnapshot } from '../modals/morphTransition';
 import { useToast } from '../../contexts/ToastContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useIsCoarsePointer } from '../../hooks/useIsCoarsePointer';
 import type { AuthState } from '../../hooks/useWalletApp';
 import type { AgentChatOpenRequest } from '../../agent/types';
 import { AssetListItem } from '../AssetListItem';
@@ -41,6 +42,10 @@ import { buildTransferableAssets } from '../../utils/transferAssets';
 import { cloneTradeToken, getTradeTokenConfig } from '../../utils/tradeTokens';
 import { getHiddenWalletAssetKeys } from '../../utils/walletHiddenAssets';
 import {
+  readTrackedAssetDetailCache,
+  writeTrackedAssetDetailCache,
+} from '../../utils/walletTrackedAssetDetailCache';
+import {
   getWalletAddedAssets,
   getWalletCryptoFilterState,
   removeWalletAddedAsset,
@@ -56,6 +61,8 @@ type WalletScreenProps = {
   onLogout: () => void;
   onOpenAssetDetail: (chain: string, contract: string) => void;
   onOpenAgentChat: (request?: AgentChatOpenRequest) => void;
+  onOpenPredictionIntro: () => void;
+  onOpenPredictionHub: () => void;
 };
 
 type ActiveModalContent = 'topUp' | 'receive' | 'transfer' | 'trade';
@@ -283,40 +290,84 @@ function TokenAvatar({
 
 function AccountIntroBlock({
   kind,
-  text,
+  title,
+  subtitle,
+  onClick,
 }: {
-  kind: 'perps' | 'prediction';
-  text: string;
+  kind: 'perps' | 'prediction' | 'card';
+  title: string;
+  subtitle?: string;
+  onClick?: () => void;
 }) {
   return (
-    <div className="mt-2 flex items-center gap-3 rounded-2xl bg-base-200/35 px-3 py-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center text-base-content">
-        {kind === 'perps' ? (
-          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M4 16l5-5 4 4 7-7" />
-            <path d="M15 8h5v5" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M6 7.5h12" />
-            <path d="M6 12h7" />
-            <path d="M6 16.5h5" />
-            <circle cx="17.5" cy="15.5" r="2.5" />
-          </svg>
-        )}
-      </div>
-      <p className="m-0 flex-1 text-base leading-7 text-base-content/80">
-        {text}
-      </p>
-      <ChevronRight className="h-4 w-4 shrink-0 text-base-content/35" aria-hidden="true" />
-    </div>
+    <AssetListItem
+      className="py-3"
+      onClick={onClick}
+      leftIcon={(
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-base-200/70 text-base-content">
+          {kind === 'perps' ? (
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 16l5-5 4 4 7-7" />
+              <path d="M15 8h5v5" />
+            </svg>
+          ) : kind === 'card' ? (
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3.5" y="6.5" width="17" height="11" rx="2.5" />
+              <path d="M3.5 10h17" />
+              <path d="M7 14.5h3.5" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6 7.5h12" />
+              <path d="M6 12h7" />
+              <path d="M6 16.5h5" />
+              <circle cx="17.5" cy="15.5" r="2.5" />
+            </svg>
+          )}
+        </div>
+      )}
+      leftPrimary={title}
+      leftPrimaryClassName="font-semibold"
+      leftSecondary={subtitle ?? undefined}
+      leftSecondaryClassName={subtitle ? 'mt-1 truncate text-sm text-base-content/60' : ''}
+      rightPrimary={onClick ? <ChevronRight className="h-4 w-4 shrink-0 text-base-content/35" aria-hidden="true" /> : undefined}
+    />
   );
 }
 
-export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentChat }: WalletScreenProps) {
+function AccountValueLinkCard({
+  value,
+  onClick,
+}: {
+  value: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="mt-2 flex w-full items-center justify-between gap-3 text-left"
+      onClick={onClick}
+    >
+      <p className="m-0 min-w-0 flex-1 truncate text-[1.75rem] font-bold leading-tight tabular-nums">
+        {value}
+      </p>
+      <ChevronRight className="h-4 w-4 shrink-0 text-base-content/35" aria-hidden="true" />
+    </button>
+  );
+}
+
+export function WalletScreen({
+  auth,
+  onLogout,
+  onOpenAssetDetail,
+  onOpenAgentChat,
+  onOpenPredictionIntro,
+  onOpenPredictionHub,
+}: WalletScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
-  const { showError, showSuccess } = useToast();
+  const isCoarsePointer = useIsCoarsePointer();
+  const { showError } = useToast();
   const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeModalContent, setActiveModalContent] = useState<ActiveModalContent>('topUp');
@@ -326,9 +377,9 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const [modalVisible, setModalVisible] = useState(false);
   const [modalOriginRect, setModalOriginRect] = useState<RectSnapshot | null>(null);
   const [tradePreset, setTradePreset] = useState<TradePreset | null>(null);
-  const [isActivatingPrediction, setIsActivatingPrediction] = useState(false);
   const [isStablesExpanded, setIsStablesExpanded] = useState(false);
   const [cachedPortfolio, setCachedPortfolio] = useState<WalletPortfolioResponse | null>(null);
+  const [cachedTrackedAssetDetails, setCachedTrackedAssetDetails] = useState<Record<string, CoinDetailBatchItem>>({});
   const [detailPriceChangeByHoldingKey, setDetailPriceChangeByHoldingKey] = useState<Record<string, number | null>>({});
   const [highRiskByHoldingKey, setHighRiskByHoldingKey] = useState<Record<string, boolean>>({});
   const [cryptoToolsMode, setCryptoToolsMode] = useState<'filter' | 'add' | null>(null);
@@ -383,15 +434,18 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const portfolioData = data ?? cachedPortfolio;
   const perpsAccount = portfolioData?.perpsAccount ?? null;
   const predictionAccount = portfolioData?.predictionAccount ?? null;
+  const fiat24Card = portfolioData?.fiat24Card ?? null;
   const totalBalance = portfolioData?.totalUsd ?? 0;
   const isPerpsActivated = perpsAccount?.activationState === 'active';
   const isPredictionActivated = predictionAccount?.activationState === 'active';
+  const isFiat24CardOpened = fiat24Card?.opened === true;
   const perpsAccountValue = perpsAccount?.available && Number.isFinite(Number(perpsAccount.balanceUsd))
     ? formatUsdAdaptive(Number(perpsAccount.balanceUsd ?? 0), i18n.language)
     : t('wallet.accountUnavailableValue');
   const predictionAccountValue = predictionAccount?.available && Number.isFinite(Number(predictionAccount.balanceUsd))
     ? formatUsdAdaptive(Number(predictionAccount.balanceUsd ?? 0), i18n.language)
     : t('wallet.accountUnavailableValue');
+  const fiat24CardStatusText = isFiat24CardOpened ? t('wallet.cardOpened') : t('wallet.cardUnavailable');
   const supportedChains = appConfig?.supportedChains ?? [];
   const transferSupportedChains = useMemo(
     () => supportedChains.filter((chain) => chain.protocol === 'evm' || chain.protocol === 'svm' || chain.protocol === 'tvm' || chain.protocol === 'btc'),
@@ -431,20 +485,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     setTrackedAssets(getWalletAddedAssets(walletAddress));
   }, [walletAddress]);
 
-  async function handleActivatePredictionAccount(): Promise<void> {
-    if (isActivatingPrediction) return;
-    setIsActivatingPrediction(true);
-    try {
-      await activatePredictionAccount({ signatureType: 'eoa' });
-      await queryClient.invalidateQueries({ queryKey: ['wallet-portfolio'] });
-      showSuccess(t('wallet.predictionActivationSuccess'));
-    } catch {
-      showError(t('wallet.predictionActivationFailed'));
-    } finally {
-      setIsActivatingPrediction(false);
-    }
-  }
-
   useEffect(() => {
     if (!walletFingerprint) return;
     const cacheKey = `wallet-portfolio:v2:${walletFingerprint}`;
@@ -463,12 +503,46 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     });
   }, [data, walletFingerprint]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const tokens = trackedAssets.map((item) => ({ chain: item.chain, contract: item.contract }));
+
+    if (tokens.length === 0) {
+      setCachedTrackedAssetDetails({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void readTrackedAssetDetailCache(tokens).then((items) => {
+      if (cancelled) return;
+      setCachedTrackedAssetDetails(
+        Object.fromEntries(items.map((item) => [buildChainAssetId(item.chain, item.contract).trim(), item] as const)),
+      );
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trackedAssets]);
+
+  useEffect(() => {
+    if (trackedAssetDetails.length === 0) return;
+    void writeTrackedAssetDetailCache(trackedAssetDetails);
+  }, [trackedAssetDetails]);
+
   const trackedAssetDetailByChainAssetId = useMemo(
-    () =>
-      new Map(
-        trackedAssetDetails.map((item) => [buildChainAssetId(item.chain, item.contract).trim(), item.detail] as const),
-      ),
-    [trackedAssetDetails],
+    () => {
+      const byKey = new Map<string, CoinDetailBatchItem['detail']>();
+      for (const [key, item] of Object.entries(cachedTrackedAssetDetails)) {
+        byKey.set(key, item.detail);
+      }
+      for (const item of trackedAssetDetails) {
+        byKey.set(buildChainAssetId(item.chain, item.contract).trim(), item.detail);
+      }
+      return byKey;
+    },
+    [cachedTrackedAssetDetails, trackedAssetDetails],
   );
 
   const holdings = useMemo<WalletHoldingListItem[]>(() => {
@@ -712,6 +786,89 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
     };
   }, [cryptoFilterState, highRiskByHoldingKey, holdings]);
 
+  const hasActiveCryptoFilters = Boolean(
+    cryptoFilterState.networkKey || cryptoFilterState.hideSmallBalances || cryptoFilterState.hideHighRisk,
+  );
+  const visibleCryptosUsd = hasActiveCryptoFilters ? stableAndCryptos.filteredCryptosUsd : stableAndCryptos.cryptosUsd;
+  const perpsBalanceUsd = perpsAccount?.available && Number.isFinite(Number(perpsAccount.balanceUsd))
+    ? Number(perpsAccount.balanceUsd ?? 0)
+    : 0;
+  const predictionBalanceUsd = predictionAccount?.available && Number.isFinite(Number(predictionAccount.balanceUsd))
+    ? Number(predictionAccount.balanceUsd ?? 0)
+    : 0;
+
+  const sortedWalletSectionIds = useMemo(() => {
+    const defaultOrder = {
+      stables: 0,
+      cryptos: 1,
+      card: 2,
+      perps: 3,
+      prediction: 4,
+    } satisfies Record<'stables' | 'cryptos' | 'card' | 'perps' | 'prediction', number>;
+
+    const sections = [
+      {
+        id: 'stables' as const,
+        balanceUsd: stableAndCryptos.stablesUsd,
+        hasBalance: stableAndCryptos.stablesUsd > 0,
+        isActivated: false,
+      },
+      {
+        id: 'cryptos' as const,
+        balanceUsd: visibleCryptosUsd,
+        hasBalance: visibleCryptosUsd > 0,
+        isActivated: false,
+      },
+      {
+        id: 'card' as const,
+        balanceUsd: 0,
+        hasBalance: false,
+        isActivated: isFiat24CardOpened,
+      },
+      {
+        id: 'perps' as const,
+        balanceUsd: perpsBalanceUsd,
+        hasBalance: perpsBalanceUsd > 0,
+        isActivated: isPerpsActivated,
+      },
+      {
+        id: 'prediction' as const,
+        balanceUsd: predictionBalanceUsd,
+        hasBalance: predictionBalanceUsd > 0,
+        isActivated: isPredictionActivated,
+      },
+    ];
+
+    return sections
+      .slice()
+      .sort((left, right) => {
+        if (left.hasBalance !== right.hasBalance) {
+          return Number(right.hasBalance) - Number(left.hasBalance);
+        }
+
+        if (left.hasBalance && right.hasBalance && left.balanceUsd !== right.balanceUsd) {
+          return right.balanceUsd - left.balanceUsd;
+        }
+
+        const leftIsAccountSection = left.id === 'card' || left.id === 'perps' || left.id === 'prediction';
+        const rightIsAccountSection = right.id === 'card' || right.id === 'perps' || right.id === 'prediction';
+        if (leftIsAccountSection && rightIsAccountSection && left.isActivated !== right.isActivated) {
+          return Number(right.isActivated) - Number(left.isActivated);
+        }
+
+        return defaultOrder[left.id] - defaultOrder[right.id];
+      })
+      .map((section) => section.id);
+  }, [
+    isFiat24CardOpened,
+    isPerpsActivated,
+    isPredictionActivated,
+    perpsBalanceUsd,
+    predictionBalanceUsd,
+    stableAndCryptos.stablesUsd,
+    visibleCryptosUsd,
+  ]);
+
   const chartLine = useMemo<LivelinePoint[]>(
     () => snapshotsToLivelinePoints(snapshotData?.points),
     [snapshotData?.points],
@@ -910,9 +1067,6 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
   const shouldShowLoading = isLoading && !portfolioData;
   const shouldShowError = isError && !portfolioData;
   const shouldShowBalanceEmptyState = !shouldShowLoading && !shouldShowError && totalBalance <= 0 && holdings.length === 0;
-  const hasActiveCryptoFilters = Boolean(
-    cryptoFilterState.networkKey || cryptoFilterState.hideSmallBalances || cryptoFilterState.hideHighRisk,
-  );
 
   useEffect(
     () => () => {
@@ -1180,6 +1334,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
             </p>
             <div className="mt-5">
               <button
+                ref={topUpButtonRef}
                 type="button"
                 className="btn btn-primary h-11 w-full text-sm font-semibold"
                 onClick={openTopUpModal}
@@ -1258,7 +1413,7 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
                   formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
                   formatTime={(time) => formatChartTimeLabel(time, i18n.language, chartBucketSeconds)}
                   grid={false}
-                  scrub
+                  scrub={!isCoarsePointer}
                   fill
                   padding={{ top: 6, right: 6, bottom: 6, left: 6 }}
                 />
@@ -1304,159 +1459,189 @@ export function WalletScreen({ auth, onLogout, onOpenAssetDetail, onOpenAgentCha
         )}
         {!shouldShowLoading && !shouldShowError && (
           <div className="flex flex-col">
-            <article className="border-b border-base-300 py-5">
-              <div className="flex flex-col gap-1">
-                <h3 className="m-0 text-sm text-base-content">{t('wallet.stables')}</h3>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                    {formatUsdAdaptive(stableAndCryptos.stablesUsd, i18n.language)}
-                  </p>
-                  {stableAndCryptos.stableHoldings.length > 0 ? (
-                    <button
-                      type="button"
-                      className={WALLET_HEADER_ICON_BUTTON_CLASS_NAME}
-                      aria-label={isStablesExpanded ? t('common.less') : t('common.more')}
-                      aria-expanded={isStablesExpanded}
-                      onClick={() => setIsStablesExpanded((value) => !value)}
-                    >
-                      {isStablesExpanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              {isStablesExpanded && stableAndCryptos.stableHoldings.length > 0 ? (
-                <div className="mt-3 flex flex-col">
-                  {stableAndCryptos.stableHoldings.map((asset) => (
-                    <AssetListItem
-                      key={asset.key}
-                      className="py-3"
-                      onClick={() => openHoldingDetail(asset)}
-                      leftIcon={(
-                        <TokenAvatar
-                          icon={asset.logo}
-                          symbol={asset.symbol}
-                          name={asset.name || t('wallet.token')}
-                          fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
+            {sortedWalletSectionIds.map((sectionId) => {
+              if (sectionId === 'stables') {
+                return (
+                  <article key={sectionId} className="border-b border-base-300 py-5">
+                    <div className="flex flex-col gap-1">
+                      <h3 className="m-0 text-sm text-base-content">{t('wallet.stables')}</h3>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                          {formatUsdAdaptive(stableAndCryptos.stablesUsd, i18n.language)}
+                        </p>
+                        {stableAndCryptos.stableHoldings.length > 0 ? (
+                          <button
+                            type="button"
+                            className={WALLET_HEADER_ICON_BUTTON_CLASS_NAME}
+                            aria-label={isStablesExpanded ? t('common.less') : t('common.more')}
+                            aria-expanded={isStablesExpanded}
+                            onClick={() => setIsStablesExpanded((value) => !value)}
+                          >
+                            {isStablesExpanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    {isStablesExpanded && stableAndCryptos.stableHoldings.length > 0 ? (
+                      <div className="mt-3 flex flex-col">
+                        {stableAndCryptos.stableHoldings.map((asset) => (
+                          <AssetListItem
+                            key={asset.key}
+                            className="py-4"
+                            onClick={() => openHoldingDetail(asset)}
+                            leftIcon={(
+                              <TokenAvatar
+                                icon={asset.logo}
+                                symbol={asset.symbol}
+                                name={asset.name || t('wallet.token')}
+                                fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
+                              />
+                            )}
+                            leftPrimary={asset.name || t('wallet.token')}
+                            leftSecondary={`${asset.amountText} ${asset.symbol}`}
+                            rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
+                          />
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              }
+
+              if (sectionId === 'cryptos') {
+                return (
+                  <article key={sectionId} className="border-b border-base-300 py-5">
+                    <div className="flex flex-col gap-1">
+                      <h3 className="m-0 text-sm text-base-content">{t('wallet.cryptos')}</h3>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                          {formatUsdAdaptive(visibleCryptosUsd, i18n.language)}
+                        </p>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            className={[
+                              WALLET_HEADER_ICON_BUTTON_CLASS_NAME,
+                              hasActiveCryptoFilters ? 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary' : '',
+                            ].filter(Boolean).join(' ')}
+                            onClick={() => openCryptoTools('filter')}
+                            aria-label={t('wallet.cryptoManageFilter')}
+                            aria-pressed={hasActiveCryptoFilters}
+                          >
+                            <Funnel size={16} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className={WALLET_HEADER_ICON_BUTTON_CLASS_NAME}
+                            onClick={() => openCryptoTools('add')}
+                            aria-label={t('wallet.cryptoManageAdd')}
+                          >
+                            <Plus size={16} aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                      {hasActiveCryptoFilters ? (
+                        <p className="m-0 text-xs text-base-content/55">{t('wallet.cryptoManageFilterActive')}</p>
+                      ) : null}
+                    </div>
+                    <div className="mt-3 flex flex-col">
+                      {stableAndCryptos.filteredCryptoHoldings.length === 0 && hasActiveCryptoFilters ? (
+                        <p className="m-0 py-3 text-sm text-base-content/60">{t('wallet.cryptoManageNoAssets')}</p>
+                      ) : stableAndCryptos.filteredCryptoHoldings.map((asset) => {
+                        const resolvedPriceChangePct = asset.priceChangePct ?? detailPriceChangeByHoldingKey[asset.key] ?? null;
+                        const changeClassName =
+                          Number(resolvedPriceChangePct ?? 0) > 0
+                            ? 'text-success'
+                            : Number(resolvedPriceChangePct ?? 0) < 0
+                              ? 'text-error'
+                              : 'text-base-content/60';
+                        return (
+                          <AssetListItem
+                            key={asset.key}
+                            className="py-4"
+                            onClick={() => openHoldingDetail(asset)}
+                            leftIcon={
+                              <TokenAvatar
+                                icon={asset.logo}
+                                symbol={asset.symbol}
+                                name={asset.name || t('wallet.token')}
+                                fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
+                              />
+                            }
+                            leftPrimary={asset.name || t('wallet.token')}
+                            leftSecondary={`${asset.amountText} ${asset.symbol}`}
+                            rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
+                            rightSecondary={<span className={changeClassName}>{formatPct(resolvedPriceChangePct)}</span>}
+                          />
+                        );
+                      })}
+                    </div>
+                  </article>
+                );
+              }
+
+              if (sectionId === 'perps') {
+                return (
+                  <article key={sectionId} className="border-b border-base-300 py-5">
+                    <div className="flex flex-col gap-1">
+                      <h3 className="m-0 text-sm text-base-content">{t('wallet.perpsAccount')}</h3>
+                      {isPerpsActivated ? (
+                        <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                          {perpsAccountValue}
+                        </p>
+                      ) : (
+                        <AccountIntroBlock kind="perps" title={t('wallet.perpsAccountIntro')} />
+                      )}
+                    </div>
+                  </article>
+                );
+              }
+
+              if (sectionId === 'card') {
+                return (
+                  <article key={sectionId} className="border-b border-base-300 py-5">
+                    <div className="flex flex-col gap-1">
+                      <h3 className="m-0 text-sm text-base-content">{t('wallet.cardAccount')}</h3>
+                      {isFiat24CardOpened ? (
+                        <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                          {fiat24CardStatusText}
+                        </p>
+                      ) : fiat24Card?.available === false && fiat24Card?.error ? (
+                        <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
+                          {fiat24CardStatusText}
+                        </p>
+                      ) : (
+                        <AccountIntroBlock
+                          kind="card"
+                          title={t('wallet.cardIntro')}
+                          subtitle={t('wallet.cardIntroSubtitle')}
                         />
                       )}
-                      leftPrimary={asset.name || t('wallet.token')}
-                      leftSecondary={`${asset.amountText} ${asset.symbol}`}
-                      rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </article>
-
-            <article className="border-b border-base-300 py-5">
-              <div className="flex flex-col gap-1">
-                <h3 className="m-0 text-sm text-base-content">{t('wallet.cryptos')}</h3>
-                <div className="flex items-center justify-between gap-3">
-                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                    {formatUsdAdaptive(
-                      hasActiveCryptoFilters ? stableAndCryptos.filteredCryptosUsd : stableAndCryptos.cryptosUsd,
-                      i18n.language,
-                    )}
-                  </p>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button
-                      type="button"
-                      className={[
-                        WALLET_HEADER_ICON_BUTTON_CLASS_NAME,
-                        hasActiveCryptoFilters ? 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary' : '',
-                      ].filter(Boolean).join(' ')}
-                      onClick={() => openCryptoTools('filter')}
-                      aria-label={t('wallet.cryptoManageFilter')}
-                      aria-pressed={hasActiveCryptoFilters}
-                    >
-                      <Funnel size={16} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className={WALLET_HEADER_ICON_BUTTON_CLASS_NAME}
-                      onClick={() => openCryptoTools('add')}
-                      aria-label={t('wallet.cryptoManageAdd')}
-                    >
-                      <Plus size={16} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-                {hasActiveCryptoFilters ? (
-                  <p className="m-0 text-xs text-base-content/55">{t('wallet.cryptoManageFilterActive')}</p>
-                ) : null}
-              </div>
-              <div className="mt-3 flex flex-col">
-                {stableAndCryptos.filteredCryptoHoldings.length === 0 && hasActiveCryptoFilters ? (
-                  <p className="m-0 py-3 text-sm text-base-content/60">{t('wallet.cryptoManageNoAssets')}</p>
-                ) : stableAndCryptos.filteredCryptoHoldings.map((asset) => {
-                  const resolvedPriceChangePct = asset.priceChangePct ?? detailPriceChangeByHoldingKey[asset.key] ?? null;
-                  const changeClassName =
-                    Number(resolvedPriceChangePct ?? 0) > 0
-                      ? 'text-success'
-                      : Number(resolvedPriceChangePct ?? 0) < 0
-                        ? 'text-error'
-                        : 'text-base-content/60';
-                  return (
-                    <AssetListItem
-                      key={asset.key}
-                      className="py-3"
-                      onClick={() => openHoldingDetail(asset)}
-                      leftIcon={
-                        <TokenAvatar
-                          icon={asset.logo}
-                          symbol={asset.symbol}
-                          name={asset.name || t('wallet.token')}
-                          fallbackLabel={getAssetInitial(asset.symbol, asset.name)}
-                        />
-                      }
-                      leftPrimary={asset.name || t('wallet.token')}
-                      leftSecondary={`${asset.amountText} ${asset.symbol}`}
-                      rightPrimary={formatUsdAdaptive(asset.valueUsd, i18n.language)}
-                      rightSecondary={<span className={changeClassName}>{formatPct(resolvedPriceChangePct)}</span>}
-                    />
-                  );
-                })}
-              </div>
-            </article>
-
-            <article className="border-b border-base-300 py-5">
-              <div className="flex flex-col gap-1">
-                <h3 className="m-0 text-sm text-base-content">{t('wallet.perpsAccount')}</h3>
-                {isPerpsActivated ? (
-                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                    {perpsAccountValue}
-                  </p>
-                ) : (
-                  <AccountIntroBlock kind="perps" text={t('wallet.perpsAccountIntro')} />
-                )}
-              </div>
-            </article>
-
-            <article className="border-b border-base-300 py-5">
-              <div className="flex flex-col gap-1">
-                <h3 className="m-0 text-sm text-base-content">{t('wallet.predictionAccount')}</h3>
-                {isPredictionActivated ? (
-                  <p className="m-0 text-[1.75rem] font-bold leading-tight tabular-nums">
-                    {predictionAccountValue}
-                  </p>
-                ) : (
-                  <>
-                    <AccountIntroBlock kind="prediction" text={t('wallet.predictionAccountIntro')} />
-                    <div className="mt-3">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={() => void handleActivatePredictionAccount()}
-                        disabled={isActivatingPrediction}
-                      >
-                        {isActivatingPrediction ? <span className="loading loading-spinner loading-xs" /> : null}
-                        {t('wallet.predictionActivate')}
-                      </button>
                     </div>
-                  </>
-                )}
-              </div>
-            </article>
+                  </article>
+                );
+              }
+
+              return (
+                <article key={sectionId} className="border-b border-base-300 py-5">
+                  <div className="flex flex-col gap-1">
+                    <h3 className="m-0 text-sm text-base-content">{t('wallet.predictionAccount')}</h3>
+                    {isPredictionActivated ? (
+                      <AccountValueLinkCard
+                        value={predictionAccountValue}
+                        onClick={onOpenPredictionHub}
+                      />
+                    ) : (
+                      <AccountIntroBlock
+                        kind="prediction"
+                        title={t('wallet.predictionAccountIntro')}
+                        onClick={onOpenPredictionIntro}
+                      />
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>

@@ -453,7 +453,7 @@ export async function fetchBitgetTokenDetails(
         {
           list: misses.map((item) => ({
             chain: item.chain,
-            contract: contractKeyToUpstreamContract(item.contract),
+            contract: contractKeyToUpstreamContract(item.contract, item.chain),
           })),
         },
       );

@@ -21,21 +21,6 @@ type WalletCryptoToolsModalProps = {
   onRemoveAsset: (chain: string, contract: string) => void;
 };
 
-function formatPct(value: number | null | undefined): string {
-  if (!Number.isFinite(Number(value))) return '--';
-  const numeric = Number(value);
-  const sign = numeric > 0 ? '+' : '';
-  return `${sign}${numeric.toFixed(2)}%`;
-}
-
-function pctClassName(value: number | null | undefined): string {
-  if (!Number.isFinite(Number(value))) return 'text-base-content/55';
-  const numeric = Number(value);
-  if (numeric > 0) return 'text-success';
-  if (numeric < 0) return 'text-error';
-  return 'text-base-content/70';
-}
-
 function getAssetKey(chain: string | null | undefined, contract: string | null | undefined): string {
   return buildChainAssetId(chain, contract).trim();
 }
@@ -45,6 +30,14 @@ function truncateMiddle(value: string, leading = 6, trailing = 4): string {
   if (!normalized) return '--';
   if (normalized.length <= leading + trailing + 3) return normalized;
   return `${normalized.slice(0, leading)}...${normalized.slice(-trailing)}`;
+}
+
+function getTokenFallback(symbol: string | null | undefined, name: string | null | undefined) {
+  return (
+    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
+      {(symbol || name || '?')[0]?.toUpperCase() ?? '?'}
+    </div>
+  );
 }
 
 export function WalletCryptoToolsModal({
@@ -59,7 +52,7 @@ export function WalletCryptoToolsModal({
   onAddAsset,
   onRemoveAsset,
 }: WalletCryptoToolsModalProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { showError, showSuccess } = useToast();
   const [filterPanel, setFilterPanel] = useState<'main' | 'chain'>('main');
   const [addMode, setAddMode] = useState<'search' | 'manual'>('search');
@@ -87,9 +80,10 @@ export function WalletCryptoToolsModal({
       results.filter((item) => {
         if (item.marketType !== 'spot') return false;
         const normalizedChain = normalizeMarketChain(item.chain);
-        return Boolean(normalizedChain && supportedChainByMarketChain.has(normalizedChain));
+        if (!normalizedChain || !supportedChainByMarketChain.has(normalizedChain)) return false;
+        return !existingAssetKeys.has(getAssetKey(normalizedChain, item.contract ?? ''));
       }),
-    [results, supportedChainByMarketChain],
+    [existingAssetKeys, results, supportedChainByMarketChain],
   );
 
   useEffect(() => {
@@ -220,6 +214,67 @@ export function WalletCryptoToolsModal({
 
   if (!visible || !mode) return null;
 
+  const renderTokenRow = ({
+    key,
+    symbol,
+    name,
+    image,
+    chainLabel,
+    contract,
+    buttonLabel,
+    buttonClassName,
+    onClick,
+    disabled = false,
+  }: {
+    key: string;
+    symbol: string | null | undefined;
+    name: string | null | undefined;
+    image: string | null | undefined;
+    chainLabel: string;
+    contract?: string | null | undefined;
+    buttonLabel: string;
+    buttonClassName: string;
+    onClick: () => void;
+    disabled?: boolean;
+  }) => (
+    <div
+      key={key}
+      className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3 last:border-b-0"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        {image ? (
+          <CachedIconImage
+            src={image}
+            alt={symbol || name || t('wallet.token')}
+            className="h-10 w-10 rounded-full bg-base-300 object-cover"
+            loading="lazy"
+            fallback={getTokenFallback(symbol, name)}
+          />
+        ) : getTokenFallback(symbol, name)}
+        <div className="min-w-0">
+          <p className="m-0 truncate text-sm font-semibold text-base-content">
+            {symbol || t('wallet.token')}
+          </p>
+          <p className="m-0 mt-1 text-xs text-base-content/45">
+            {chainLabel}
+            {contract && contract !== 'native'
+              ? ` · ${truncateMiddle(contract, 6, 4)}`
+              : ''}
+          </p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className={buttonClassName}
+        onClick={onClick}
+        disabled={disabled}
+      >
+        {buttonLabel}
+      </button>
+    </div>
+  );
+
   const addedAssetsSection = (
     <section className="mt-4 rounded-3xl border border-base-300 bg-base-100 p-4">
       <p className="m-0 text-sm font-semibold text-base-content">
@@ -238,49 +293,17 @@ export function WalletCryptoToolsModal({
                 supportedChainByMarketChain.get(normalizeMarketChain(asset.chain))?.name
                 ?? asset.networkKey
                 ?? asset.chain.toUpperCase();
-              const fallback = (
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
-                  {(asset.symbol || asset.name || '?')[0]?.toUpperCase() ?? '?'}
-                </div>
-              );
-
-              return (
-                <div
-                  key={getAssetKey(asset.chain, asset.contract)}
-                  className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3 last:border-b-0"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    {asset.image ? (
-                      <CachedIconImage
-                        src={asset.image}
-                        alt={asset.symbol || asset.name}
-                        className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                        loading="lazy"
-                        fallback={fallback}
-                      />
-                    ) : fallback}
-                    <div className="min-w-0">
-                      <p className="m-0 truncate text-sm font-semibold text-base-content">
-                        {asset.symbol || t('wallet.token')}
-                      </p>
-                      <p className="m-0 mt-1 text-xs text-base-content/45">
-                        {chainLabel}
-                        {asset.contract && asset.contract !== 'native'
-                          ? ` · ${truncateMiddle(asset.contract, 6, 4)}`
-                          : ''}
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs shrink-0 text-error hover:bg-error/10"
-                    onClick={() => handleRemoveAddedAsset(asset)}
-                  >
-                    {t('trade.remove')}
-                  </button>
-                </div>
-              );
+              return renderTokenRow({
+                key: getAssetKey(asset.chain, asset.contract),
+                symbol: asset.symbol,
+                name: asset.name,
+                image: asset.image,
+                chainLabel,
+                contract: asset.contract,
+                buttonLabel: t('trade.remove'),
+                buttonClassName: 'btn btn-ghost btn-xs shrink-0 text-error hover:bg-error/10',
+                onClick: () => handleRemoveAddedAsset(asset),
+              });
             })}
           </div>
         </div>
@@ -465,7 +488,7 @@ export function WalletCryptoToolsModal({
                     spellCheck={false}
                   />
                 </div>
-                {addedAssetsSection}
+                {!query.trim() ? addedAssetsSection : null}
 
                 <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
                   {isSearching ? (
@@ -479,52 +502,21 @@ export function WalletCryptoToolsModal({
                   ) : (
                     <div className="overflow-hidden rounded-3xl border border-base-300 bg-base-100">
                       {filteredSearchResults.map((item) => {
-                        const assetKey = getAssetKey(item.chain, item.contract);
-                        const isAdded = existingAssetKeys.has(assetKey);
-                        const changeClass = pctClassName(item.change24h);
-                        const fallback = (
-                          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-base-300 text-sm font-semibold text-base-content/75">
-                            {item.symbol ? item.symbol[0].toUpperCase() : '?'}
-                          </div>
-                        );
-
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            className="flex w-full items-center justify-between gap-3 border-b border-base-300 px-4 py-3 text-left transition-colors hover:bg-base-200/60 last:border-b-0"
-                            onClick={() => handleAddFromSearch(item)}
-                            disabled={isAdded}
-                          >
-                            <div className="flex min-w-0 items-center gap-3">
-                              {item.image ? (
-                                <CachedIconImage
-                                  src={item.image}
-                                  alt={item.symbol}
-                                  className="h-10 w-10 rounded-full bg-base-300 object-cover"
-                                  loading="lazy"
-                                  fallback={fallback}
-                                />
-                              ) : fallback}
-                              <div className="min-w-0">
-                                <p className="m-0 truncate text-sm font-semibold">{item.symbol}</p>
-                                <p className="m-0 mt-0.5 truncate text-xs text-base-content/55">{item.name}</p>
-                                <p className="m-0 mt-1 text-xs text-base-content/45">
-                                  {supportedChainByMarketChain.get(normalizeMarketChain(item.chain))?.name ?? normalizeMarketChain(item.chain).toUpperCase()}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <p className="m-0 text-sm text-base-content/65">
-                                {item.currentPrice != null ? Number(item.currentPrice).toLocaleString(i18n.language, { style: 'currency', currency: 'USD', maximumFractionDigits: 6 }) : '--'}
-                              </p>
-                              <p className={`m-0 mt-0.5 text-xs font-semibold ${changeClass}`}>{formatPct(item.change24h)}</p>
-                              <p className="m-0 mt-1 text-xs font-medium text-primary">
-                                {isAdded ? t('wallet.cryptoManageAdded') : t('wallet.cryptoManageAdd')}
-                              </p>
-                            </div>
-                          </button>
-                        );
+                        const normalizedChain = normalizeMarketChain(item.chain);
+                        const chainLabel =
+                          supportedChainByMarketChain.get(normalizedChain)?.name
+                          ?? normalizedChain.toUpperCase();
+                        return renderTokenRow({
+                          key: item.id,
+                          symbol: item.symbol,
+                          name: item.name,
+                          image: item.image,
+                          chainLabel,
+                          contract: item.contract,
+                          buttonLabel: t('wallet.cryptoManageAdd'),
+                          buttonClassName: 'btn btn-primary btn-xs shrink-0',
+                          onClick: () => handleAddFromSearch(item),
+                        });
                       })}
                     </div>
                   )}

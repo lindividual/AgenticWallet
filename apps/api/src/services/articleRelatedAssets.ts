@@ -1,7 +1,6 @@
 import { NATIVE_CONTRACT_KEY, buildAssetId, normalizeMarketChain, toContractKey } from './assetIdentity';
-import { fetchBitgetTokenDetails } from './bitgetWallet';
 import { resolveCoinGeckoAssetIdForContract } from './coingecko';
-import { fetchSolanaTokenDetails } from './solana';
+import { resolveTokenDetails } from './tokenDetails';
 import { fetchTradeMarketDetail } from './tradeBrowse';
 import type { Bindings } from '../types';
 
@@ -206,14 +205,11 @@ export async function hydrateArticleRelatedAssets(
   });
 
   const bitgetRequests = enriched
-    .filter((item) => item.market_type === 'spot' && item.chain && item.contract && item.chain !== 'sol')
+    .filter((item) => item.market_type === 'spot' && item.chain && item.contract)
     .map((item) => ({
       chain: item.chain as string,
       contract: item.contract as string,
     }));
-  const solContracts = enriched
-    .filter((item) => item.market_type === 'spot' && item.chain === 'sol' && item.contract)
-    .map((item) => item.contract as string);
   const marketRequests = enriched
     .filter((item) => item.market_type && item.market_type !== 'spot' && item.market_item_id)
     .map((item) => ({
@@ -221,10 +217,7 @@ export async function hydrateArticleRelatedAssets(
       itemId: item.market_item_id as string,
     }));
 
-  const [bitgetDetails, solanaDetails] = await Promise.all([
-    fetchBitgetTokenDetails(env, bitgetRequests).catch(() => []),
-    solContracts.length > 0 ? fetchSolanaTokenDetails(env, solContracts).catch(() => new Map()) : Promise.resolve(new Map()),
-  ]);
+  const resolvedDetails = await resolveTokenDetails(env, bitgetRequests).catch(() => []);
   const spotAssetIdMap = await resolveSpotAssetIdMap(
     env,
     enriched
@@ -232,7 +225,7 @@ export async function hydrateArticleRelatedAssets(
       .map((item) => ({ chain: item.chain, contract: item.contract })),
   );
 
-  const bitgetDetailByKey = new Map(bitgetDetails.map((item) => [`${item.chain}:${item.contract || 'native'}`, item.detail] as const));
+  const detailByKey = new Map(resolvedDetails.map((item) => [`${item.chain}:${item.contract || 'native'}`, item.detail] as const));
   const marketDetailResults = await Promise.all(
     marketRequests.map(async (item) => {
       try {
@@ -249,20 +242,8 @@ export async function hydrateArticleRelatedAssets(
   const marketDetailByKey = new Map(marketDetailResults);
 
   return enriched.map((item) => {
-    if (item.market_type === 'spot' && item.chain === 'sol' && item.contract) {
-      const detail = solanaDetails.get(item.contract) ?? null;
-      const assetId = spotAssetIdMap.get(`${item.chain}:${toContractKey(item.contract, item.chain)}`) ?? item.asset_id ?? null;
-      return {
-        ...item,
-        asset_id: assetId,
-        name: detail?.name ?? item.name,
-        image: detail?.image ?? item.image,
-        price_change_percentage_24h: detail?.priceChange24h ?? item.price_change_percentage_24h,
-      };
-    }
-
     if (item.market_type === 'spot' && item.chain && item.contract) {
-      const detail = bitgetDetailByKey.get(`${item.chain}:${item.contract}`) ?? null;
+      const detail = detailByKey.get(`${item.chain}:${item.contract}`) ?? null;
       const assetId = spotAssetIdMap.get(`${item.chain}:${toContractKey(item.contract, item.chain)}`) ?? item.asset_id ?? null;
       return {
         ...item,

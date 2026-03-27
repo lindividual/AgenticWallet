@@ -9,6 +9,8 @@ import { AuthScreen } from './components/screens/AuthScreen';
 import { ArticleReaderScreen } from './components/screens/ArticleReaderScreen';
 import { HomeScreen } from './components/screens/HomeScreen';
 import { MarketDetailScreen } from './components/screens/MarketDetailScreen';
+import { PredictionHubScreen } from './components/screens/PredictionHubScreen';
+import { PredictionIntroScreen } from './components/screens/PredictionIntroScreen';
 import { TokenDetailScreen } from './components/screens/TokenDetailScreen';
 import { TradeScreen } from './components/screens/TradeScreen';
 import { WalletAssetDetailScreen } from './components/screens/WalletAssetDetailScreen';
@@ -26,6 +28,7 @@ const ARTICLE_EXIT_MS = 220;
 const TOKEN_EXIT_MS = 220;
 const MARKET_EXIT_MS = 220;
 const WALLET_ASSET_EXIT_MS = 220;
+const WALLET_PREDICTION_EXIT_MS = 220;
 const TOKEN_ROUTE_PREVIEW_QUERY_KEY = 'trade-token-route-preview';
 
 export function App() {
@@ -40,6 +43,8 @@ export function App() {
   const marketMatch = useMatch({ from: '/market/$marketType/$itemId', shouldThrow: false });
   const routeArticleId = articleMatch?.params.articleId ?? null;
   const isArticleRoute = Boolean(routeArticleId);
+  const isWalletPredictionIntroRoute = location.pathname === '/wallet/prediction/intro';
+  const isWalletPredictionHubRoute = location.pathname === '/wallet/prediction';
   const routeToken = tokenMatch?.params
     ? {
         chain: tokenMatch.params.chain.trim(),
@@ -71,6 +76,11 @@ export function App() {
   const [activeWalletAssetRoute, setActiveWalletAssetRoute] = useState(routeWalletAsset);
   const [isWalletAssetExiting, setIsWalletAssetExiting] = useState(false);
   const walletAssetExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [activeWalletPredictionRoute, setActiveWalletPredictionRoute] = useState<'intro' | 'hub' | null>(
+    isWalletPredictionIntroRoute ? 'intro' : isWalletPredictionHubRoute ? 'hub' : null,
+  );
+  const [isWalletPredictionExiting, setIsWalletPredictionExiting] = useState(false);
+  const walletPredictionExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeMarketRoute, setActiveMarketRoute] = useState<{
     marketType: TradeMarketDetailType;
     itemId: string;
@@ -104,6 +114,9 @@ export function App() {
       }
       if (walletAssetExitTimerRef.current) {
         clearTimeout(walletAssetExitTimerRef.current);
+      }
+      if (walletPredictionExitTimerRef.current) {
+        clearTimeout(walletPredictionExitTimerRef.current);
       }
       if (marketExitTimerRef.current) {
         clearTimeout(marketExitTimerRef.current);
@@ -150,6 +163,21 @@ export function App() {
   }, [routeWalletAsset?.chain, routeWalletAsset?.contract]);
 
   useEffect(() => {
+    if (isWalletPredictionIntroRoute) {
+      setActiveWalletPredictionRoute('intro');
+      setIsWalletPredictionExiting(false);
+      return;
+    }
+    if (isWalletPredictionHubRoute) {
+      setActiveWalletPredictionRoute('hub');
+      setIsWalletPredictionExiting(false);
+      return;
+    }
+    setActiveWalletPredictionRoute(null);
+    setIsWalletPredictionExiting(false);
+  }, [isWalletPredictionHubRoute, isWalletPredictionIntroRoute]);
+
+  useEffect(() => {
     if (routeMarket?.marketType && routeMarket.itemId) {
       setActiveMarketRoute({
         marketType: routeMarket.marketType,
@@ -173,7 +201,11 @@ export function App() {
         : isWalletAssetRoute
           ? { page: 'wallet' }
           : { page: activeTab };
-  const showBottomTabs = !activeArticleId && !isTokenRoute && !isWalletAssetRoute && !isMarketRoute;
+  const showBottomTabs = !activeArticleId
+    && !isTokenRoute
+    && !isWalletAssetRoute
+    && !activeWalletPredictionRoute
+    && !isMarketRoute;
   const intervention = useAgentIntervention(agentPageContext, i18n.resolvedLanguage ?? i18n.language ?? null);
 
   if (!auth) {
@@ -280,6 +312,26 @@ export function App() {
     });
   }
 
+  function handleOpenWalletPredictionIntro() {
+    if (walletPredictionExitTimerRef.current) {
+      clearTimeout(walletPredictionExitTimerRef.current);
+      walletPredictionExitTimerRef.current = null;
+    }
+    setIsWalletPredictionExiting(false);
+    setActiveWalletPredictionRoute('intro');
+    void navigate({ to: '/wallet/prediction/intro' });
+  }
+
+  function handleOpenWalletPredictionHub() {
+    if (walletPredictionExitTimerRef.current) {
+      clearTimeout(walletPredictionExitTimerRef.current);
+      walletPredictionExitTimerRef.current = null;
+    }
+    setIsWalletPredictionExiting(false);
+    setActiveWalletPredictionRoute('hub');
+    void navigate({ to: '/wallet/prediction' });
+  }
+
   function handleCloseToken() {
     if (!activeTokenRoute || isTokenExiting) return;
     setIsTokenExiting(true);
@@ -328,6 +380,22 @@ export function App() {
     }, WALLET_ASSET_EXIT_MS);
   }
 
+  function handleCloseWalletPrediction() {
+    if (!activeWalletPredictionRoute || isWalletPredictionExiting) return;
+    setIsWalletPredictionExiting(true);
+    if (walletPredictionExitTimerRef.current) {
+      clearTimeout(walletPredictionExitTimerRef.current);
+    }
+    walletPredictionExitTimerRef.current = setTimeout(() => {
+      if (canGoBack) {
+        window.history.back();
+      } else {
+        void navigate({ to: '/wallet' });
+      }
+      walletPredictionExitTimerRef.current = null;
+    }, WALLET_PREDICTION_EXIT_MS);
+  }
+
   function handleTabChange(tab: AppTab) {
     if (tab === 'home') {
       void navigate({ to: '/' });
@@ -366,6 +434,8 @@ export function App() {
         onLogout={handleLogout}
         onOpenAssetDetail={handleOpenWalletAsset}
         onOpenAgentChat={handleAgentOpen}
+        onOpenPredictionIntro={handleOpenWalletPredictionIntro}
+        onOpenPredictionHub={handleOpenWalletPredictionHub}
       />
     );
   }
@@ -412,6 +482,24 @@ export function App() {
               contract={activeWalletAssetRoute.contract}
               onBack={handleCloseWalletAsset}
               onOpenAgentChat={handleAgentOpen}
+            />
+          </div>
+        ) : activeWalletPredictionRoute === 'intro' ? (
+          <div className={isWalletPredictionExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
+            <PredictionIntroScreen
+              onBack={handleCloseWalletPrediction}
+              onOpenPredictionHub={handleOpenWalletPredictionHub}
+            />
+          </div>
+        ) : activeWalletPredictionRoute === 'hub' ? (
+          <div className={isWalletPredictionExiting ? 'app-page-slide-out' : 'app-page-slide-in'}>
+            <PredictionHubScreen
+              onBack={handleCloseWalletPrediction}
+              onOpenIntro={handleOpenWalletPredictionIntro}
+              onOpenMarketDetail={(itemId) => {
+                setActiveWalletPredictionRoute(null);
+                handleOpenMarketDetail('prediction', itemId);
+              }}
             />
           </div>
         ) : isMarketRoute && activeMarketRoute ? (

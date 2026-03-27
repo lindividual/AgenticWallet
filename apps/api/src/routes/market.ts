@@ -1,16 +1,12 @@
 import type { Hono } from 'hono';
 import { getSupportedMarketChains } from '../config/appConfig';
 import type { AppEnv } from '../types';
-import type { BitgetTokenDetail, BitgetTokenSecurityAudit, MarketTopAsset } from '../services/bitgetWallet';
+import type { BitgetTokenSecurityAudit, MarketTopAsset } from '../services/bitgetWallet';
 import {
-  fetchBitgetTokenDetail,
-  fetchBitgetTokenDetails,
   fetchBitgetTokenKline,
   fetchBitgetTokenSecurityAudit,
 } from '../services/bitgetWallet';
 import {
-  fetchBinanceTokenDynamicInfo,
-  fetchBinanceTokenMeta,
   fetchBinanceWeb3TokenKlines,
   resolveBinanceSearchChainIds,
   searchBinanceSpotTokens,
@@ -20,6 +16,7 @@ import {
   resolveCoinGeckoAssetIdForContract,
   syncCoinGeckoCoinListPlatforms,
 } from '../services/coingecko';
+import { resolveTokenDetail, resolveTokenDetails } from '../services/tokenDetails';
 import {
   getUserTradeShelf,
   listUserWatchlistAssets,
@@ -28,7 +25,6 @@ import {
   upsertUserWatchlistAsset,
 } from '../services/agent';
 import { fetchTopMarketAssets } from '../services/marketTopAssets';
-import { fetchSolanaTokenDetails } from '../services/solana';
 import {
   buildSearchTerms,
   fetchPredictionEventDetail,
@@ -44,27 +40,6 @@ import {
 } from '../services/tradeBrowse';
 import { buildChainAssetId, NATIVE_CONTRACT_KEY, normalizeMarketChain, toContractKey } from '../services/assetIdentity';
 import { isKlineStale, shouldPreferFallbackCandles } from '../services/klineFreshness';
-
-type EnrichedTokenDetail = {
-  asset_id: string;
-  chain_asset_id: string;
-  chain: string;
-  contract: string;
-  symbol: string;
-  name: string;
-  image: string | null;
-  priceChange24h: number | null;
-  currentPriceUsd: number | null;
-  holders: number | null;
-  totalSupply: number | null;
-  liquidityUsd: number | null;
-  top10HolderPercent: number | null;
-  devHolderPercent: number | null;
-  lockLpPercent: number | null;
-  about: string | null;
-  fdv: number | null;
-  volume24h: number | null;
-};
 
 type MarketSearchResultItem = {
   id: string;
@@ -120,22 +95,10 @@ function toResponseContract(chain: string, contract: string): string {
   return toContractKey(contract, chain) === NATIVE_CONTRACT_KEY ? '' : contract;
 }
 
-function isNativeLikeContract(raw: unknown): boolean {
-  return toContractKey(raw, 'eth') === NATIVE_CONTRACT_KEY;
-}
-
 function toValidSize(raw: unknown, fallback: number): number {
   const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
   return Math.max(10, Math.min(Math.trunc(value), 240));
-}
-
-function getExpectedNativeSymbol(chain: string): string {
-  if (chain === 'bnb') return 'BNB';
-  if (chain === 'tron') return 'TRX';
-  if (chain === 'sol') return 'SOL';
-  if (chain === 'btc') return 'BTC';
-  return 'ETH';
 }
 
 function buildCoinLookupKey(chain: string, contract: string): string {
@@ -173,115 +136,6 @@ async function buildCoinAssetIdMap(
     output.set(entries[index][0], values[index]);
   }
   return output;
-}
-
-function mapTopAssetToTokenDetail(asset: MarketTopAsset): BitgetTokenDetail {
-  return {
-    asset_id: asset.asset_id,
-    chain_asset_id: asset.chain_asset_id,
-    chain: asset.chain,
-    contract: asset.contract,
-    symbol: asset.symbol,
-    name: asset.name,
-    image: asset.image ?? null,
-    priceChange24h: asset.price_change_percentage_24h ?? null,
-    currentPriceUsd: asset.current_price ?? null,
-    holders: null,
-    totalSupply: null,
-    liquidityUsd: null,
-    top10HolderPercent: null,
-    devHolderPercent: null,
-    lockLpPercent: null,
-  };
-}
-
-async function buildNativeTokenDetailFallback(
-  env: AppEnv['Bindings'],
-  chain: string,
-): Promise<BitgetTokenDetail | null> {
-  const normalizedChain = normalizeMarketChain(chain);
-  const assets = await fetchTopMarketAssets(env, {
-    source: 'coingecko',
-    name: 'marketCap',
-    limit: 80,
-    chains: [normalizedChain],
-  });
-  const expectedSymbol = getExpectedNativeSymbol(normalizedChain);
-  const primary =
-    assets.find((asset) => normalizeMarketChain(asset.chain) === normalizedChain && isNativeLikeContract(asset.contract))
-    ?? assets.find((asset) => asset.symbol.trim().toUpperCase() === expectedSymbol && isNativeLikeContract(asset.contract))
-    ?? null;
-  return primary ? mapTopAssetToTokenDetail(primary) : null;
-}
-
-async function enrichTokenDetail(
-  env: AppEnv['Bindings'],
-  detail: {
-    chain: string;
-    contract: string;
-    symbol: string;
-    name: string;
-    image: string | null;
-    priceChange24h: number | null;
-    currentPriceUsd: number | null;
-    holders?: number | null;
-    totalSupply?: number | null;
-    liquidityUsd?: number | null;
-    top10HolderPercent?: number | null;
-    devHolderPercent?: number | null;
-    lockLpPercent?: number | null;
-  },
-): Promise<EnrichedTokenDetail> {
-  const normalizedChain = normalizeMarketChain(detail.chain);
-  const contractKey = toContractKey(detail.contract || NATIVE_CONTRACT_KEY, normalizedChain);
-  const upstreamContract = toResponseContract(normalizedChain, contractKey);
-  const [assetId, binanceMeta, binanceDynamic] = await Promise.all([
-    resolveCoinAssetId(env, normalizedChain, contractKey),
-    fetchBinanceTokenMeta(normalizedChain, upstreamContract).catch(() => null),
-    fetchBinanceTokenDynamicInfo(normalizedChain, upstreamContract).catch(() => null),
-  ]);
-
-  return {
-    asset_id: assetId,
-    chain_asset_id: buildChainAssetId(normalizedChain, contractKey),
-    chain: normalizedChain,
-    contract: upstreamContract,
-    symbol: detail.symbol,
-    name: detail.name,
-    image: detail.image ?? binanceMeta?.icon ?? null,
-    priceChange24h: detail.priceChange24h ?? binanceDynamic?.percentChange24h ?? null,
-    currentPriceUsd: detail.currentPriceUsd ?? binanceDynamic?.price ?? null,
-    holders: detail.holders ?? binanceDynamic?.holders ?? null,
-    totalSupply: detail.totalSupply ?? binanceDynamic?.totalSupply ?? null,
-    liquidityUsd: detail.liquidityUsd ?? binanceDynamic?.liquidity ?? null,
-    top10HolderPercent: detail.top10HolderPercent ?? binanceDynamic?.top10HoldersPercentage ?? null,
-    devHolderPercent: detail.devHolderPercent ?? binanceDynamic?.devHoldingPercent ?? null,
-    lockLpPercent: detail.lockLpPercent ?? null,
-    about: binanceMeta?.description ?? null,
-    fdv: binanceDynamic?.fdv ?? null,
-    volume24h: binanceDynamic?.volume24h ?? null,
-  };
-}
-
-async function resolveSingleCoinDetail(
-  env: AppEnv['Bindings'],
-  chain: string,
-  contract: string,
-): Promise<EnrichedTokenDetail | null> {
-  const normalizedChain = normalizeMarketChain(chain);
-  const normalizedContract = normalizeContractQuery(normalizedChain, contract);
-
-  if (normalizedChain === 'sol') {
-    const details = await fetchSolanaTokenDetails(env, [normalizedContract || NATIVE_CONTRACT_KEY]);
-    const detail = details.get(normalizedContract || NATIVE_CONTRACT_KEY) ?? details.get(NATIVE_CONTRACT_KEY) ?? null;
-    return detail ? enrichTokenDetail(env, detail) : null;
-  }
-
-  const baseDetail = normalizedContract === NATIVE_CONTRACT_KEY
-    ? await buildNativeTokenDetailFallback(env, normalizedChain)
-    : await fetchBitgetTokenDetail(env, normalizedChain, normalizedContract);
-  if (!baseDetail) return null;
-  return enrichTokenDetail(env, baseDetail);
 }
 
 function applyCoinIdentityToTradeItem(item: TradeBrowseMarketItem, assetIdMap: Map<string, string>): TradeBrowseMarketItem {
@@ -604,7 +458,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json({ error: 'invalid_chain' }, 400);
     }
 
-    const detail = await resolveSingleCoinDetail(c.env, chain, contract);
+    const detail = await resolveTokenDetail(c.env, chain, contract);
     if (!detail) {
       return c.json({ error: 'token_not_found' }, 404);
     }
@@ -641,38 +495,7 @@ export function registerMarketRoutes(app: Hono<AppEnv>): void {
       return c.json({ error: 'invalid_tokens' }, 400);
     }
 
-    const solanaTokens = tokens.filter((item) => item.chain === 'sol');
-    const nativeOtherTokens = tokens.filter((item) => item.chain !== 'sol' && item.contract === NATIVE_CONTRACT_KEY);
-    const contractOtherTokens = tokens.filter((item) => item.chain !== 'sol' && item.contract !== NATIVE_CONTRACT_KEY);
-    const [otherDetails, solanaDetailMap] = await Promise.all([
-      contractOtherTokens.length ? fetchBitgetTokenDetails(c.env, contractOtherTokens) : Promise.resolve([]),
-      solanaTokens.length
-        ? fetchSolanaTokenDetails(c.env, solanaTokens.map((item) => item.contract || NATIVE_CONTRACT_KEY))
-        : Promise.resolve(new Map<string, BitgetTokenDetail | null>()),
-    ]);
-
-    const merged = [
-      ...otherDetails,
-      ...await Promise.all(nativeOtherTokens.map(async (item) => ({
-        key: `${item.chain}:${item.contract}`,
-        chain: item.chain,
-        contract: item.contract,
-        detail: await buildNativeTokenDetailFallback(c.env, item.chain),
-      }))),
-      ...solanaTokens.map((item) => ({
-        key: `${item.chain}:${item.contract || NATIVE_CONTRACT_KEY}`,
-        chain: item.chain,
-        contract: item.contract,
-        detail: solanaDetailMap.get(item.contract || NATIVE_CONTRACT_KEY) ?? null,
-      })),
-    ];
-
-    const details = await Promise.all(
-      merged.map(async (item) => ({
-        ...item,
-        detail: item.detail ? await enrichTokenDetail(c.env, item.detail) : null,
-      })),
-    );
+    const details = await resolveTokenDetails(c.env, tokens);
 
     return c.json({ details });
   });

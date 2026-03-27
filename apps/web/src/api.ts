@@ -113,6 +113,7 @@ export type WalletPortfolioResponse = {
   mergedHoldings?: WalletMergedHolding[];
   perpsAccount?: PerpsAccountSnapshot | null;
   predictionAccount?: PredictionAccountSnapshot | null;
+  fiat24Card?: Fiat24CardSnapshot | null;
 };
 
 export type PortfolioSnapshotPeriod = '24h' | '7d' | '30d';
@@ -160,6 +161,18 @@ export type PredictionAccountSnapshot = {
   balanceUsd: number | null;
   allowanceRaw: string | null;
   allowance: string | null;
+  error: string | null;
+  updatedAt: string;
+};
+
+export type Fiat24CardSnapshot = {
+  available: boolean;
+  opened: boolean;
+  chainId: 42161;
+  chain: 'arbitrum';
+  contractAddress: string;
+  ownerAddress: string | null;
+  nftBalance: string | null;
   error: string | null;
   updatedAt: string;
 };

@@ -7,6 +7,7 @@ const BINANCE_WEB3_SEARCH_URL = `${BINANCE_WEB3_BASE}/bapi/defi/v5/public/wallet
 const BINANCE_WEB3_TOKEN_META_URL = `${BINANCE_WEB3_BASE}/bapi/defi/v1/public/wallet-direct/buw/wallet/dex/market/token/meta/info`;
 const BINANCE_WEB3_TOKEN_DYNAMIC_URL = `${BINANCE_WEB3_BASE}/bapi/defi/v4/public/wallet-direct/buw/wallet/market/token/dynamic/info`;
 const BINANCE_WEB3_KLINE_URL = 'https://dquery.sintral.io/u-kline/v1/k-line/candles';
+const BINANCE_WEB3_NATIVE_CONTRACT_SENTINEL = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const BINANCE_CHAIN_ID_TO_MARKET_CHAIN: Record<string, string> = {
   CT_0: 'btc',
   '1': 'eth',
@@ -213,11 +214,27 @@ function toBinanceNativeContract(chain: string): string {
   return 'native';
 }
 
-function normalizeBinanceContractForLookup(chain: string, contract: string): string | null {
+function isBinanceNativeLookupContract(chain: string, contract: string): boolean {
+  const normalizedChain = normalizeText(chain)?.toLowerCase();
+  if (!normalizedChain) return false;
+  const normalizedContract = normalizeText(contract);
+  return !normalizedContract || normalizedContract.toLowerCase() === 'native';
+}
+
+function normalizeBinanceTokenLookupContract(
+  chain: string,
+  contract: string,
+  options?: { preferWrappedNative?: boolean },
+): string | null {
   const normalizedChain = normalizeText(chain)?.toLowerCase();
   if (!normalizedChain) return null;
   const normalizedContract = normalizeText(contract);
-  if (!normalizedContract || normalizedContract.toLowerCase() === 'native') return null;
+  if (!normalizedContract || normalizedContract.toLowerCase() === 'native') {
+    if (options?.preferWrappedNative) {
+      return BINANCE_WEB3_WRAPPED_NATIVE_CONTRACTS[normalizedChain] ?? null;
+    }
+    return BINANCE_WEB3_NATIVE_CONTRACT_SENTINEL;
+  }
   return normalizedChain === 'sol' ? normalizedContract : normalizedContract.toLowerCase();
 }
 
@@ -358,19 +375,46 @@ async function fetchBinanceWeb3Json<T>(
   return response.json() as Promise<T>;
 }
 
+async function fetchBinanceTokenMetaByContract(
+  chainId: string,
+  contractAddress: string,
+): Promise<BinanceTokenMeta | null> {
+  const query = new URLSearchParams({
+    chainId,
+    contractAddress,
+  });
+  const payload = await fetchBinanceWeb3Json<{ data?: unknown }>(`${BINANCE_WEB3_TOKEN_META_URL}?${query.toString()}`);
+  return normalizeBinanceTokenMeta(payload?.data);
+}
+
+async function fetchBinanceTokenDynamicInfoByContract(
+  chainId: string,
+  contractAddress: string,
+): Promise<BinanceTokenDynamicInfo | null> {
+  const query = new URLSearchParams({
+    chainId,
+    contractAddress,
+  });
+  const payload = await fetchBinanceWeb3Json<{ data?: unknown }>(`${BINANCE_WEB3_TOKEN_DYNAMIC_URL}?${query.toString()}`);
+  return normalizeBinanceTokenDynamicInfo(payload?.data);
+}
+
 export async function fetchBinanceTokenMeta(
   chain: string,
   contract: string,
 ): Promise<BinanceTokenMeta | null> {
   const chainId = normalizeBinanceChainIdForMarketChain(chain);
-  const normalizedContract = normalizeBinanceContractForLookup(chain, contract);
-  if (!chainId || !normalizedContract) return null;
-  const query = new URLSearchParams({
-    chainId,
-    contractAddress: normalizedContract,
-  });
-  const payload = await fetchBinanceWeb3Json<{ data?: unknown }>(`${BINANCE_WEB3_TOKEN_META_URL}?${query.toString()}`);
-  return normalizeBinanceTokenMeta(payload?.data);
+  if (!chainId) return null;
+
+  const normalizedContract = normalizeBinanceTokenLookupContract(chain, contract);
+  if (!normalizedContract) return null;
+
+  const meta = await fetchBinanceTokenMetaByContract(chainId, normalizedContract);
+  if (meta || !isBinanceNativeLookupContract(chain, contract)) return meta;
+
+  const wrappedContract = normalizeBinanceTokenLookupContract(chain, contract, { preferWrappedNative: true });
+  if (!wrappedContract || wrappedContract === normalizedContract) return meta;
+  return fetchBinanceTokenMetaByContract(chainId, wrappedContract).catch(() => meta);
 }
 
 export async function fetchBinanceTokenDynamicInfo(
@@ -378,14 +422,17 @@ export async function fetchBinanceTokenDynamicInfo(
   contract: string,
 ): Promise<BinanceTokenDynamicInfo | null> {
   const chainId = normalizeBinanceChainIdForMarketChain(chain);
-  const normalizedContract = normalizeBinanceContractForLookup(chain, contract);
-  if (!chainId || !normalizedContract) return null;
-  const query = new URLSearchParams({
-    chainId,
-    contractAddress: normalizedContract,
-  });
-  const payload = await fetchBinanceWeb3Json<{ data?: unknown }>(`${BINANCE_WEB3_TOKEN_DYNAMIC_URL}?${query.toString()}`);
-  return normalizeBinanceTokenDynamicInfo(payload?.data);
+  if (!chainId) return null;
+
+  const normalizedContract = normalizeBinanceTokenLookupContract(chain, contract);
+  if (!normalizedContract) return null;
+
+  const dynamic = await fetchBinanceTokenDynamicInfoByContract(chainId, normalizedContract);
+  if (dynamic || !isBinanceNativeLookupContract(chain, contract)) return dynamic;
+
+  const wrappedContract = normalizeBinanceTokenLookupContract(chain, contract, { preferWrappedNative: true });
+  if (!wrappedContract || wrappedContract === normalizedContract) return dynamic;
+  return fetchBinanceTokenDynamicInfoByContract(chainId, wrappedContract).catch(() => dynamic);
 }
 
 function pickPrimaryBinanceAddress(token: BinanceWeb3SearchToken): {

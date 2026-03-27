@@ -152,10 +152,13 @@ function normalizeContractAddress(
   if (chain === 'tron') {
     return normalizeTronAddress(raw);
   }
-  const value = normalizeText(raw)?.toLowerCase();
+  const value = normalizeText(raw);
   if (!value) return null;
-  if (!/^0x[a-f0-9]{40}$/.test(value)) return null;
-  return value;
+  if (chain === 'sol') return value.toLowerCase();
+  if (chain === 'btc') return null;
+  const normalized = value.toLowerCase();
+  if (!/^0x[a-f0-9]{40}$/.test(normalized)) return null;
+  return normalized;
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -761,13 +764,77 @@ export async function resolveCoinGeckoAssetIdForContract(
   chain: unknown,
   contract: unknown,
 ): Promise<string | null> {
+  const coinId = await resolveCoinGeckoCoinIdForContract(env, chain, contract);
+  return coinId ? `coingecko:${coinId}` : null;
+}
+
+export async function resolveCoinGeckoCoinIdForContract(
+  env: Bindings,
+  chain: unknown,
+  contract: unknown,
+): Promise<string | null> {
   const normalizedChain = normalizeSingleChain(chain);
   if (!normalizedChain) return null;
   const normalizedContract = normalizeContractAddress(contract, normalizedChain);
   if (!normalizedContract) return null;
   const lookup = await getContractCoinLookup(env);
-  const coinId = normalizeText(lookup.get(buildContractLookupKey(normalizedChain, normalizedContract)));
-  return coinId ? `coingecko:${coinId}` : null;
+  return normalizeText(lookup.get(buildContractLookupKey(normalizedChain, normalizedContract)));
+}
+
+export type CoinGeckoContractMarketDetail = {
+  asset_id: string;
+  chain_asset_id: string;
+  chain: 'eth' | 'base' | 'bnb' | 'arbitrum' | 'optimism' | 'matic' | 'tron' | 'sol' | 'btc';
+  contract: string;
+  symbol: string;
+  name: string;
+  image: string | null;
+  currentPriceUsd: number | null;
+  priceChange24h: number | null;
+  marketCap: number | null;
+  volume24h: number | null;
+};
+
+export async function fetchCoinGeckoContractMarketDetailFromD1(
+  env: Bindings,
+  chain: unknown,
+  contract: unknown,
+): Promise<CoinGeckoContractMarketDetail | null> {
+  const normalizedChain = normalizeSingleChain(chain);
+  if (!normalizedChain) return null;
+
+  const rawContract = normalizeText(contract);
+  if (!rawContract || rawContract.toLowerCase() === 'native') return null;
+
+  const coinId = await resolveCoinGeckoCoinIdForContract(env, normalizedChain, rawContract);
+  if (!coinId) return null;
+
+  const query = new URLSearchParams({
+    vs_currency: 'usd',
+    ids: coinId,
+    sparkline: 'false',
+    price_change_percentage: '24h',
+  });
+  const rows = await fetchCoinGeckoJson<CoinGeckoMarketRow[]>(env, '/coins/markets', query).catch(() => []);
+  const row = rows[0] ?? null;
+  const symbol = normalizeText(row?.symbol)?.toUpperCase() ?? null;
+  const name = normalizeText(row?.name);
+  if (!row || !symbol || !name) return null;
+
+  const chainAssetId = buildChainAssetId(normalizedChain, rawContract);
+  return {
+    asset_id: buildAssetId(normalizedChain, rawContract, `coingecko:${coinId}`),
+    chain_asset_id: chainAssetId,
+    chain: normalizedChain,
+    contract: rawContract,
+    symbol,
+    name,
+    image: normalizeText(row.image),
+    currentPriceUsd: normalizeFiniteNumber(row.current_price),
+    priceChange24h: normalizeFiniteNumber(row.price_change_percentage_24h),
+    marketCap: normalizeFiniteNumber(row.market_cap),
+    volume24h: normalizeFiniteNumber(row.total_volume),
+  };
 }
 
 function toMarketTopAsset(

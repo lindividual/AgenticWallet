@@ -25,6 +25,7 @@ import { Modal } from '../modals/Modal';
 import { TradeContent, type TradePreset } from '../modals/TradeContent';
 import { SkeletonBlock } from '../Skeleton';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useIsCoarsePointer } from '../../hooks/useIsCoarsePointer';
 import { normalizeContractForChain } from '../../utils/chainIdentity';
 
 type TokenDetailScreenProps = {
@@ -242,6 +243,7 @@ function hasMeaningfulTokenIdentity(detail: TokenDetailLike | null | undefined):
 export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreenProps) {
   const { t, i18n } = useTranslation();
   const { resolvedTheme } = useTheme();
+  const isCoarsePointer = useIsCoarsePointer();
   const { showError, showSuccess } = useToast();
   const queryClient = useQueryClient();
   const [chartRange, setChartRange] = useState<DetailChartRange>('1d');
@@ -772,7 +774,7 @@ export function TokenDetailScreen({ chain, contract, onBack }: TokenDetailScreen
               formatValue={(value) => formatUsdAdaptive(value, i18n.language)}
               formatTime={(time) => formatChartTimeLabel(time, i18n.language, candleWidth)}
               grid={false}
-              scrub
+              scrub={!isCoarsePointer}
               padding={{ top: 6, right: 6, bottom: 6, left: 6 }}
             />
           </div>

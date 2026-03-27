@@ -2,6 +2,7 @@ import { Liveline } from 'liveline';
 import type { CandlePoint, LivelinePoint } from 'liveline';
 import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
+import { useIsCoarsePointer } from '../../../hooks/useIsCoarsePointer';
 import { formatUsdAdaptive } from '../../../utils/currency';
 import { formatChartTimeLabel } from '../../../utils/kline';
 
@@ -273,6 +274,7 @@ export function MarketKlineSection({
   onSelectPredictionSeries,
 }: MarketKlineSectionProps) {
   const { t } = useTranslation();
+  const isCoarsePointer = useIsCoarsePointer();
   const hasPredictionSeries = normalizedType === 'prediction' && predictionSeries.some((item) => item.line.length > 0);
   const showChartModeToggle = normalizedType !== 'prediction';
 
@@ -342,7 +344,7 @@ export function MarketKlineSection({
                 formatValue={(value) => formatUsdAdaptive(value, locale)}
                 formatTime={(time) => formatChartTimeLabel(time, locale, candleWidth)}
                 grid={false}
-                scrub
+                scrub={!isCoarsePointer}
                 padding={{ top: 6, right: 6, bottom: 6, left: 6 }}
               />
             </div>

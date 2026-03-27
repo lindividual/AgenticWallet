@@ -355,6 +355,18 @@ export type PredictionAccountSnapshot = {
   updatedAt: string;
 };
 
+export type Fiat24CardSnapshot = {
+  available: boolean;
+  opened: boolean;
+  chainId: 42161;
+  chain: 'arbitrum';
+  contractAddress: string;
+  ownerAddress: string | null;
+  nftBalance: string | null;
+  error: string | null;
+  updatedAt: string;
+};
+
 export type PerpsOrderRequest = {
   coin: string;
   side?: 'long' | 'short';

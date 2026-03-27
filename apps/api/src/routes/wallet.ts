@@ -3,6 +3,7 @@ import {
   buildMergedPortfolioHoldings,
   fetchWalletPortfolio,
 } from '../services/market';
+import { getFiat24CardSafe } from '../services/fiat24';
 import { getPerpsAccountSafe } from '../services/perps';
 import { listUserPortfolioSnapshots, saveUserPortfolioSnapshot } from '../services/agent';
 import { getPredictionAccountSafe } from '../services/prediction';
@@ -32,12 +33,13 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       );
     }
     const holdings = result.holdings;
-    const [mergedHoldings, perpsAccount, predictionAccount] = await Promise.all([
+    const [mergedHoldings, perpsAccount, predictionAccount, fiat24Card] = await Promise.all([
       buildMergedPortfolioHoldings(c.env, holdings),
       getPerpsAccountSafe(c.env, userId),
       getPredictionAccountSafe(c.env, userId, {
         signatureType: 'eoa',
       }),
+      getFiat24CardSafe(c.env, wallet),
     ]);
     const totalUsd = result.totalUsd;
     const sample = holdings
@@ -54,6 +56,7 @@ export function registerWalletRoutes(app: Hono<AppEnv>): void {
       mergedHoldings,
       perpsAccount,
       predictionAccount,
+      fiat24Card,
     });
   });
 

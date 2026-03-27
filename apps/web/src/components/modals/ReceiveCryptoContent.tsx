@@ -106,6 +106,11 @@ function slugifyLabel(value: string): string {
   );
 }
 
+function truncateAddress(address: string): string {
+  if (address.length <= 12) return address;
+  return `${address.slice(0, 7)}...${address.slice(-5)}`;
+}
+
 function ReceiveProtocolIcon({ protocol, alt }: { protocol: ChainProtocol; alt: string }) {
   if (protocol === 'evm') {
     return (
@@ -397,117 +402,117 @@ export function ReceiveCryptoContent({
                     <div className="flex h-11 w-14 shrink-0 items-center justify-center">
                       <ReceiveProtocolIcon protocol={option.id} alt={option.title} />
                     </div>
-                    <div className="flex min-w-0 flex-1 items-start gap-4 bg-transparent p-0 text-left">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex min-h-10 items-center justify-between gap-3">
-                          <p className="m-0 leading-none text-lg font-semibold text-base-content">{option.title}</p>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <button
-                              type="button"
-                              className="flex h-10 w-10 items-center justify-center rounded-full bg-base-200/80 text-base-content transition hover:bg-base-300"
-                              aria-label={t('wallet.copy')}
-                              onClick={handleButtonClick(() => {
-                                void copyAddress(option.address, option.addressLabel);
-                              })}
-                            >
-                              <Copy size={16} aria-hidden />
-                            </button>
-                            <button
-                              type="button"
-                              className="flex h-10 w-10 items-center justify-center rounded-full bg-base-200/80 text-base-content transition hover:bg-base-300"
-                              aria-label={option.addressLabel}
-                              onClick={handleButtonClick(() => setSelectedAddressType(option.id))}
-                            >
-                              <QrCode size={16} aria-hidden />
-                            </button>
-                          </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-4 bg-transparent p-0 text-left">
+                        <div className="min-w-0 flex-1">
+                          <p className="m-0 text-[17px] font-medium leading-none text-base-content">{option.title}</p>
+                          <p className="mt-2 font-mono text-sm leading-none text-base-content/60">
+                            {truncateAddress(option.address)}
+                          </p>
                         </div>
-                        <p className="mt-2 break-all font-mono text-sm text-base-content/80">
-                          {option.address}
-                        </p>
-                        {option.id === 'evm' && visibleNetworkPills.length > 0 ? (
-                          <div className="relative mt-3">
-                            <div className="flex flex-wrap gap-2">
-                              {visibleNetworkPills.map((chain) => {
-                                const iconPath = getChainPillIconPath(chain);
-                                return (
-                                  <span
-                                    key={chain.networkKey}
-                                    className="inline-flex items-center gap-1.5 rounded-full border border-base-300/70 bg-base-200/80 px-3 py-1.5 text-xs text-base-content/80"
-                                  >
-                                    {iconPath ? (
-                                      <img
-                                        src={iconPath}
-                                        alt=""
-                                        aria-hidden
-                                        className="h-3.5 w-3.5 rounded-full object-cover"
-                                        loading="lazy"
-                                      />
-                                    ) : null}
-                                    <span>{chain.name}</span>
-                                  </span>
-                                );
-                              })}
-                              {hiddenNetworkCount > 0 ? (
-                                <button
-                                  type="button"
-                                  className="inline-flex items-center rounded-full border border-base-300/70 bg-base-200/60 px-3 py-1.5 text-xs text-base-content/70 transition hover:bg-base-200"
-                                  aria-expanded={isNetworkListExpanded}
-                                  aria-controls={`supported-chain-list-${option.id}`}
-                                  onClick={handleButtonClick(() => {
-                                    setExpandedNetworkListFor((current) => (current === option.id ? null : option.id));
-                                  })}
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            className="flex h-10 w-10 items-center justify-center rounded-full bg-base-200/80 text-base-content transition hover:bg-base-300"
+                            aria-label={t('wallet.copy')}
+                            onClick={handleButtonClick(() => {
+                              void copyAddress(option.address, option.addressLabel);
+                            })}
+                          >
+                            <Copy size={16} aria-hidden />
+                          </button>
+                          <button
+                            type="button"
+                            className="flex h-10 w-10 items-center justify-center rounded-full bg-base-200/80 text-base-content transition hover:bg-base-300"
+                            aria-label={option.addressLabel}
+                            onClick={handleButtonClick(() => setSelectedAddressType(option.id))}
+                          >
+                            <QrCode size={16} aria-hidden />
+                          </button>
+                        </div>
+                      </div>
+                      {option.id === 'evm' && visibleNetworkPills.length > 0 ? (
+                        <div className="relative mt-3">
+                          <div className="flex flex-wrap gap-2">
+                            {visibleNetworkPills.map((chain) => {
+                              const iconPath = getChainPillIconPath(chain);
+                              return (
+                                <span
+                                  key={chain.networkKey}
+                                  className="inline-flex items-center gap-1.5 rounded-full border border-base-300/70 bg-base-200/80 px-3 py-1.5 text-xs text-base-content/80"
                                 >
-                                  +{hiddenNetworkCount} {t('common.more')}
-                                </button>
-                              ) : null}
-                            </div>
-
-                            {isNetworkListExpanded ? (
-                              <div
-                                id={`supported-chain-list-${option.id}`}
-                                className="absolute left-0 top-full z-10 mt-2 w-full max-w-sm rounded-3xl border border-base-300/80 bg-base-100 p-3 shadow-xl"
+                                  {iconPath ? (
+                                    <img
+                                      src={iconPath}
+                                      alt=""
+                                      aria-hidden
+                                      className="h-3.5 w-3.5 rounded-full object-cover"
+                                      loading="lazy"
+                                    />
+                                  ) : null}
+                                  <span>{chain.name}</span>
+                                </span>
+                              );
+                            })}
+                            {hiddenNetworkCount > 0 ? (
+                              <button
+                                type="button"
+                                className="inline-flex items-center rounded-full border border-base-300/70 bg-base-200/60 px-3 py-1.5 text-xs text-base-content/70 transition hover:bg-base-200"
+                                aria-expanded={isNetworkListExpanded}
+                                aria-controls={`supported-chain-list-${option.id}`}
+                                onClick={handleButtonClick(() => {
+                                  setExpandedNetworkListFor((current) => (current === option.id ? null : option.id));
+                                })}
                               >
-                                <div className="flex items-center justify-between gap-3">
-                                  <p className="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-base-content/50">
-                                    {t('wallet.supportedChains')}
-                                  </p>
-                                  <button
-                                    type="button"
-                                    className="flex h-7 w-7 items-center justify-center rounded-full bg-base-200/80 text-base-content/65 transition hover:bg-base-300"
-                                    aria-label={t('common.close')}
-                                    onClick={handleButtonClick(() => setExpandedNetworkListFor(null))}
-                                  >
-                                    <X size={14} aria-hidden />
-                                  </button>
-                                </div>
-                                <div className="mt-3 flex max-h-44 flex-wrap gap-2 overflow-y-auto pr-1">
-                                  {option.supportedChains.map((chain) => {
-                                    const iconPath = getChainPillIconPath(chain);
-                                    return (
-                                      <span
-                                        key={chain.networkKey}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-base-300/70 bg-base-200/80 px-3 py-1.5 text-xs text-base-content/80"
-                                      >
-                                        {iconPath ? (
-                                          <img
-                                            src={iconPath}
-                                            alt=""
-                                            aria-hidden
-                                            className="h-3.5 w-3.5 rounded-full object-cover"
-                                            loading="lazy"
-                                          />
-                                        ) : null}
-                                        <span>{chain.name}</span>
-                                      </span>
-                                    );
-                                  })}
-                                </div>
-                              </div>
+                                +{hiddenNetworkCount} {t('common.more')}
+                              </button>
                             ) : null}
                           </div>
-                        ) : null}
-                      </div>
+
+                          {isNetworkListExpanded ? (
+                            <div
+                              id={`supported-chain-list-${option.id}`}
+                              className="absolute left-0 top-full z-10 mt-2 w-full max-w-sm rounded-3xl border border-base-300/80 bg-base-100 p-3 shadow-xl"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-base-content/50">
+                                  {t('wallet.supportedChains')}
+                                </p>
+                                <button
+                                  type="button"
+                                  className="flex h-7 w-7 items-center justify-center rounded-full bg-base-200/80 text-base-content/65 transition hover:bg-base-300"
+                                  aria-label={t('common.close')}
+                                  onClick={handleButtonClick(() => setExpandedNetworkListFor(null))}
+                                >
+                                  <X size={14} aria-hidden />
+                                </button>
+                              </div>
+                              <div className="mt-3 flex max-h-44 flex-wrap gap-2 overflow-y-auto pr-1">
+                                {option.supportedChains.map((chain) => {
+                                  const iconPath = getChainPillIconPath(chain);
+                                  return (
+                                    <span
+                                      key={chain.networkKey}
+                                      className="inline-flex items-center gap-1.5 rounded-full border border-base-300/70 bg-base-200/80 px-3 py-1.5 text-xs text-base-content/80"
+                                    >
+                                      {iconPath ? (
+                                        <img
+                                          src={iconPath}
+                                          alt=""
+                                          aria-hidden
+                                          className="h-3.5 w-3.5 rounded-full object-cover"
+                                          loading="lazy"
+                                        />
+                                      ) : null}
+                                      <span>{chain.name}</span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -634,9 +639,6 @@ export function ReceiveCryptoContent({
                       : t('wallet.receiveDirectAddressRiskNotice', {
                           network: selectedOption.networkLabel,
                         })}
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-amber-900/80">
-                    {t('wallet.receiveAddressConfirmationNotice')}
                   </p>
                 </div>
               </div>
